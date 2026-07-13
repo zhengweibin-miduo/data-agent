@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git 与 Pull Request 规则"
+  short_description: "安全执行 Git 分支、提交、推送与 Pull Request 流程"
+  default_prompt: "Use $git-pr-rules to safely perform this Git or Pull Request task."
