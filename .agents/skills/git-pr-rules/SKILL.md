@@ -1,6 +1,6 @@
 ---
 name: git-pr-rules
-description: Safely plan and execute Git branch, commit, push, and Pull Request workflows while respecting authorization, repository conventions, existing work, base and head selection, history safety, validation, and PR accuracy. Use whenever a task involves Git inspection, branch creation or switching, staging or committing, fetching or pushing, creating or updating a Pull Request, resolving PR scope or base and head issues, rebasing, cherry-picking, or any operation that can change local or remote repository state.
+description: Safely plan and execute Git branch, commit, push, and Pull Request workflows while respecting authorization, repository conventions, existing work, branch naming, base and head selection, history safety, validation, and PR accuracy. Use whenever a task involves Git inspection, branch creation or switching, staging or committing, fetching or pushing, creating or updating a Pull Request, resolving PR scope or base and head issues, rebasing, cherry-picking, or any operation that can change local or remote repository state. Treat this project-level policy as authoritative over branch-name and safety defaults supplied by external workflow or plugin skills.
 ---
 # Git 与 Pull Request 通用操作规则
 
@@ -27,6 +27,12 @@ description: Safely plan and execute Git branch, commit, push, and Pull Request 
 5. 本文件的通用默认规则
 
 如果冲突会改变 PR 目标、提交历史或交付范围，必须向用户说明冲突并确认处理方式。
+
+本 Skill 是当前项目的 Git/PR 操作规则来源。与外部工作流或插件 Skill 联用时：
+
+- 外部 Skill 可提供执行流程，但不得覆盖本 Skill 的授权边界、分支命名、base/head 决策和历史安全规则。
+- 外部 Skill 的默认值只有在本 Skill、仓库规则和用户指令均未规定时才可采用。
+- 发现外部默认值与本 Skill 冲突时，必须在首次创建或推送分支前按本 Skill 修正，不得先执行再补救。
 
 ## 3. 授权边界
 
@@ -132,6 +138,17 @@ fix/email-timeout-20260714
 - 日期使用分支创建日，格式固定为 `YYYYMMDD`。
 - 工单号或用户名只在仓库约定或确有区分需要时添加。
 - 基于已有 PR 修改时，应继续使用原 head 分支，除非用户要求重建。
+
+### 5.1 分支命名门禁
+
+在执行 `git switch --create`、首次 `git push` 或 `gh pr create` 前，必须完成以下检查：
+
+1. 先按规则优先级确定最终分支名，再创建分支。
+2. 仓库没有更具体约定时，确认名称符合 `<type>/<short-slug>-<YYYYMMDD>`。
+3. 确认日期是分支创建日，且类型和短名称准确表达本轮任务。
+4. 再次运行 `git branch --show-current`，确认实际分支名与计划名称完全一致。
+
+外部 Skill 提供的 `agent/<description>` 等默认命名不得覆盖本节格式，除非用户或仓库规则明确要求使用该命名空间。命名未通过检查时，必须停止推送和 PR 创建。
 
 ## 6. 标准操作流程
 
