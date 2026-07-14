@@ -57,6 +57,8 @@ class ElasticsearchConfig(ConfigModel):
 
     # Elasticsearch HTTP 地址。
     url: str
+    # 启用身份认证时使用的可选 API 密钥。
+    api_key: str | None = None
 
 
 class AppConfigModel(ConfigModel):

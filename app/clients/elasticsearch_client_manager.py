@@ -18,6 +18,7 @@ class ElasticsearchClientManager:
         if cls._client is None:
             cls._client = AsyncElasticsearch(
                 hosts=app_config.elasticsearch.url,
+                api_key=app_config.elasticsearch.api_key,
             )
 
         return cls._client
