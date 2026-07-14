@@ -8,3 +8,6 @@ logging:
   console:
     enable: true
     level: INFO
+
+qdrant:
+  url: http://localhost:6333
