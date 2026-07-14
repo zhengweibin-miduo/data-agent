@@ -11,3 +11,6 @@ logging:
 
 qdrant:
   url: http://localhost:6333
+
+elasticsearch:
+  url: http://localhost:9200
