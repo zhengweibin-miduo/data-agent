@@ -1,0 +1,34 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# Coverage output
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Build and package output
+build/
+dist/
+*.egg-info/
+
+# IDE project files
+.idea/
+.vscode/
+
+# Local logs and operating-system metadata
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
