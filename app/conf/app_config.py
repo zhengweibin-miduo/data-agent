@@ -75,9 +75,9 @@ class AppConfigModel(ConfigModel):
 
 
 # 仅加载一次，供所有应用模块共享。
-AppConfig = AppConfigModel.from_yaml()
+app_config = AppConfigModel.from_yaml()
 
 
 if __name__ == "__main__":
-    assert AppConfig.logging.file.path == Path("logs")
-    assert AppConfig.qdrant.url == "http://localhost:6333"
+    assert app_config.logging.file.path == Path("logs")
+    assert app_config.qdrant.url == "http://localhost:6333"
