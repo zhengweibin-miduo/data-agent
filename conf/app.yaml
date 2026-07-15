@@ -14,3 +14,6 @@ qdrant:
 
 elasticsearch:
   url: http://localhost:9200
+
+tei:
+  url: http://localhost:8080

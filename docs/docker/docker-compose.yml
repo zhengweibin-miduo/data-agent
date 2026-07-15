@@ -28,6 +28,21 @@ services:
       retries: 12
       start_period: 30s
 
+  text-embeddings-inference:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    command: --model-id BAAI/bge-small-zh-v1.5
+    ports:
+      - "8080:80"
+    volumes:
+      - tei_data:/data
+    healthcheck:
+      test: curl --fail --silent http://localhost:80/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 2m
+
 volumes:
   qdrant_storage:
   elasticsearch_data:
+  tei_data:

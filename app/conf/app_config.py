@@ -61,12 +61,20 @@ class ElasticsearchConfig(ConfigModel):
     api_key: str | None = None
 
 
+class TeiConfig(ConfigModel):
+    """Text Embeddings Inference 连接配置。"""
+
+    # TEI HTTP 地址。
+    url: str
+
+
 class AppConfigModel(ConfigModel):
     """从 YAML 加载的应用根配置。"""
 
     logging: LoggingConfig
     qdrant: QdrantConfig
     elasticsearch: ElasticsearchConfig
+    tei: TeiConfig
 
     @classmethod
     def from_yaml(
@@ -92,3 +100,4 @@ if __name__ == "__main__":
     assert app_config.logging.file.path == Path("logs")
     assert app_config.qdrant.url == "http://localhost:6333"
     assert app_config.elasticsearch.url == "http://localhost:9200"
+    assert app_config.tei.url == "http://localhost:8080"
