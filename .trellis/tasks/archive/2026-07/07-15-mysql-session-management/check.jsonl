@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check the implementation against the backend spec index and project documentation language expectations."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review Session and transaction behavior against the repository database guidance boundary."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Verify lifecycle consistency with existing managed asynchronous clients."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Apply the backend quality and testing checklist during independent verification."}
