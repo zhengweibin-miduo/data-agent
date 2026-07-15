@@ -7,5 +7,27 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        ELASTICSEARCH_VERSION: 8.19.17
+    image: data-agent-elasticsearch:8.19.17-ik
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: curl --fail --silent http://localhost:9200/_cluster/health?wait_for_status=yellow || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
 volumes:
   qdrant_storage:
+  elasticsearch_data:

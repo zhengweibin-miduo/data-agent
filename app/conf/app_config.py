@@ -52,11 +52,21 @@ class QdrantConfig(ConfigModel):
     api_key: str | None = None
 
 
+class ElasticsearchConfig(ConfigModel):
+    """Elasticsearch 连接配置。"""
+
+    # Elasticsearch HTTP 地址。
+    url: str
+    # 启用身份认证时使用的可选 API 密钥。
+    api_key: str | None = None
+
+
 class AppConfigModel(ConfigModel):
     """从 YAML 加载的应用根配置。"""
 
     logging: LoggingConfig
     qdrant: QdrantConfig
+    elasticsearch: ElasticsearchConfig
 
     @classmethod
     def from_yaml(
@@ -81,3 +91,4 @@ app_config = AppConfigModel.from_yaml()
 if __name__ == "__main__":
     assert app_config.logging.file.path == Path("logs")
     assert app_config.qdrant.url == "http://localhost:6333"
+    assert app_config.elasticsearch.url == "http://localhost:9200"

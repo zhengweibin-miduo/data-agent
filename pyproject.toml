@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "elasticsearch[async]>=8.19,<9",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "qdrant-client>=1.18.0",
