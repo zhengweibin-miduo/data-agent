@@ -106,7 +106,7 @@ async with MysqlClientManager.session() as session:
 
 ### 3. Contracts
 
-- Required configuration: `conf/app.yaml` key `mysql.url`, using the `mysql+asyncmy` driver. The URL is the only project-defined MySQL setting.
+- Required configuration: `conf/app_config.yaml` key `mysql.url`, using the `mysql+asyncmy` driver. The URL is the only project-defined MySQL setting.
 - Construct the engine with `pool_pre_ping=True` and `pool_recycle=3600`.
 - Initialize one reusable `async_sessionmaker` bound to the managed engine with `expire_on_commit=False`.
 - Create a fresh `AsyncSession` for every `session()` context; never share one Session across concurrent tasks.
@@ -137,7 +137,7 @@ async with MysqlClientManager.session() as session:
 
 ```powershell
 uv run python -m app.conf.app_config
-uv run python -m app_test.clients.test_mysql_client_manager
+uv run python -m app_test.client.test_mysql_client_manager
 uv run --with ruff ruff check app app_test
 uv run --with pyright pyright app app_test
 ```

@@ -23,15 +23,17 @@ if cls._client is None:
 `TeiEmbeddingClientManager` follow the same pattern with service-specific
 messages. Keep the message actionable and preserve the concrete manager name.
 
-Closing an uninitialized or already closed manager is deliberately harmless:
+Closing an uninitialized or already closed manager is deliberately harmless.
+Most managers use this shape:
 
 ```python
 if cls._client is None:
     return
 ```
 
-After successfully closing the underlying resource, managers reset `_client` to
-`None` so a later `initialize()` creates a fresh instance.
+MySQL additionally clears its engine and Session-factory references before
+awaiting disposal so a concurrent replacement is not erased. In every manager,
+a later `initialize()` creates a fresh resource after close.
 
 ## Propagation and Cleanup
 
@@ -41,6 +43,9 @@ After successfully closing the underlying resource, managers reset `_client` to
 - Client initialization and request failures are not wrapped in generic
   exceptions. The original SQLAlchemy, Elasticsearch, Qdrant, Hugging Face, or
   transport exception remains available to the caller.
+- `MysqlClientManager.session()` commits on normal exit; on any
+  `BaseException`, it rolls back and re-raises the same exception. Session
+  closure is owned by the async context manager.
 - Live checks acquire the managed client and close it in `finally`; see both
   files under `app_test/client/`. Keep cleanup independent of assertion or
   request success.
@@ -57,6 +62,8 @@ section only when an API boundary is implemented.
   fail with the established `RuntimeError`.
 - Do not swallow configuration or transport exceptions with a broad
   `except Exception`.
+- Do not swallow an exception raised inside a managed MySQL Session; rollback
+  and preserve the original failure.
 - Do not skip async cleanup after a live integration assertion fails.
 - Do not add connection side effects to package `__init__.py` files; lifecycle
   remains explicit through manager methods.

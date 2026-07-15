@@ -15,20 +15,26 @@ app/
 ├── client/                 # Async external-service client managers
 │   ├── __init__.py
 │   └── *_client_manager.py
+├── core/
+│   ├── __init__.py
+│   └── logging.py          # Central Loguru sink configuration
 └── conf/
     ├── __init__.py
     └── app_config.py       # Typed configuration models and shared config
 app_test/
 ├── __init__.py
-└── client/                 # Executable live integration checks
+├── client/                 # Manager checks and live integrations
+│   ├── __init__.py
+│   └── test_*_client_manager.py
+└── core/
     ├── __init__.py
-    └── test_*_client_manager.py
+    └── test_logging.py     # Isolated logging configuration check
 conf/
 └── app_config.yaml         # Local application configuration values
 docs/docker/
 ├── docker-compose.yml      # Local service definitions
 └── elasticsearch/          # Service-specific image customization
-main.py                     # Minimal application entry point
+main.py                     # Entry point that configures logging
 ```
 
 ## Module Boundaries
@@ -39,9 +45,10 @@ main.py                     # Minimal application entry point
   repeated local shape is `initialize()`, `get_client()`, and async `close()`;
   see `mysql_client_manager.py`, `qdrant_client_manager.py`, and
   `elasticsearch_client_manager.py`.
-- `app_test/client/` mirrors `app/client/` for live integration checks. Current
-  examples are `test_mysql_client_manager.py` and
-  `test_tei_embedding_client_manager.py`.
+- `app/core/logging.py` owns Loguru sink setup; `main.py` calls it before the
+  first application log.
+- `app_test/client/` mirrors `app/client/` for manager behavior and live
+  integration checks. `app_test/core/` validates logging in isolation.
 - `conf/` contains values, while `app/conf/` contains Python models and loading
   behavior. Keep this distinction when adding a configuration field.
 - `docs/docker/` is local infrastructure, not application runtime code. Keep
@@ -78,4 +85,4 @@ Executable live checks currently exist only for MySQL and TEI, under
 in that package.
 
 Use `.trellis/spec/backend/external-service-integrations.md` for the stricter
-TEI contract.
+TEI and MySQL contracts, and `logging-guidelines.md` for Loguru behavior.

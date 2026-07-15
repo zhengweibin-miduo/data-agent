@@ -19,19 +19,19 @@
 - Shared async clients use a typed `ClassVar[ClientType | None]`, idempotent
   `initialize()`, guarded `get_client()`, and async `close()`.
 - Package `__init__.py` files remain side-effect free.
-- Async live checks use an inner coroutine plus a synchronous executable
-  wrapper:
+- Async checks use inner coroutines plus synchronous executable wrappers:
 
 ```python
-async def _test_mysql_client() -> None:
+async def _test_manager_configuration() -> None:
     ...
 
-def test_mysql_client() -> None:
-    asyncio.run(_test_mysql_client())
+def test_mysql_client_manager() -> None:
+    asyncio.run(_test_manager_configuration())
 ```
 
-Both current checks also expose an `if __name__ == "__main__"` path because CI
-and local validation run them as modules rather than through pytest.
+Current test modules also expose an `if __name__ == "__main__"` path because CI
+and focused local validation run them as modules rather than only through
+pytest collection.
 
 ## Validation Commands
 

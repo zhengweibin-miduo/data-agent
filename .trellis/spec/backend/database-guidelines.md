@@ -3,14 +3,14 @@
 ## Current Database Scope
 
 MySQL is the only relational database currently wired into the application.
-The project uses SQLAlchemy 2's async engine with the `asyncmy` driver. The
-dependency declarations are in `pyproject.toml`, the DSN is validated by
-`MysqlConfig` in `app/conf/app_config.py`, and engine lifecycle is owned by
+The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
+`asyncmy` driver. The DSN is validated by `MysqlConfig` in
+`app/conf/app_config.py`; engine and Session-factory lifecycle is owned by
 `app/client/mysql_client_manager.py`.
 
-The repository does not yet contain ORM models, `AsyncSession` factories,
-repositories, schema migrations, or application queries. Do not describe or
-assume conventions for those absent layers.
+The repository does not yet contain ORM models, repositories, schema
+migrations, or production persistence queries. Do not describe or assume
+conventions for those absent layers.
 
 ## Engine Lifecycle
 
@@ -20,32 +20,55 @@ call site:
 ```python
 class MysqlClientManager:
     _client: ClassVar[AsyncEngine | None] = None
+    _session_factory: ClassVar[async_sessionmaker[AsyncSession] | None] = None
 
     @classmethod
     def initialize(cls) -> AsyncEngine:
         if cls._client is None:
-            cls._client = create_async_engine(app_config.mysql.url)
+            cls._client = create_async_engine(
+                app_config.mysql.url,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+            )
+            cls._session_factory = async_sessionmaker(
+                bind=cls._client,
+                expire_on_commit=False,
+            )
         return cls._client
 ```
 
 `initialize()` is idempotent, `get_client()` requires prior initialization,
-and `close()` awaits `AsyncEngine.dispose()` before resetting the class state.
-This is demonstrated by both `app/client/mysql_client_manager.py` and
-`app_test/client/test_mysql_client_manager.py`.
+and `close()` detaches the current engine and Session factory before awaiting
+`AsyncEngine.dispose()`. This preserves a replacement created concurrently
+while the old engine is disposing.
+
+## Session and Transaction Lifecycle
+
+Business code uses the manager-owned async context instead of sharing an
+`AsyncSession` or repeating commit/rollback boilerplate:
+
+```python
+async with MysqlClientManager.session() as session:
+    await session.execute(statement)
+```
+
+Each context receives a fresh Session bound to the shared engine. Normal exit
+commits; exceptional exit rolls back and re-raises the original exception;
+the Session closes on both paths. The factory uses `expire_on_commit=False`.
 
 ## Query Pattern in the Repository
 
-The only established query is the live health check:
+The executable checks use SQLAlchemy `text()` for a health probe and a
+short-lived persistent transaction table that is explicitly dropped:
 
 ```python
 async with client.connect() as connection:
     assert await connection.scalar(text("SELECT 1")) == 1
 ```
 
-This example establishes async connection use and SQLAlchemy's `text()` for a
-literal probe. It does not establish a general raw-SQL, repository, transaction,
-or session policy. Define those contracts when the first production persistence
-feature is introduced.
+These examples validate connection health plus commit and rollback behavior.
+They do not establish a production raw-SQL or repository policy. Define those
+contracts when the first persistence feature is introduced.
 
 ## Schema and Migrations
 
@@ -67,7 +90,11 @@ service in `.github/workflows/ci.yml`.
 
 - Do not use SQLAlchemy's synchronous engine in async application code.
 - Do not create an engine per query; reuse `MysqlClientManager`.
-- Do not leave an initialized engine undisposed. The MySQL live check uses
+- Do not share one `AsyncSession` across concurrent tasks; enter a new
+  `MysqlClientManager.session()` context per transaction.
+- Do not clear shared manager state after awaiting disposal; detach the old
+  state first so concurrent reinitialization survives.
+- Do not leave an initialized engine undisposed. The executable check uses
   `try/finally` and always awaits `MysqlClientManager.close()`.
 - Do not introduce an ORM or migration convention in a spec before the
   corresponding implementation exists.
