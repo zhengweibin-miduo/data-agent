@@ -1,4 +1,22 @@
 services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: data_agent
+      MYSQL_USER: data_agent
+      MYSQL_PASSWORD: data_agent
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   qdrant:
     image: qdrant/qdrant:v1.18.0
     ports:
@@ -43,6 +61,7 @@ services:
       start_period: 2m
 
 volumes:
+  mysql_data:
   qdrant_storage:
   elasticsearch_data:
   tei_data:

@@ -68,6 +68,13 @@ class TeiConfig(ConfigModel):
     url: str
 
 
+class MysqlConfig(ConfigModel):
+    """MySQL 连接配置。"""
+
+    # SQLAlchemy asyncmy 连接地址。
+    url: str
+
+
 class AppConfigModel(ConfigModel):
     """从 YAML 加载的应用根配置。"""
 
@@ -75,6 +82,7 @@ class AppConfigModel(ConfigModel):
     qdrant: QdrantConfig
     elasticsearch: ElasticsearchConfig
     tei: TeiConfig
+    mysql: MysqlConfig
 
     @classmethod
     def from_yaml(
@@ -101,3 +109,4 @@ if __name__ == "__main__":
     assert app_config.qdrant.url == "http://localhost:6333"
     assert app_config.elasticsearch.url == "http://localhost:9200"
     assert app_config.tei.url == "http://localhost:8080"
+    assert app_config.mysql.url.startswith("mysql+asyncmy://")
