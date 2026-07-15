@@ -104,3 +104,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 接入 Loguru 日志
+
+**Date**: 2026-07-15
+**Task**: 接入 Loguru 日志
+**Branch**: `feature/loguru-logging-20260715`
+
+### Summary
+
+在 app/core 集中配置 Loguru 控制台与文件日志，接入 trace_id、轮转保留配置和最小验证，并补充后端日志规范。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `84eda06` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
