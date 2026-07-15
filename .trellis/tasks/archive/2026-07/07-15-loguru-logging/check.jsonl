@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify the implementation matches the recorded logging contract."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend quality and test review context."}

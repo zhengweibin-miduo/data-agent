@@ -1,51 +1,79 @@
 # Logging Guidelines
 
-> How logging is done in this project.
+## Scenario: Application Logging
 
----
+### 1. Scope / Trigger
 
-## Overview
+Use this contract whenever application code emits logs or changes logging sinks. Loguru is configured once under `app/core`; business and client modules reuse the exported `logger` and must not configure their own sinks.
 
-<!--
-Document your project's logging conventions here.
+### 2. Signatures
 
-Questions to answer:
-- What logging library do you use?
-- What are the log levels and when to use each?
-- What should be logged?
-- What should NOT be logged (PII, secrets)?
--->
+```python
+from app.core.logging import setup_logging
 
-(To be filled by the team)
+setup_logging(config: LoggingConfig = app_config.logging) -> None
+logger.bind(trace_id="request-or-job-id").info("message")
+```
 
----
+Call `setup_logging()` at the application entry point before the first application log.
 
-## Log Levels
+### 3. Contracts
 
-<!-- When to use each level: debug, info, warn, error -->
+Configuration comes from `app_config.logging`:
 
-(To be filled by the team)
+- `console.enable: bool`, `console.level: str`
+- `file.enable: bool`, `file.level: str`
+- `file.path: Path`, `file.rotation: str`, `file.retention: str`
 
----
+Console lines contain millisecond time, level, source, `trace_id`, and message. File lines additionally contain the process ID and are written as UTF-8 to `<file.path>/data-agent.log`. Missing trace context renders as `trace_id=-`.
 
-## Structured Logging
+Log levels:
 
-<!-- Log format, required fields -->
+- `DEBUG`: temporary diagnostic detail useful during development.
+- `INFO`: application lifecycle and successful significant operations.
+- `WARNING`: recoverable degradation or unexpected input that was handled.
+- `ERROR` / `exception`: failed operations; use `exception` inside an exception handler when the traceback is needed.
 
-(To be filled by the team)
+Never log passwords, API keys, access tokens, complete database URLs, or unbounded request/document contents.
 
----
+### 4. Validation & Error Matrix
 
-## What to Log
+| Condition | Required behavior |
+| --- | --- |
+| Missing or unknown YAML logging field | Pydantic rejects configuration during startup. |
+| Missing `trace_id` | Emit `trace_id=-`; logging must not fail. |
+| Console or file sink disabled | Do not add that sink. |
+| Both sinks disabled | Complete setup without adding a sink. |
+| Invalid level, rotation, or retention | Let Loguru raise its configuration error during startup. |
+| File directory cannot be created | Let the filesystem error fail startup; do not silently discard file logs. |
 
-<!-- Important events to log -->
+### 5. Good / Base / Bad Cases
 
-(To be filled by the team)
+- Good: bind the request or job identifier once and reuse the returned contextual logger.
+- Base: log without context; the default `trace_id=-` remains valid.
+- Bad: call `logger.add()` in a business module, print secrets, or swallow sink setup errors.
 
----
+### 6. Tests Required
 
-## What NOT to Log
+The logging test must use a temporary directory and assert:
 
-<!-- Sensitive data, PII, secrets -->
+- calling `setup_logging()` twice does not duplicate a message;
+- an unbound log contains `trace_id=-`;
+- `logger.bind(trace_id="trace-1")` emits the bound ID;
+- the configured file is created and readable as UTF-8.
 
-(To be filled by the team)
+When the format or entry-point wiring changes, also run `main.py` once and inspect both console and file output.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: local sink ownership and sensitive configuration output.
+logger.add("client.log")
+logger.info("Connecting to {}", app_config.mysql.url)
+
+# Correct: central sink ownership and safe contextual fields.
+from loguru import logger
+
+request_logger = logger.bind(trace_id=trace_id)
+request_logger.info("Starting MySQL operation")
+```
