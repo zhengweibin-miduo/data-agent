@@ -71,3 +71,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: 引入 MySQL 异步客户端与 Docker 服务
+
+**Date**: 2026-07-15
+**Task**: 引入 MySQL 异步客户端与 Docker 服务
+**Branch**: `feature/mysql-integration-20260715`
+
+### Summary
+
+引入 SQLAlchemy、asyncmy 与 MySQL 客户端生命周期管理；补充 Docker Compose MySQL 8.4、持久化和健康检查；锁定 Python 3.13 解决 asyncmy Windows 构建问题；完成真实 SELECT 1 验证并创建指向 master 的 Draft PR #9。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `66c22ce` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
