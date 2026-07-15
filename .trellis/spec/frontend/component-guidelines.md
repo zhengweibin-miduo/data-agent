@@ -1,59 +1,18 @@
-# Component Guidelines
+# Frontend Component Guidelines
 
-> How components are built in this project.
+## Current Scope
 
----
+Not applicable yet. The repository has no frontend framework, rendered
+components, props types, styling system, or accessibility implementation.
 
-## Overview
+There are therefore no repository-backed conventions for component structure,
+composition, props, CSS, or accessibility. Do not copy React, Vue, or another
+framework's generic component rules into this guide. When the first frontend
+component is implemented, document its real framework, file shape, styling
+boundary, tests, and accessibility checks here.
 
-<!--
-Document your project's component conventions here.
+## Evidence
 
-Questions to answer:
-- What component patterns do you use?
-- How are props defined?
-- How do you handle composition?
-- What accessibility standards apply?
--->
-
-(To be filled by the team)
-
----
-
-## Component Structure
-
-<!-- Standard structure of a component file -->
-
-(To be filled by the team)
-
----
-
-## Props Conventions
-
-<!-- How props should be defined and typed -->
-
-(To be filled by the team)
-
----
-
-## Styling Patterns
-
-<!-- How styles are applied (CSS modules, styled-components, Tailwind, etc.) -->
-
-(To be filled by the team)
-
----
-
-## Accessibility
-
-<!-- A11y requirements and patterns -->
-
-(To be filled by the team)
-
----
-
-## Common Mistakes
-
-<!-- Component-related mistakes your team has made -->
-
-(To be filled by the team)
+No component files or frontend dependencies are present in the tracked project
+or current application tree. The Python classes in `app/client/` are backend
+client managers and are not UI components.

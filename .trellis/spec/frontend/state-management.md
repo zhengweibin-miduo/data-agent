@@ -1,51 +1,16 @@
-# State Management
+# Frontend State Management
 
-> How state is managed in this project.
+## Current Scope
 
----
+Not applicable yet. There is no frontend runtime and therefore no local UI
+state, global client state, URL state, or cached server state.
 
-## Overview
+The module-level `app_config` and class-level client instances under `app/` are
+backend process state; they do not establish a frontend state-management
+pattern. Do not select Redux, Zustand, React Context, or a server-state library
+in this spec without an implementation task that introduces and validates it.
 
-<!--
-Document your project's state management conventions here.
+## Evidence
 
-Questions to answer:
-- What state management solution do you use?
-- How is local vs global state decided?
-- How do you handle server state?
-- What are the patterns for derived state?
--->
-
-(To be filled by the team)
-
----
-
-## State Categories
-
-<!-- Local state, global state, server state, URL state -->
-
-(To be filled by the team)
-
----
-
-## When to Use Global State
-
-<!-- Criteria for promoting state to global -->
-
-(To be filled by the team)
-
----
-
-## Server State
-
-<!-- How server data is cached and synchronized -->
-
-(To be filled by the team)
-
----
-
-## Common Mistakes
-
-<!-- State management mistakes your team has made -->
-
-(To be filled by the team)
+No frontend state dependency, store, provider, reducer, or query cache exists in
+the repository.

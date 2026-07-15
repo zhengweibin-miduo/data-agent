@@ -24,9 +24,10 @@ class TeiEmbeddingClientManager:
 ### 3. Contracts
 
 - Compose service: `text-embeddings-inference`.
+- Client modules live in the singular package `app/client/`; matching integration tests live in `app_test/client/`.
 - Image: `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`; no GPU device requests.
 - Model: `BAAI/bge-small-zh-v1.5`; output dimension is 512.
-- Endpoint: `conf/app.yaml` key `tei.url`, with Hugging Face requests sent to `{url}/embed`.
+- Endpoint: `conf/app_config.yaml` key `tei.url`, with Hugging Face requests sent to `{url}/embed`.
 - Cache: named volume mounted at `/data`.
 - Documents receive no query instruction; the LangChain client replaces newlines with spaces. Queries prepend `为这个句子生成表示以用于检索相关文章：`.
 - All requests use `normalize=True` and `truncate=True`.
@@ -44,11 +45,11 @@ class TeiEmbeddingClientManager:
 | Managed client initialization | `client is None` and `async_client` targets `{url}/embed` |
 | Input exceeds model token limit | TEI truncates it because `truncate=True` |
 | TEI unavailable or returns an HTTP error | Preserve the original `huggingface_hub` exception |
-| Model output is not 512 dimensions | Integration test fails; do not guess a Qdrant dimension |
+| Model output is not 512 dimensions | The current integration assertion fails |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: initialize once, reuse the manager client, call `aembed_documents` / `aembed_query`, then close it during application shutdown.
+- Good: initialize once, reuse the manager client, call `aembed_documents` / `aembed_query`, then close it in the executable check's `finally` block.
 - Base: a one-item documents batch returns one normalized 512-dimensional vector.
 - Bad: use the standard endpoint constructor for a self-hosted URL, create a sync inference client, omit normalization, or change the Compose model without updating the query instruction and vector dimension.
 
@@ -58,7 +59,7 @@ class TeiEmbeddingClientManager:
 docker compose -f docs/docker/docker-compose.yml config
 docker compose -f docs/docker/docker-compose.yml up -d text-embeddings-inference
 uv run python -m app.conf.app_config
-uv run python -m app_test.clients.test_tei_embedding_client_manager
+uv run python -m app_test.client.test_tei_embedding_client_manager
 ```
 
 The integration test must assert the LangChain client type, `client is None`, async query/document calls, normalized vectors, and 512 dimensions. Compose inspection must show a healthy container, the `/data` volume, and no GPU device request.

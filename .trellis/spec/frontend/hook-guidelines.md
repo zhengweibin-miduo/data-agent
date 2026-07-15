@@ -1,51 +1,16 @@
-# Hook Guidelines
+# Frontend Hook Guidelines
 
-> How hooks are used in this project.
+## Current Scope
 
----
+Not applicable yet. The repository has no React dependency, custom hooks,
+frontend data-fetching library, or shared stateful UI logic.
 
-## Overview
+No `use*` naming rule, dependency-array policy, query-cache pattern, or hook
+test strategy is established. Do not infer a hook convention from the Python
+async client managers. Add concrete guidance only after hooks exist in a real
+frontend package.
 
-<!--
-Document your project's hook conventions here.
+## Evidence
 
-Questions to answer:
-- What custom hooks do you have?
-- How do you handle data fetching?
-- What are the naming conventions?
-- How do you share stateful logic?
--->
-
-(To be filled by the team)
-
----
-
-## Custom Hook Patterns
-
-<!-- How to create and structure custom hooks -->
-
-(To be filled by the team)
-
----
-
-## Data Fetching
-
-<!-- How data fetching is handled (React Query, SWR, etc.) -->
-
-(To be filled by the team)
-
----
-
-## Naming Conventions
-
-<!-- Hook naming rules (use*, etc.) -->
-
-(To be filled by the team)
-
----
-
-## Common Mistakes
-
-<!-- Hook-related mistakes your team has made -->
-
-(To be filled by the team)
+`pyproject.toml` lists only Python backend dependencies, and the repository has
+no frontend package manifest or JavaScript/TypeScript hook modules.
