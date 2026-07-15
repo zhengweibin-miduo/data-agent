@@ -22,6 +22,12 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 # Project Agent Rules
 
+## Review guidelines
+
+- Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查结果必须使用简体中文。
+- 问题标题、风险说明、证据和修复建议使用中文。
+- 代码标识符、文件路径、命令、配置键、日志和错误原文保留英文。
+
 ## Git 与 Pull Request 操作
 
 凡涉及 Git 状态或历史检查、分支、暂存、提交、推送、变基、拣选以及 Pull Request 创建或维护的任务，必须先读取并遵守项目级 `git-pr-rules` Skill：`.agents/skills/git-pr-rules/SKILL.md`。

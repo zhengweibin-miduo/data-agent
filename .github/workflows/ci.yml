@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: data_agent
+          MYSQL_USER: data_agent
+          MYSQL_PASSWORD: data_agent
+        ports:
+          - "3306:3306"
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+          --health-start-period=30s
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check lock file
+        run: uv lock --check
+
+      - name: Run Ruff lint
+        run: uv run --with ruff ruff check app app_test
+
+      - name: Run Pyright
+        run: uv run --with pyright pyright app app_test
+
+      - name: Compile Python modules
+        run: uv run python -m compileall -q app app_test main.py
+
+      - name: Validate application configuration
+        run: uv run python -m app.conf.app_config
+
+      - name: Run MySQL integration test
+        run: uv run python -m app_test.clients.test_mysql_client_manager
