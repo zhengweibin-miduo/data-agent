@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.clients.mysql_client_manager import MysqlClientManager
+from app.client.mysql_client_manager import MysqlClientManager
 
 
 class _RollbackSignal(Exception):

@@ -86,7 +86,8 @@ class AppConfigModel(ConfigModel):
 
     @classmethod
     def from_yaml(
-        cls, path: str | Path = Path(__file__).parents[2] / "conf" / "app.yaml"
+        cls,
+        path: str | Path = Path(__file__).parents[2] / "conf" / "app_config.yaml",
     ) -> "AppConfigModel":
         """从 YAML 文件加载并校验应用配置。
 

@@ -5,7 +5,7 @@ from math import isclose
 
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
 
-from app.clients.tei_embedding_client_manager import TeiEmbeddingClientManager
+from app.client.tei_embedding_client_manager import TeiEmbeddingClientManager
 
 EMBEDDING_DIMENSION = 512
 
