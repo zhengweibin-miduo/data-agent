@@ -11,6 +11,7 @@ dependencies = [
     "elasticsearch[async]>=8.19,<9",
     "huggingface-hub>=1.23,<2",
     "langchain-huggingface>=1.2,<2",
+    "loguru>=0.7.3",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "qdrant-client>=1.18.0",
