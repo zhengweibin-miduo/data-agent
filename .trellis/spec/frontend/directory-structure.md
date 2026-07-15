@@ -1,54 +1,24 @@
-# Directory Structure
+# Frontend Directory Structure
 
-> How frontend code is organized in this project.
+## Current Scope
 
----
+This repository has no frontend application. There is no `package.json`,
+JavaScript or TypeScript source tree, frontend build configuration, static asset
+directory, page directory, or component directory.
 
-## Overview
+The top-level `app/` directory is a Python backend package, not a web frontend.
+Its contents are documented under `.trellis/spec/backend/`.
 
-<!--
-Document your project's frontend directory structure here.
+## Current Layout
 
-Questions to answer:
-- Where do components live?
-- How are features/modules organized?
-- Where are shared utilities?
-- How are assets organized?
--->
+No frontend layout or naming convention exists to document. Do not create
+`src/components`, `pages`, `hooks`, or similar directories merely to match this
+template. Until frontend files exist, there is no repository evidence from
+which to derive a framework or layout rule.
 
-(To be filled by the team)
+## Evidence
 
----
-
-## Directory Layout
-
-```
-<!-- Replace with your actual structure -->
-src/
-├── ...
-└── ...
-```
-
----
-
-## Module Organization
-
-<!-- How should new features be organized? -->
-
-(To be filled by the team)
-
----
-
-## Naming Conventions
-
-<!-- File and folder naming rules -->
-
-(To be filled by the team)
-
----
-
-## Examples
-
-<!-- Link to well-organized modules as examples -->
-
-(To be filled by the team)
+- `pyproject.toml` is the only application dependency manifest.
+- `.github/workflows/ci.yml` runs only Python and backend integration checks.
+- `git ls-files` contains no `.js`, `.jsx`, `.ts`, `.tsx`, HTML, CSS, or
+  frontend manifest files.

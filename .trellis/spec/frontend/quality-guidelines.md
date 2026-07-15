@@ -1,51 +1,21 @@
-# Quality Guidelines
+# Frontend Quality Guidelines
 
-> Code quality standards for frontend development.
+## Current Scope
 
----
+Not applicable yet. No frontend lint, type-check, unit-test, browser-test,
+build, bundle, or accessibility command exists.
 
-## Overview
+`.github/workflows/ci.yml` currently validates only the Python backend with
+Ruff, Pyright, `compileall`, configuration loading, and a MySQL integration
+test. Do not report npm, pnpm, yarn, frontend build, or accessibility checks as
+project quality gates.
 
-<!--
-Document your project's quality standards here.
+## Review Boundary
 
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
+Until a frontend is introduced, frontend files should not appear in an ordinary
+backend task. This guide can name a frontend test or review command only after
+that command exists in a project manifest or CI configuration.
 
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
-
----
-
-## Required Patterns
-
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
-
----
-
-## Testing Requirements
-
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
-
----
-
-## Code Review Checklist
-
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+AI-generated review findings, including future frontend findings, must be in
+Simplified Chinese as required by `AGENTS.md`; code identifiers, paths,
+commands, configuration keys, logs, and original error text remain in English.

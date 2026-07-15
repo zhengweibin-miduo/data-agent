@@ -1,51 +1,18 @@
-# Type Safety
+# Frontend Type Safety
 
-> Type safety patterns in this project.
+## Current Scope
 
----
+Not applicable yet. The repository has no TypeScript compiler configuration,
+frontend type declarations, runtime schema library for browser data, or
+generated API types.
 
-## Overview
+Python type checking is established for the backend through Pyright and is
+documented in `.trellis/spec/backend/quality-guidelines.md`; it must not be
+recast as a frontend TypeScript convention. When a frontend package is added,
+record the actual compiler settings, type ownership, boundary validation, and
+forbidden escape hatches here.
 
-<!--
-Document your project's type safety conventions here.
+## Evidence
 
-Questions to answer:
-- What type system do you use?
-- How are types organized?
-- What validation library do you use?
-- How do you handle type inference?
--->
-
-(To be filled by the team)
-
----
-
-## Type Organization
-
-<!-- Where types are defined, shared types vs local types -->
-
-(To be filled by the team)
-
----
-
-## Validation
-
-<!-- Runtime validation patterns (Zod, Yup, io-ts, etc.) -->
-
-(To be filled by the team)
-
----
-
-## Common Patterns
-
-<!-- Type utilities, generics, type guards -->
-
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- any, type assertions, etc. -->
-
-(To be filled by the team)
+There is no `tsconfig.json`, `package.json`, `.ts`, or `.tsx` file in the
+tracked project or current application tree.
