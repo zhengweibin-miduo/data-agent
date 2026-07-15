@@ -140,43 +140,53 @@ async def _test_mysql_client_integration() -> None:
         async with client.connect() as connection:
             assert await connection.scalar(text("SELECT 1")) == 1
 
-        async with MysqlClientManager.session() as session:
-            assert await session.scalar(text("SELECT 1")) == 1
-            await session.execute(
-                text(
-                    "CREATE TEMPORARY TABLE session_transaction_test "
-                    "(value INTEGER NOT NULL) ENGINE=InnoDB"
-                )
-            )
-            await session.execute(
-                text("INSERT INTO session_transaction_test (value) VALUES (1)")
-            )
-
-        async with MysqlClientManager.session() as session:
-            assert (
-                await session.scalar(
-                    text("SELECT COUNT(*) FROM session_transaction_test")
-                )
-                == 1
+        async with client.begin() as connection:
+            await connection.execute(
+                text("DROP TABLE IF EXISTS session_transaction_test")
             )
 
         try:
             async with MysqlClientManager.session() as session:
+                assert await session.scalar(text("SELECT 1")) == 1
                 await session.execute(
-                    text("INSERT INTO session_transaction_test (value) VALUES (2)")
+                    text(
+                        "CREATE TABLE session_transaction_test "
+                        "(value INTEGER NOT NULL) ENGINE=InnoDB"
+                    )
                 )
-                raise _RollbackSignal()
-        except _RollbackSignal:
-            pass
+                await session.execute(
+                    text("INSERT INTO session_transaction_test (value) VALUES (1)")
+                )
 
-        async with MysqlClientManager.session() as session:
-            assert (
-                await session.scalar(
-                    text("SELECT COUNT(*) FROM session_transaction_test")
+            async with MysqlClientManager.session() as session:
+                assert (
+                    await session.scalar(
+                        text("SELECT COUNT(*) FROM session_transaction_test")
+                    )
+                    == 1
                 )
-                == 1
-            )
-            await session.execute(text("DROP TEMPORARY TABLE session_transaction_test"))
+
+            try:
+                async with MysqlClientManager.session() as session:
+                    await session.execute(
+                        text("INSERT INTO session_transaction_test (value) VALUES (2)")
+                    )
+                    raise _RollbackSignal()
+            except _RollbackSignal:
+                pass
+
+            async with MysqlClientManager.session() as session:
+                assert (
+                    await session.scalar(
+                        text("SELECT COUNT(*) FROM session_transaction_test")
+                    )
+                    == 1
+                )
+        finally:
+            async with client.begin() as connection:
+                await connection.execute(
+                    text("DROP TABLE IF EXISTS session_transaction_test")
+                )
     finally:
         await MysqlClientManager.close()
 
