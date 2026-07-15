@@ -3,12 +3,16 @@ name = "data-agent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+# ponytail: asyncmy 0.2.11 lacks a Windows Python 3.14 wheel; lift when available.
+requires-python = ">=3.13,<3.14"
 dependencies = [
+    "asyncmy>=0.2.11",
+    "cryptography>=49.0.0",
     "elasticsearch[async]>=8.19,<9",
     "huggingface-hub>=1.23,<2",
     "langchain-huggingface>=1.2,<2",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "qdrant-client>=1.18.0",
+    "sqlalchemy>=2.0.51",
 ]

@@ -17,3 +17,6 @@ elasticsearch:
 
 tei:
   url: http://localhost:8080
+
+mysql:
+  url: mysql+asyncmy://data_agent:data_agent@localhost:3306/data_agent?charset=utf8mb4
