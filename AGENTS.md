@@ -33,6 +33,11 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - 审查执行阶段不得使用 `uv run --with ...` 临时访问 PyPI；Ruff 和 Pyright 必须来自项目锁定的开发依赖。
 - 正式 Pyright 命令通过时，不得将审查环境无法解析 `elasticsearch`、`sqlalchemy`、`qdrant_client`、`pydantic` 等第三方依赖误报为代码问题。
 
+## Codex 审查模板
+
+- 执行只读代码审查时，必须读取并遵循仓库根目录 `code_review.md`。
+- 核验并修复审查意见时，必须读取并遵循仓库根目录 `code_review_fix.md`；是否允许暂存、提交、推送、发布 PR 评论、解决审查线程、更新已有 PR 或创建 PR，以模板中填写的“允许操作”和下方 Git 规则为准，各项权限不得相互扩张。
+
 ## Git 与 Pull Request 操作
 
 凡涉及 Git 状态或历史检查、分支、暂存、提交、推送、变基、拣选以及 Pull Request 创建或维护的任务，必须先读取并遵守项目级 `git-pr-rules` Skill：`.agents/skills/git-pr-rules/SKILL.md`。
