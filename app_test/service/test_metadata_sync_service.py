@@ -135,6 +135,12 @@ def _test_config() -> None:
     _assert_invalid(payload)
 
     payload = _config_payload()
+    duplicate_metric = deepcopy(payload["metrics"][0])
+    duplicate_metric["name"] = "gmv"
+    payload["metrics"].append(duplicate_metric)
+    _assert_invalid(payload)
+
+    payload = _config_payload()
     payload["metrics"][0]["relevant_columns"].append("dim_region.province")
     _assert_invalid(payload)
 

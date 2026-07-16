@@ -71,7 +71,9 @@ class MetaConfig(ConfigModel):
             for column in table.columns
         }
 
-        metric_names = [metric.name for metric in self.metrics]
+        # meta.metric_info.id 使用 utf8mb4_general_ci；配置侧也必须按大小写
+        # 不敏感的标识比较拒绝冲突，避免 MySQL 与检索索引产生不同实体数。
+        metric_names = [metric.name.casefold() for metric in self.metrics]
         if len(metric_names) != len(set(metric_names)):
             raise ValueError("metrics 中存在重复指标名")
 
