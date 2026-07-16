@@ -517,6 +517,17 @@ async def _test_repository() -> None:
     assert column_params[0]["alias"] == ["省"]
     assert metric_params[0]["relevant_columns"] == ["dim_region.province"]
 
+    distinct_result = Mock()
+    distinct_result.scalars.return_value = ["广东省", "浙江省"]
+    session.execute.return_value = distinct_result
+    assert await repository.get_distinct_values("dim_region", "province", 100000) == [
+        "广东省",
+        "浙江省",
+    ]
+    distinct_statement = str(session.execute.await_args.args[0])
+    assert "ORDER BY `province` LIMIT :limit" in distinct_statement
+    assert session.execute.await_args.args[1] == {"limit": 100000}
+
     execute_count = session.execute.await_count
     try:
         await repository.get_distinct_values("bad;drop", "province", 10)

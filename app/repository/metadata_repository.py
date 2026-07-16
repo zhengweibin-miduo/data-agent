@@ -142,7 +142,8 @@ class MetadataRepository:
         result = await self._session.execute(
             text(
                 f"SELECT DISTINCT `{column_name}` FROM `dw`.`{table_name}` "
-                f"WHERE `{column_name}` IS NOT NULL LIMIT :limit"
+                f"WHERE `{column_name}` IS NOT NULL "
+                f"ORDER BY `{column_name}` LIMIT :limit"
             ),
             {"limit": limit},
         )
