@@ -526,7 +526,9 @@ async def _test_repository() -> None:
         "浙江省",
     ]
     distinct_statement = str(session.execute.await_args.args[0])
-    assert "ORDER BY `province` LIMIT :limit" in distinct_statement
+    assert "CONVERT(MIN(BINARY `province`) USING utf8mb4)" in distinct_statement
+    assert "GROUP BY `province`" in distinct_statement
+    assert "ORDER BY MIN(BINARY `province`) LIMIT :limit" in distinct_statement
     assert session.execute.await_args.args[1] == {"limit": 100000}
 
     execute_count = session.execute.await_count

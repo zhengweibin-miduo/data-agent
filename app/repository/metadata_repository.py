@@ -152,9 +152,11 @@ class MetadataRepository:
 
         result = await self._session.execute(
             text(
-                f"SELECT DISTINCT `{column_name}` FROM `dw`.`{table_name}` "
+                f"SELECT CONVERT(MIN(BINARY `{column_name}`) USING utf8mb4) "
+                f"FROM `dw`.`{table_name}` "
                 f"WHERE `{column_name}` IS NOT NULL "
-                f"ORDER BY `{column_name}` LIMIT :limit"
+                f"GROUP BY `{column_name}` "
+                f"ORDER BY MIN(BINARY `{column_name}`) LIMIT :limit"
             ),
             {"limit": limit},
         )
