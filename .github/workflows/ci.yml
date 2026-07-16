@@ -27,7 +27,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: data_agent
+          MYSQL_DATABASE: meta
           MYSQL_USER: data_agent
           MYSQL_PASSWORD: data_agent
         ports:

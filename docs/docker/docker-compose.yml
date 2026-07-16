@@ -3,7 +3,6 @@ services:
     image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: data_agent
       MYSQL_USER: data_agent
       MYSQL_PASSWORD: data_agent
     ports:
