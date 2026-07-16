@@ -102,10 +102,11 @@ class MetadataRepository:
   configurations before point upsert. Preserve any legacy raw-TF `sparse`
   storage, but never write it on new points; a separate name prevents mixed
   ranking semantics for old points outside the current configuration.
-- Qdrant point IDs are standard-library UUID5 values derived from collection,
-  entity ID, text role, and text value. Alias reordering therefore does not
-  change IDs. The payload contains the normalized entity row plus `text_kind`
-  and `text`.
+- Qdrant point IDs are standard-library UUID5 values derived from an
+  unambiguous structured encoding of collection, entity ID, text role, and
+  text value. Delimiter characters inside any component must not create an ID
+  collision. Alias reordering therefore does not change IDs. The payload
+  contains the normalized entity row plus `text_kind` and `text`.
 - Every point stores both vectors as
   `{"": dense_512, "bm25": bm25_document(text)}` and no additional vector
   keys. TEI must return one dense vector per requested text and every dense
@@ -175,7 +176,9 @@ class MetadataRepository:
   `ON DUPLICATE KEY UPDATE`. Assert JSON parameters remain Python lists before
   binding and the four Models match the bootstrap DDL contract.
 - Replay equivalent input and assert stable Qdrant UUID sets even when aliases
-  are reordered, plus identical BM25 documents and Elasticsearch document IDs.
+  are reordered. Also assert distinct component tuples cannot collide when
+  their values contain delimiters, plus identical BM25 documents and
+  Elasticsearch document IDs.
 - Assert English and Chinese input produce `Document` values with
   `model="Qdrant/bm25"` and the complete shared `Bm25Config`.
 - Assert the real remote `AsyncQdrantClient` conversion facade forwards the

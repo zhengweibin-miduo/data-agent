@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from dataclasses import asdict
 from hashlib import sha256
+from json import dumps
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from loguru import logger
@@ -39,10 +40,12 @@ def stable_point_id(
     value: str,
 ) -> UUID:
     """为一个实体文本生成稳定 Qdrant UUID。"""
-    return uuid5(
-        NAMESPACE_URL,
-        f"data-agent://{collection_name}/{entity_id}/{text_kind}/{value}",
+    identity = dumps(
+        [collection_name, entity_id, text_kind, value],
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
+    return uuid5(NAMESPACE_URL, identity)
 
 
 def stable_value_id(column_id: str, value: str) -> str:

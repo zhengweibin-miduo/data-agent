@@ -103,6 +103,29 @@ def _assert_invalid(payload: dict[str, Any]) -> None:
     raise AssertionError("非法元数据配置不应通过校验")
 
 
+def _test_stable_point_id() -> None:
+    first_id = stable_point_id(
+        METRIC_COLLECTION,
+        "a",
+        "alias",
+        "x/alias/y",
+    )
+    second_id = stable_point_id(
+        METRIC_COLLECTION,
+        "a/alias/x",
+        "alias",
+        "y",
+    )
+
+    assert first_id != second_id
+    assert first_id == stable_point_id(
+        METRIC_COLLECTION,
+        "a",
+        "alias",
+        "x/alias/y",
+    )
+
+
 def _test_config() -> None:
     config = MetaConfig.from_yaml(SAMPLE_CONFIG)
     assert len(config.tables) == 5
@@ -978,6 +1001,7 @@ async def _test_script_cleanup() -> None:
 
 def test_metadata_sync_service() -> None:
     """运行不依赖外部服务的元数据同步检查。"""
+    _test_stable_point_id()
     _test_config()
     _test_models()
     _test_entities()
