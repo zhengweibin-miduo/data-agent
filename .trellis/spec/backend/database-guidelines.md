@@ -74,10 +74,10 @@ contracts when the first persistence feature is introduced.
 
 No migration tool or migration directory exists. There is therefore no current
 convention for table names, column names, indexes, migration identifiers, or
-upgrade/downgrade behavior. Local MySQL bootstrap creates `data_agent` through
-`docs/docker/docker-compose.yml` and initializes the `dw` and `meta` sample
-databases from `docs/docker/mysql/`. CI creates only `data_agent` through the
-MySQL service in `.github/workflows/ci.yml`.
+upgrade/downgrade behavior. Local MySQL bootstrap initializes the `dw` and
+`meta` sample databases from `docs/docker/mysql/`; it does not create a
+`data_agent` database. CI creates only `meta` through the MySQL service in
+`.github/workflows/ci.yml`.
 
 ## Scenario: Local MySQL Bootstrap Scripts
 
@@ -109,8 +109,8 @@ The current script order is lexical: `dw.sql`, then `meta.sql`.
 - Persistence: normal restarts reuse `mysql_data` and do not rerun the scripts.
 - Identity: `MYSQL_USER=data_agent`; every bootstrap `GRANT` must target
   `'data_agent'@'%'` unless Compose is changed in the same task.
-- Databases: Compose creates `data_agent`; the bootstrap scripts create `dw`
-  and `meta`.
+- Databases: the bootstrap scripts create only `dw` and `meta`; Compose does
+  not set `MYSQL_DATABASE`.
 
 ### 4. Validation & Error Matrix
 
@@ -124,8 +124,8 @@ The current script order is lexical: `dw.sql`, then `meta.sql`.
 
 ### 5. Good / Base / Bad Cases
 
-- Good: an empty disposable volume creates `data_agent`, `dw`, and `meta`, and
-  `data_agent` can access both sample databases.
+- Good: an empty disposable volume creates `dw` and `meta`, and the
+  `data_agent` user can access both sample databases.
 - Base: restarting an initialized local container leaves all database contents
   unchanged.
 - Bad: forcing the scripts to run on every startup can execute their
@@ -161,7 +161,8 @@ GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
 
 - The YAML key is `mysql.url` in `conf/app_config.yaml`.
 - The URL uses `mysql+asyncmy://` and is typed as `str` by `MysqlConfig`.
-- Local Compose and CI consistently use database/user name `data_agent`.
+- Local Compose and CI use `data_agent` as the application user and `meta` as
+  the application's default database.
 - Do not duplicate the DSN in client modules; read it from the shared
   `app_config` instance.
 
