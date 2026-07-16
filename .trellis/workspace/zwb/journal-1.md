@@ -204,3 +204,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: 规范 Codex GitHub 审查与修复模板
+
+**Date**: 2026-07-17
+**Task**: 规范 Codex GitHub 审查与修复模板
+**Branch**: `docs/codex-review-templates-20260717`
+
+### Summary
+
+新增根目录 code_review.md，统一 P0/P1 审查意见与已修复、部分修复、不采纳三类 GitHub thread 回复模板；AGENTS.md 改为引用唯一规范来源；完成内容断言、Markdown、链接、JSONL、Trellis 任务和 git diff 检查，并创建 draft PR #18。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dd275c8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
