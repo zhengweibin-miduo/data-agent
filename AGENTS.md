@@ -27,7 +27,10 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查结果必须使用简体中文。
 - 问题标题、风险说明、证据和修复建议使用中文。
 - 代码标识符、文件路径、命令、配置键、日志和错误原文保留英文。
-- 执行 Pyright 时必须使用 `uv run --with pyright pyright app app_test`，不要使用 `uv run pyright app app_test`。
+- 执行代码审查命令前必须先运行 `uv sync --locked`，安装锁文件中声明的开发依赖。
+- 执行 Ruff 时必须使用 `uv run ruff check app app_test`。
+- 执行 Pyright 时必须使用 `uv run pyright app app_test`。
+- 审查执行阶段不得使用 `uv run --with ...` 临时访问 PyPI；Ruff 和 Pyright 必须来自项目锁定的开发依赖。
 - 正式 Pyright 命令通过时，不得将审查环境无法解析 `elasticsearch`、`sqlalchemy`、`qdrant_client`、`pydantic` 等第三方依赖误报为代码问题。
 
 ## Git 与 Pull Request 操作

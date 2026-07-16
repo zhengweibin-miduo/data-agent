@@ -60,10 +60,10 @@ jobs:
         run: uv lock --check
 
       - name: Run Ruff lint
-        run: uv run --with ruff ruff check app app_test
+        run: uv run ruff check app app_test
 
       - name: Run Pyright
-        run: uv run --with pyright pyright app app_test
+        run: uv run pyright app app_test
 
       - name: Compile Python modules
         run: uv run python -m compileall -q app app_test main.py

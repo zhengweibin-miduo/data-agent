@@ -47,8 +47,8 @@ The repository CI in `.github/workflows/ci.yml` defines the baseline:
 ```powershell
 uv sync --locked
 uv lock --check
-uv run --with ruff ruff check app app_test
-uv run --with pyright pyright app app_test
+uv run ruff check app app_test
+uv run pyright app app_test
 uv run python -m compileall -q app app_test main.py
 uv run python -m app.conf.app_config
 uv run python -m app_test.client.test_mysql_client_manager
@@ -76,8 +76,10 @@ document IDs to validate replay against real services. When any dependency is
 unavailable, report the exact missing service and mark the live integration as
 not run.
 
-The project does not declare persistent Ruff or Pyright configuration in
-`pyproject.toml`; CI currently invokes their defaults through `uv --with`.
+Ruff and Pyright are declared in the `dev` dependency group in
+`pyproject.toml` and installed by `uv sync --locked`. CI and review commands
+must use the locked project tools without `uv run --with`, so validation does
+not require package downloads after the setup phase.
 
 ## Review Checklist
 

@@ -364,8 +364,8 @@ async with MysqlClientManager.session() as session:
 ```powershell
 uv run python -m app.conf.app_config
 uv run python -m app_test.client.test_mysql_client_manager
-uv run --with ruff ruff check app app_test
-uv run --with pyright pyright app app_test
+uv run ruff check app app_test
+uv run pyright app app_test
 ```
 
 The focused test must assert engine health settings, factory reuse, `expire_on_commit=False`, distinct concurrent Sessions, automatic commit and rollback, Session closure, live Engine/Session `SELECT 1`, close/reinitialize behavior, and the initialize-during-dispose race.

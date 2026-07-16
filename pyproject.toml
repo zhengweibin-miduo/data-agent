@@ -17,3 +17,9 @@ dependencies = [
     "qdrant-client>=1.18.0",
     "sqlalchemy>=2.0.51",
 ]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+    "ruff>=0.15.22",
+]
