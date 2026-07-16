@@ -24,9 +24,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 ## Review guidelines
 
-- Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查结果必须使用简体中文。
-- 问题标题、风险说明、证据和修复建议使用中文。
-- 代码标识符、文件路径、命令、配置键、日志和错误原文保留英文。
+Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取并遵循根目录的 [`code_review.md`](./code_review.md)。该文件是本仓库 AI 代码审查意见与审查问题修复回复格式的唯一规范来源。
 
 ## Git 与 Pull Request 操作
 
