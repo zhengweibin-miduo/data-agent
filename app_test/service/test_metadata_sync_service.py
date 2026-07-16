@@ -141,6 +141,14 @@ def _test_config() -> None:
     _assert_invalid(payload)
 
     payload = _config_payload()
+    payload["metrics"][0]["name"] = "m" * 64
+    assert MetaConfig.model_validate(payload).metrics[0].name == "m" * 64
+
+    payload = _config_payload()
+    payload["metrics"][0]["name"] = "m" * 65
+    _assert_invalid(payload)
+
+    payload = _config_payload()
     payload["metrics"][0]["relevant_columns"].append("dim_region.province")
     _assert_invalid(payload)
 

@@ -13,6 +13,10 @@ Identifier = Annotated[
     StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"),
 ]
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+MetricName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+]
 ColumnReference = Annotated[
     str,
     StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$"),
@@ -41,7 +45,7 @@ class TableConfig(ConfigModel):
 class MetricConfig(ConfigModel):
     """指标元数据配置。"""
 
-    name: NonEmptyText
+    name: MetricName
     description: NonEmptyText
     relevant_columns: list[ColumnReference] = Field(min_length=1)
     alias: list[NonEmptyText]
