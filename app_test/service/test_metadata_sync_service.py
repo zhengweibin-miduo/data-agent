@@ -437,6 +437,7 @@ async def _test_repository() -> None:
     indices = Mock()
     indices.exists = AsyncMock(return_value=False)
     indices.create = AsyncMock()
+    indices.get_mapping = AsyncMock()
     elasticsearch_mock.indices = indices
 
     repository = MetadataRepository(
@@ -743,6 +744,7 @@ async def _test_repository() -> None:
     mappings = indices.create.await_args.kwargs["mappings"]
     assert "mappings" not in mappings
     assert mappings["properties"]["value"]["analyzer"] == "ik_max_word"
+    assert mappings["properties"]["column_id"]["type"] == "keyword"
     assert captured_actions == [
         {
             "_op_type": "index",
@@ -756,6 +758,35 @@ async def _test_repository() -> None:
         }
     ]
 
+    indices.exists.return_value = True
+    indices.get_mapping.return_value = {
+        "data-agent-value": {"mappings": mappings}
+    }
+    captured_actions.clear()
+    with patch("app.repository.metadata_repository.async_bulk", bulk_mock):
+        await repository.upsert_values([document])
+    indices.get_mapping.assert_awaited()
+    assert captured_actions[0]["_id"] == document.id
+
+    indices.get_mapping.return_value = {
+        "data-agent-value": {
+            "mappings": {
+                "properties": {
+                    **mappings["properties"],
+                    "column_id": {"type": "text"},
+                }
+            }
+        }
+    }
+    try:
+        await repository.upsert_values([document])
+    except RuntimeError as error:
+        assert "column_id" in str(error)
+        assert "mapping 不兼容" in str(error)
+    else:
+        raise AssertionError("已存在的错误字段值索引 mapping 必须失败")
+
+    indices.exists.return_value = False
     bulk_error = RuntimeError("bulk failed")
     with patch(
         "app.repository.metadata_repository.async_bulk",

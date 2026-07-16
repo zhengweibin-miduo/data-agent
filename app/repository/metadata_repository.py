@@ -46,6 +46,17 @@ BM25_CONFIG = Bm25Config(
     lowercase=True,
 )
 VALUE_INDEX = "data-agent-value"
+VALUE_INDEX_MAPPING = {
+    "properties": {
+        "id": {"type": "keyword"},
+        "value": {
+            "type": "text",
+            "analyzer": "ik_max_word",
+            "search_analyzer": "ik_max_word",
+        },
+        "column_id": {"type": "keyword"},
+    }
+}
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 type MetadataEntity = TableInfo | ColumnInfo | MetricInfo | ColumnMetric
@@ -216,20 +227,12 @@ class MetadataRepository:
         documents: Sequence[ValueInfo],
     ) -> None:
         """创建字段值索引并通过稳定文档 ID 幂等写入。"""
-        if not await self._elasticsearch.indices.exists(index=VALUE_INDEX):
+        if await self._elasticsearch.indices.exists(index=VALUE_INDEX):
+            await self._validate_value_index_mapping()
+        else:
             await self._elasticsearch.indices.create(
                 index=VALUE_INDEX,
-                mappings={
-                    "properties": {
-                        "id": {"type": "keyword"},
-                        "value": {
-                            "type": "text",
-                            "analyzer": "ik_max_word",
-                            "search_analyzer": "ik_max_word",
-                        },
-                        "column_id": {"type": "keyword"},
-                    }
-                },
+                mappings=VALUE_INDEX_MAPPING,
             )
         if not documents:
             return
@@ -247,6 +250,27 @@ class MetadataRepository:
             ),
             refresh="wait_for",
         )
+
+    async def _validate_value_index_mapping(self) -> None:
+        """校验已存在的字段值索引 mapping 与同步契约兼容。"""
+        index_mapping = await self._elasticsearch.indices.get_mapping(
+            index=VALUE_INDEX
+        )
+        properties = index_mapping[VALUE_INDEX]["mappings"].get("properties", {})
+        for field_name, expected_mapping in VALUE_INDEX_MAPPING[
+            "properties"
+        ].items():
+            actual_mapping = properties.get(field_name)
+            if actual_mapping is None:
+                raise RuntimeError(
+                    f"Elasticsearch index {VALUE_INDEX} 缺少字段 {field_name} mapping"
+                )
+            for key, expected_value in expected_mapping.items():
+                if actual_mapping.get(key) != expected_value:
+                    raise RuntimeError(
+                        f"Elasticsearch index {VALUE_INDEX} 字段 {field_name} "
+                        f"mapping 不兼容: {key} 应为 {expected_value}"
+                    )
 
     async def _execute_many(
         self,
