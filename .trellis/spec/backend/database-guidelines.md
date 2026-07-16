@@ -74,9 +74,88 @@ contracts when the first persistence feature is introduced.
 
 No migration tool or migration directory exists. There is therefore no current
 convention for table names, column names, indexes, migration identifiers, or
-upgrade/downgrade behavior. MySQL bootstrap currently creates only the
-`data_agent` database through `docs/docker/docker-compose.yml` and the CI MySQL
-service in `.github/workflows/ci.yml`.
+upgrade/downgrade behavior. Local MySQL bootstrap creates `data_agent` through
+`docs/docker/docker-compose.yml` and initializes the `dw` and `meta` sample
+databases from `docs/docker/mysql/`. CI creates only `data_agent` through the
+MySQL service in `.github/workflows/ci.yml`.
+
+## Scenario: Local MySQL Bootstrap Scripts
+
+### 1. Scope / Trigger
+
+Use this contract when adding or changing local MySQL bootstrap SQL under
+`docs/docker/mysql/`. These scripts provide disposable local sample data; they
+are not production migrations.
+
+### 2. Signatures
+
+The Compose service exposes the bootstrap directory through this read-only
+mount while retaining the persistent data volume:
+
+```yaml
+volumes:
+  - mysql_data:/var/lib/mysql
+  - ./mysql:/docker-entrypoint-initdb.d:ro
+```
+
+The current script order is lexical: `dw.sql`, then `meta.sql`.
+
+### 3. Contracts
+
+- Host source: `docs/docker/mysql/` relative to the Compose file.
+- Container target: `/docker-entrypoint-initdb.d`, mounted read-only.
+- Execution boundary: the official `mysql:8.4` entrypoint processes the scripts
+  only when `/var/lib/mysql` is uninitialized.
+- Persistence: normal restarts reuse `mysql_data` and do not rerun the scripts.
+- Identity: `MYSQL_USER=data_agent`; every bootstrap `GRANT` must target
+  `'data_agent'@'%'` unless Compose is changed in the same task.
+- Databases: Compose creates `data_agent`; the bootstrap scripts create `dw`
+  and `meta`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|-----------|-----------------|
+| Empty `mysql_data` | Execute `dw.sql`, then `meta.sql` |
+| Initialized `mysql_data` | Skip bootstrap scripts and preserve data |
+| Missing init-directory mount | Start MySQL without creating `dw` or `meta` |
+| `GRANT` user differs from `MYSQL_USER` and does not exist | Initialization fails at `GRANT` |
+| Compose cannot resolve `./mysql` | `docker compose config` or startup reports the invalid mount |
+
+### 5. Good / Base / Bad Cases
+
+- Good: an empty disposable volume creates `data_agent`, `dw`, and `meta`, and
+  `data_agent` can access both sample databases.
+- Base: restarting an initialized local container leaves all database contents
+  unchanged.
+- Bad: forcing the scripts to run on every startup can execute their
+  `DROP TABLE` statements and destroy local data.
+
+### 6. Tests Required
+
+- Run `docker compose -f docs/docker/docker-compose.yml config` and assert that
+  both `/var/lib/mysql` and the read-only `/docker-entrypoint-initdb.d` mount
+  are present.
+- Search all files under `docs/docker/mysql/` and assert that bootstrap grants
+  target `'data_agent'@'%'` and do not reference stale users.
+- When Docker is available and initialization behavior changes, use a
+  disposable project/volume to assert that `dw` and `meta` exist after the
+  first healthy startup. Never delete the developer's shared `mysql_data`
+  volume for this check.
+
+### 7. Wrong vs Correct
+
+Wrong: the SQL grants access to a user that Compose does not create.
+
+```sql
+GRANT ALL PRIVILEGES ON dw.* TO 'atguigu'@'%';
+```
+
+Correct: the SQL reuses the configured local application user.
+
+```sql
+GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
+```
 
 ## Configuration and Naming
 
