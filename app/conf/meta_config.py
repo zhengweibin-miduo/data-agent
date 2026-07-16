@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Annotated, Literal, Self
+from unicodedata import combining, normalize
 
 import yaml
 from pydantic import Field, StringConstraints, model_validator
@@ -21,6 +22,15 @@ ColumnReference = Annotated[
     str,
     StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$"),
 ]
+
+
+def _mysql_general_ci_key(value: str) -> str:
+    """生成与 utf8mb4_general_ci 大小写及重音规则一致的比较键。"""
+    return "".join(
+        character
+        for character in normalize("NFKD", value.casefold())
+        if not combining(character)
+    )
 
 
 class ColumnConfig(ConfigModel):
@@ -75,9 +85,9 @@ class MetaConfig(ConfigModel):
             for column in table.columns
         }
 
-        # meta.metric_info.id 使用 utf8mb4_general_ci；配置侧也必须按大小写
-        # 不敏感的标识比较拒绝冲突，避免 MySQL 与检索索引产生不同实体数。
-        metric_names = [metric.name.casefold() for metric in self.metrics]
+        # meta.metric_info.id 使用 utf8mb4_general_ci；配置侧也必须按其
+        # 大小写和重音不敏感规则拒绝冲突，避免各存储产生不同实体数。
+        metric_names = [_mysql_general_ci_key(metric.name) for metric in self.metrics]
         if len(metric_names) != len(set(metric_names)):
             raise ValueError("metrics 中存在重复指标名")
 

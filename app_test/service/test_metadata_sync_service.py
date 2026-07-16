@@ -164,6 +164,13 @@ def _test_config() -> None:
     _assert_invalid(payload)
 
     payload = _config_payload()
+    payload["metrics"][0]["name"] = "e"
+    duplicate_metric = deepcopy(payload["metrics"][0])
+    duplicate_metric["name"] = "é"
+    payload["metrics"].append(duplicate_metric)
+    _assert_invalid(payload)
+
+    payload = _config_payload()
     payload["metrics"][0]["name"] = "m" * 64
     assert MetaConfig.model_validate(payload).metrics[0].name == "m" * 64
 
