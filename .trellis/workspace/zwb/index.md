@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-07-16
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~139 | Active |
+| `journal-1.md` | ~173 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-07-16 | 初始化 MySQL 示例数据库 | `29f318be81133d0a7dd7f2cd45ddfb15321d6c5d`, `0dfe4a726e3c5b22e64e53216ea23803abdeae4c` | `master` |
 | 4 | 2026-07-16 | 完善 MySQL 异步 Session 管理 | `56d1688` | `master` |
 | 3 | 2026-07-15 | 引入 MySQL 异步客户端与 Docker 服务 | `66c22ce` | `feature/mysql-integration-20260715` |
 | 2 | 2026-07-15 | 接入 TEI CPU 服务与 LangChain 客户端 | `2e2d5e5`, `ad29f2c` | `feature/tei-integration-20260715` |

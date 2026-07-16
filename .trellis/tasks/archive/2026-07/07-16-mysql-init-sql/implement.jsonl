@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"确认本地基础设施归属、MySQL 变更所需规范和验证入口"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"遵循 docs/docker 本地基础设施目录边界"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"保持本地 MySQL 数据库和 data_agent 用户命名一致"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行与 MySQL Compose 配置变更相匹配的最小验证"}

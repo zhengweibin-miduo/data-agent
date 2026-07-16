@@ -137,3 +137,37 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 初始化 MySQL 示例数据库
+
+**Date**: 2026-07-16
+**Task**: 初始化 MySQL 示例数据库
+**Branch**: `master`
+
+### Summary
+
+挂载 MySQL 初始化 SQL 目录，统一 data_agent 授权，补充基础设施规范及 script/service 包标记，并完成静态与项目质量验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `29f318be81133d0a7dd7f2cd45ddfb15321d6c5d` | (see git log) |
+| `0dfe4a726e3c5b22e64e53216ea23803abdeae4c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
