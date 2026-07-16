@@ -70,7 +70,9 @@ class MetaConfig(ConfigModel):
     @model_validator(mode="after")
     def validate_contract(self) -> Self:
         """拒绝重复项和不存在的指标字段引用。"""
-        table_names = [table.name for table in self.tables]
+        # meta.table_info.id 使用 utf8mb4_general_ci；即使 DW 本身区分大小写，
+        # 配置侧也必须拒绝会落到同一 Meta 主键的表名。
+        table_names = [_mysql_general_ci_key(table.name) for table in self.tables]
         if len(table_names) != len(set(table_names)):
             raise ValueError("tables 中存在重复表名")
 

@@ -68,9 +68,10 @@ class MetadataRepository:
 
 - `--config/-c` is required. The YAML root has `tables` and `metrics`; unknown
   keys are forbidden. Tables, columns, and metrics are unique in their scopes,
-  and every metric reference is an existing `<table>.<column>`. Metric-name
-  uniqueness follows the case- and accent-insensitive behavior of Meta MySQL's
-  `utf8mb4_general_ci` primary key, rather than Python's exact string equality.
+  and every metric reference is an existing `<table>.<column>`. Table- and
+  metric-name uniqueness follows the case- and accent-insensitive behavior of
+  Meta MySQL's `utf8mb4_general_ci` primary keys, rather than Python's exact
+  string equality.
 - Reuse `mysql.url`, `qdrant.url`, `elasticsearch.url`, and `tei.url` from
   `conf/app_config.yaml`, including the existing optional service API keys. The
   synchronization flow adds no connection setting or environment variable.

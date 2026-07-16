@@ -144,6 +144,12 @@ def _test_config() -> None:
     _assert_invalid(payload)
 
     payload = _config_payload()
+    duplicate_table = deepcopy(payload["tables"][0])
+    duplicate_table["name"] = "DIM_REGION"
+    payload["tables"].append(duplicate_table)
+    _assert_invalid(payload)
+
+    payload = _config_payload()
     payload["tables"][0]["columns"].append(
         deepcopy(payload["tables"][0]["columns"][0])
     )
