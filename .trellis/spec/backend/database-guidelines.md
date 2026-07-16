@@ -8,9 +8,12 @@ The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
 `app/conf/app_config.py`; engine and Session-factory lifecycle is owned by
 `app/client/mysql_client_manager.py`.
 
-The repository does not yet contain ORM models, repositories, schema
-migrations, or production persistence queries. Do not describe or assume
-conventions for those absent layers.
+The repository now has one concrete persistence boundary:
+`app/repository/metadata_repository.py`. It uses qualified SQL text for dynamic
+DW reads and the SQLAlchemy mappings under `app/model/` for fixed Meta MySQL
+upserts. There is still no schema migration or automatic table-creation path,
+so do not generalize this feature-specific Repository into a migration or
+generic ORM convention.
 
 ## Engine Lifecycle
 
@@ -56,7 +59,7 @@ Each context receives a fresh Session bound to the shared engine. Normal exit
 commits; exceptional exit rolls back and re-raises the original exception;
 the Session closes on both paths. The factory uses `expire_on_commit=False`.
 
-## Query Pattern in the Repository
+## Query Patterns in the Repository
 
 The executable checks use SQLAlchemy `text()` for a health probe and a
 short-lived persistent transaction table that is explicitly dropped:
@@ -67,17 +70,60 @@ async with client.connect() as connection:
 ```
 
 These examples validate connection health plus commit and rollback behavior.
-They do not establish a production raw-SQL or repository policy. Define those
-contracts when the first persistence feature is introduced.
+The metadata Repository is the first persistence feature and establishes the
+narrow cross-schema contract below; it does not establish raw SQL or ORM as the
+default for every future feature.
+
+## Metadata Synchronization SQL Boundary
+
+`app/repository/metadata_repository.py` is the first concrete persistence
+Repository. Its policy is intentionally limited to the metadata CLI:
+
+```python
+async with MysqlClientManager.session() as session:
+    repository = MetadataRepository(session, qdrant, elasticsearch)
+    await MetadataSyncService(repository, embeddings).sync(config)
+```
+
+- Reuse one managed Session and qualified `dw.<table>` / `meta.<table>` names;
+  do not add a second DSN for `dw`.
+- Read the actual DW shape from `information_schema.columns` and validate every
+  configured table and column before a distinct-value query or storage write.
+- Obtain mapping rows from the executed `Result`, for example
+  `(await session.execute(statement, params)).mappings()`.
+  `AsyncSession` has no `mappings()` method; do not reverse this call chain.
+- Dynamic identifiers must match `^[A-Za-z_][A-Za-z0-9_]*$`, belong to the
+  validated schema, and be quoted. Data values and limits remain bound
+  parameters.
+- Read at most 10 distinct non-null example values per configured field. Only
+  `sync: true` fields receive the separate 100,000-value read.
+- Service converts validated configuration into the business dataclasses under
+  `app/entity/`; Repository write signatures accept those Entities, not config
+  models or untyped dictionaries.
+- Map `meta.table_info`, `meta.column_info`, `meta.metric_info`, and
+  `meta.column_metric` with the four classes under `app/model/`. Their schema,
+  lengths, SQL types, nullable flags, and composite primary key must match
+  `docs/docker/mysql/meta.sql` exactly.
+- Build MySQL statements with
+  `sqlalchemy.dialects.mysql.insert(Model).on_duplicate_key_update(...)` and
+  execute them with `dataclasses.asdict()` parameter mappings. Keep JSON fields
+  as Python lists so SQLAlchemy's `JSON` type serializes them exactly once;
+  pre-serializing with `json.dumps()` stores a JSON string instead of an array.
+- Stable relational identities are the table name, `<table>.<column>`, metric
+  name, and `(column_id, metric_id)`. Never delete rows merely because the
+  current YAML omits them.
+- The Session commits only after the whole synchronization succeeds and rolls
+  back on any propagated failure. Completed external upserts may remain; the
+  replay contract is defined in
+  [External Service Integrations](./external-service-integrations.md#scenario-replayable-metadata-synchronization).
 
 ## Schema and Migrations
 
-No migration tool or migration directory exists. There is therefore no current
-convention for table names, column names, indexes, migration identifiers, or
-upgrade/downgrade behavior. Local MySQL bootstrap initializes the `dw` and
-`meta` sample databases from `docs/docker/mysql/`; it does not create a
-`data_agent` database. CI creates only `meta` through the MySQL service in
-`.github/workflows/ci.yml`.
+No migration tool or migration directory exists. The ORM Models describe the
+existing `meta.sql` schema but never call `create_all()` and do not own DDL.
+Local MySQL bootstrap initializes the `dw` and `meta` sample databases from
+`docs/docker/mysql/`; it does not create a `data_agent` database. CI creates
+only `meta` through the MySQL service in `.github/workflows/ci.yml`.
 
 ## Scenario: Local MySQL Bootstrap Scripts
 
@@ -176,5 +222,8 @@ GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
   state first so concurrent reinitialization survives.
 - Do not leave an initialized engine undisposed. The executable check uses
   `try/finally` and always awaits `MysqlClientManager.close()`.
-- Do not introduce an ORM or migration convention in a spec before the
-  corresponding implementation exists.
+- Do not use `Session.add_all()` or `merge()` for replayable metadata writes;
+  they do not provide the required batch `ON DUPLICATE KEY UPDATE` contract.
+- Do not call `json.dumps()` for ORM `JSON` columns; pass the Entity list value.
+- Do not add `ForeignKey`, `relationship`, synthetic IDs, timestamps, or
+  `create_all()` unless the database DDL and task explicitly require them.

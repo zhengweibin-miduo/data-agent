@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/index.md","reason":"读取后端规范索引、范围边界和配置/验证入口"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"按现有单数 app/script、app/service、app/repository 和配置目录建立首个业务分层"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"复用 managed AsyncSession、事务边界和当前 dw/meta MySQL 约束"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"保持原始配置与外部客户端异常传播，并保证失败路径清理"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"在 CLI 入口统一配置 Loguru 并避免记录敏感或无界内容"}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"遵循 TEI 512 维和现有异步客户端生命周期契约"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"保持 YAML 到 Service、Repository、三种存储的数据契约与验证所有权一致"}
+{"file":".trellis/tasks/07-16-metadata-sync-script/research/source-section-5.3.md","reason":"实现 5.3 配置和同步语义，同时应用已确认的 AOV 与仓库适配修正"}
+{"file":".trellis/tasks/07-16-metadata-sync-script/research/client-api-contracts.md","reason":"使用锁定版本已核实的 Qdrant、Elasticsearch、SQLAlchemy 签名和幂等写法"}
+{"file":".trellis/tasks/07-16-metadata-sync-script/research/hybrid-index.md","reason":"实现匿名 dense + 命名 bm25 的 Qdrant core BM25 混合索引和已有 collection 无损升级"}

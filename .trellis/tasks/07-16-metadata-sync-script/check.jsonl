@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/index.md","reason":"按后端规范索引复核新增业务层和配置范围"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"检查文件落点、单数包命名和 package 无副作用约束"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查 AsyncSession 事务、SQL 参数化、跨 schema 访问和 upsert 行为"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查配置/外部错误传播和所有失败路径资源清理"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行 lock、Ruff、Pyright、compileall、配置和最小测试门禁"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"检查 CLI 日志初始化、级别和敏感信息边界"}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"检查 TEI 512 维、异步客户端复用和关闭契约"}
+{"file":".trellis/tasks/07-16-metadata-sync-script/research/source-section-5.3.md","reason":"对照 5.3 完整范围、AOV 修正和幂等 upsert 决定"}
+{"file":".trellis/tasks/07-16-metadata-sync-script/research/client-api-contracts.md","reason":"核对锁定客户端 API 形状、稳定 ID、bulk 部分失败和维度验证"}
+{"file":".trellis/tasks/07-16-metadata-sync-script/research/hybrid-index.md","reason":"检查 dense+bm25 Document 结构、完整 BM25 参数、IDF 配置和 additive collection migration"}

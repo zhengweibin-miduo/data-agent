@@ -50,6 +50,42 @@ a later `initialize()` creates a fresh resource after close.
   files under `app_test/client/`. Keep cleanup independent of assertion or
   request success.
 
+## Metadata CLI Failures
+
+`app/script/sync_metadata.py` is a process boundary. It does not convert
+failures into success values: `argparse`, file, YAML, Pydantic, SQLAlchemy,
+Qdrant, Elasticsearch, and Hugging Face errors reach `main()` and therefore
+produce a nonzero process exit.
+
+Configuration is parsed before external clients are initialized. After a valid
+configuration is loaded, client initialization and synchronization run inside a
+`try/finally` that always awaits all four close operations:
+
+```python
+close_results = await asyncio.gather(
+    MysqlClientManager.close(),
+    QdrantClientManager.close(),
+    ElasticsearchClientManager.close(),
+    TeiEmbeddingClientManager.close(),
+    return_exceptions=True,
+)
+```
+
+Closing an uninitialized manager is safe, so a failure during the second or
+third initialization still attempts every close. Failure precedence is:
+
+1. If initialization or synchronization already failed, preserve that primary
+   exception and add every close failure through `BaseException.add_note()`.
+2. If business work succeeded but one or more closes failed, raise a
+   `BaseExceptionGroup` containing every close failure.
+3. Never let the first close failure prevent the remaining close operations
+   from completing.
+
+The MySQL Session rolls back when any later Qdrant, Elasticsearch, or TEI step
+fails. Already completed external upserts may remain because there is no
+cross-storage transaction. Do not hide this partial state or add automatic
+deletion; repair the dependency and replay the stable-ID upserts.
+
 ## API Error Responses
 
 There is no web framework, route handler, or serialized error response format
@@ -65,5 +101,11 @@ section only when an API boundary is implemented.
 - Do not swallow an exception raised inside a managed MySQL Session; rollback
   and preserve the original failure.
 - Do not skip async cleanup after a live integration assertion fails.
+- Do not use a failing sequential close loop or `asyncio.gather()` without
+  `return_exceptions=True`; either can leave later managers unclosed.
+- Do not replace a synchronization failure with a cleanup failure. Preserve the
+  primary exception and attach cleanup context.
+- Do not claim multi-storage rollback: MySQL can roll back while completed
+  Qdrant or Elasticsearch upserts remain.
 - Do not add connection side effects to package `__init__.py` files; lifecycle
   remains explicit through manager methods.
