@@ -197,7 +197,7 @@ CREATE TABLE fact_order
     date_id        INT,
     region_id      VARCHAR(20),
     order_quantity INT,
-    order_amount   FLOAT
+    order_amount   DECIMAL(10, 2)
 );
 
 INSERT INTO fact_order (order_id, customer_id, product_id, date_id, region_id, order_quantity, order_amount)
