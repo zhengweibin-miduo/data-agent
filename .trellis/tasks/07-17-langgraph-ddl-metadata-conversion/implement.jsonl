@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend package boundaries and pre-development checklist for the new API, service, repository, and worker layers."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Current directory ownership, client-manager pattern, side-effect-free packages, and rules for establishing real new layers."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Existing async SQLAlchemy/MySQL transaction lifecycle that must own the atomic Meta snapshot."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Existing exception propagation and cleanup rules to preserve while adding API and worker error mappings."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Central Loguru setup, trace_id usage, and sensitive-data logging restrictions."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Managed async client lifecycle and live integration contract for Redis/LLM additions and unchanged MySQL behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Python 3.13, uv, Ruff, Pyright, compile, and executable-check requirements."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Typed API, Redis job, graph state, and MySQL boundary contracts span multiple layers."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search-first and single-owner rules for state transitions, payload decoding, constants, and validation."}
+{"file": ".trellis/tasks/07-17-langgraph-ddl-metadata-conversion/research/langgraph-redis-async-recovery.md", "reason": "Verified third-party versions, Redis checkpoint/interrupt APIs, queue behavior, and crash recovery constraints."}
+{"file": ".trellis/tasks/07-17-langgraph-ddl-metadata-conversion/research/usememos-memory-architecture.md", "reason": "Source-backed Memos patterns for canonical memory, rebuildable payload, typed relations, archive lifecycle, retrieval, and recovery adaptation."}

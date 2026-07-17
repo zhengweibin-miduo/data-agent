@@ -4,10 +4,10 @@
 
 ## Overview
 
-This directory documents the Python application's current package boundaries,
-configuration, async client lifecycle, database scope, error behavior, and
-quality gates. The rules are based on the source, live integration checks, CI,
-and local Docker services that exist in this repository.
+This directory documents the Python application's current HTTP, workflow,
+worker, persistence, configuration, async-client, error, logging, and quality
+contracts. The rules are based on source code, executable checks, CI, and the
+local Docker services that exist in this repository.
 
 ## Guidelines Index
 
@@ -22,32 +22,38 @@ and local Docker services that exist in this repository.
 
 ## Scope Boundary
 
-The repository has no API routes, business-service package, ORM models, or
-migrations yet. The relevant guides record those absences instead of defining
-hypothetical conventions.
+The repository now has a loopback FastAPI boundary, typed application models,
+service and repository layers, a LangGraph workflow, and an arq worker. It
+still has no ORM entity layer or migration framework: SQLAlchemy Core table
+definitions and local bootstrap SQL own the current relational schema.
 
 ## Pre-Development Checklist
 
 - Identify the concrete files involved: configuration belongs in
   `app/conf/app_config.py` and `conf/app_config.yaml`, async service clients in
-  `app/client/`, logging setup in `app/core/`, live integration checks in
-  `app_test/client/`, and local infrastructure in `docs/docker/`.
+  `app/client/`, shared contracts in `app/model/`, HTTP wiring in `app/api/`,
+  orchestration in `app/service/`, bound persistence statements in
+  `app/repository/`, worker recovery in `app/worker/`, logging setup in
+  `app/core/`, mirrored executable checks in `app_test/`, and local
+  infrastructure in `docs/docker/`.
 - Read [Directory Structure](./directory-structure.md) for every backend change.
-- Read [Database Guidelines](./database-guidelines.md) for MySQL or SQLAlchemy
-  changes, [External Service Integrations](./external-service-integrations.md)
-  for TEI changes, and the other topic guide that matches the files being
-  changed.
-- Confirm that a proposed layer or convention already exists in the repository;
-  the absent layers listed above have no established project rules yet.
+- Read [Database Guidelines](./database-guidelines.md) for MySQL, SQLAlchemy,
+  repository, snapshot, or long-term-memory changes.
+- Read [External Service Integrations](./external-service-integrations.md) for
+  TEI, Redis, LangGraph checkpoint, or OpenAI-compatible model changes.
+- Read [Error Handling](./error-handling.md) when changing API status mapping,
+  job transitions, retries, or terminal cleanup.
+- Trace cross-layer contract changes through Pydantic models, API/service
+  consumers, Redis projections/checkpoints, repositories, and mirrored tests.
 
 ## Quality Check
 
 - Run the Python checks recorded in
   [Quality Guidelines](./quality-guidelines.md): lock validation, Ruff, Pyright,
   `compileall`, and configuration loading.
-- Run the MySQL or TEI live integration module only when the corresponding
-  service is available, and report an unavailable dependency instead of
-  claiming the check passed.
+- Run the MySQL, Redis, combined DDL-flow, or TEI live integration module only
+  when the corresponding service is available, and report an unavailable
+  dependency instead of claiming the check passed.
 - Trace renamed package and configuration paths end to end. Current references
   use `app.client`, `app_test.client`, and `conf/app_config.yaml`; the retired
   `app.clients`, `app_test.clients`, and `conf/app.yaml` paths must not remain in

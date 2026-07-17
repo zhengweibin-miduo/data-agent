@@ -106,10 +106,15 @@ async with MysqlClientManager.session() as session:
 
 ### 3. Contracts
 
-- Required configuration: `conf/app_config.yaml` key `mysql.url`, using the `mysql+asyncmy` driver. The URL is the only project-defined MySQL setting.
+- Required configuration: `conf/app_config.yaml` key `mysql.url`, using the
+  `mysql+asyncmy` driver. `memory.database` separately names the
+  schema-qualified application memory database and must differ from the URL's
+  default Meta database.
 - Construct the engine with `pool_pre_ping=True` and `pool_recycle=3600`.
 - Initialize one reusable `async_sessionmaker` bound to the managed engine with `expire_on_commit=False`.
 - Create a fresh `AsyncSession` for every `session()` context; never share one Session across concurrent tasks.
+- Use that same engine/Session for schema-qualified memory statements; a
+  second connection path would break atomic Meta-plus-memory persistence.
 - A normal context exit commits. An exceptional exit rolls back and re-raises the original exception. The Session closes on either path.
 - Repeated `initialize()` calls reuse the active engine and Session factory.
 - `close()` must capture the old engine and clear both shared references before awaiting `old_engine.dispose()`. A concurrent reinitialization during disposal must survive the old close operation.
@@ -119,6 +124,7 @@ async with MysqlClientManager.session() as session:
 | Condition | Required behavior |
 |---|---|
 | `mysql.url` missing, invalid, or an unknown MySQL config key is present | Pydantic configuration validation fails at startup |
+| `memory.database` is not a strict identifier or equals the URL default database | Pydantic configuration validation fails at startup |
 | `get_client()` called before `initialize()` | Raise `RuntimeError` with the initialization instruction |
 | `session()` entered before `initialize()` | Raise `RuntimeError` with the initialization instruction |
 | `session()` body and commit complete | Commit once, then close the Session |
@@ -131,7 +137,9 @@ async with MysqlClientManager.session() as session:
 
 - Good: initialize during application startup, use one `session()` context per business transaction, and close the manager during application shutdown.
 - Base: a managed Session executes `SELECT 1`, commits on exit, and closes.
-- Bad: store a global `AsyncSession`, require callers to repeat commit/rollback logic, disable stale-connection protection, or clear shared references after awaiting engine disposal.
+- Bad: store a global `AsyncSession`, require callers to repeat commit/rollback
+  logic, open a second memory-database engine, disable stale-connection
+  protection, or clear shared references after awaiting engine disposal.
 
 ### 6. Tests Required
 
@@ -158,4 +166,178 @@ cls._client = None
 cls._session_factory = None
 if client is not None:
     await client.dispose()
+```
+
+## Scenario: Redis Job State and LangGraph Checkpoints
+
+### 1. Scope / Trigger
+
+Use this contract when changing the Redis configuration, public job
+projection, arq queue/outbox, source lease, waiting deadline, or LangGraph
+checkpoint lifecycle.
+
+### 2. Signatures
+
+```python
+RedisClientManager.initialize() -> Redis
+await CheckpointClientManager.initialize() -> AsyncRedisSaver
+JobStore(redis).submit(request) -> JobRecord
+```
+
+### 3. Contracts
+
+- Local Compose and CI use `redis:8.8.0`; Redis 8 supplies RedisJSON and
+  RediSearch required by `langgraph-checkpoint-redis`.
+- Compose publishes `127.0.0.1:6379`, mounts `/data`, and enables AOF with
+  `appendfsync everysec`. Normal process/container restart is recoverable; an
+  abrupt host loss may lose about one second of acknowledged Redis writes.
+- `RedisClientManager` owns the decoded application client used by `JobStore`.
+  `CheckpointClientManager` owns a separate `AsyncRedisSaver`, explicitly
+  enters its async context, awaits `asetup()`, and closes that same context.
+- The public source of truth is `ddl:job:{job_id}` plus revision-aware
+  transitions. LangGraph checkpoints are recovery state and arq result keys are
+  not public API records.
+- Submission atomically writes the job Hash, source lease, and dispatch outbox
+  before returning `202`. Answer submission atomically validates revision,
+  question-set ID, deadline, and payload hash before scheduling the next
+  revision.
+- Queue IDs contain job ID plus revision. Worker graph invocations reuse
+  `thread_id=job_id` and `durability="sync"`.
+- A reclaimed arq activation may legitimately find the public projection still
+  at `running`. When its revision matches, the worker reconciles and resumes
+  the existing checkpoint instead of requiring another `pending -> running`
+  transition.
+- One renewable logical-source lease spans waiting-input rounds. Browser memory
+  mutations acquire the same lease briefly and fail with `source_busy` when a
+  graph owns it.
+- Terminal/expired paths release the source lease, apply result retention, and
+  atomically add the job to the checkpoint-cleanup outbox. The worker removes
+  that outbox item only after `adelete_thread()` succeeds, so Redis timeouts or
+  worker restarts retry cleanup instead of leaking terminal checkpoints.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Redis unavailable during submit | Return `503`; do not report an accepted job |
+| Duplicate queue activation | Revision/status guard makes it a no-op |
+| Reclaimed activation with matching `running` revision | Resume/reconcile the existing checkpoint |
+| Duplicate identical answer | Return the existing next revision without enqueueing twice |
+| Answer references an unknown or duplicate question ID | Return `422`; do not enqueue or checkpoint it |
+| Stale/conflicting answer | Return `409` and preserve the current round |
+| Answer after deadline | Atomically reject with `410`; do not resume the graph |
+| Checkpoint interrupt but public state still running | Worker repairs projection to `waiting_input` |
+| Persist failure after prior checkpoints | Resume `persist_snapshot` without repeating completed model nodes |
+| Missing Redis modules or failed saver setup | Fail worker startup and close the partial saver |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a terminal transition writes the cleanup outbox atomically; a failed
+  `adelete_thread()` leaves the item for the next worker sweep.
+- Base: duplicate activation or duplicate answer is absorbed by the
+  revision/status guard without another graph execution.
+- Bad: deleting a checkpoint before the terminal transition, or acknowledging
+  cleanup after a Redis timeout, loses the only durable cleanup request.
+
+### 6. Tests Required
+
+```powershell
+docker compose -f docs/docker/docker-compose.yml config
+uv run python -m app_test.client.test_redis_client_manager
+uv run python -m app_test.worker.test_ddl_metadata
+uv run python -m app_test.integration.test_ddl_metadata_flow
+```
+
+The combined integration module requires both Redis and MySQL. It must prove
+interrupt/resume, public-state transitions, accepted snapshot persistence, and
+compatible-memory reuse.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: cleanup loss when thread deletion fails.
+await checkpointer.adelete_thread(job_id)
+await redis.zrem(cleanup_key, job_id)
+
+# Correct: JobStore atomically schedules cleanup; acknowledge only on success.
+job = await job_store.transition_terminal(...)
+await checkpointer.adelete_thread(job.job_id)
+await job_store.ack_checkpoint_cleanup(job.job_id)
+```
+
+## Scenario: OpenAI-Compatible Structured Metadata Model
+
+### 1. Scope / Trigger
+
+Use this contract when changing LLM configuration, structured-output models,
+semantic/metric prompt boundaries, or worker startup capability checks.
+
+### 2. Signatures
+
+```python
+LlmClientManager.initialize() -> ChatOpenAI
+await LlmClientManager.check_structured_output_capability() -> None
+LlmMetadataModel.classify(...) -> SemanticMetadata
+```
+
+### 3. Contracts
+
+- YAML contains only `llm.base_url`, model name, timeouts, confidence,
+  concurrency/retry, structured-output method, and version identifiers.
+- The API key comes only from `DATA_AGENT_LLM_API_KEY`; absence fails
+  initialization. It is never added to YAML, Redis, checkpoints, logs, or API
+  responses.
+- `ChatOpenAI` uses temperature zero and the configured
+  `json_schema` or `function_calling` method.
+- Worker startup performs a live Pydantic structured-output capability probe.
+  There is no plain-text, `json_mode`, or best-effort fallback.
+- The parser supplies all physical names, types, comments, keys, and stable
+  IDs. The model receives bounded physical-schema JSON and can provide only
+  semantic roles, descriptions, aliases, questions, and metrics.
+- Every model response crosses Pydantic validation and deterministic
+  AST/reference/confidence validation before persistence.
+- Model calls may repeat only if the process fails before the completed node is
+  checkpointed. Completed model nodes are reused on later persistence retry.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Missing environment API key | Fail startup with actionable `RuntimeError` |
+| Unsupported configured structured-output method | Fail capability probe; do not degrade to text |
+| Timeout, connection error, 429, or 5xx | Bounded worker retry from checkpoint |
+| Authentication/configuration failure | Terminal failure without secret details |
+| Hallucinated object, role conflict, or low confidence | Repair once when allowed, then reject without writes |
+| Missing metric business meaning | Interrupt for explicit user input; never guess |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a structured response passes Pydantic and deterministic AST/reference
+  validation before graph state or memory is accepted.
+- Base: one malformed semantic response receives the bounded repair attempt;
+  persistent invalid output becomes a business rejection with zero writes.
+- Bad: parsing model prose or accepting a dictionary without current schema,
+  identity, role, and confidence validation.
+
+### 6. Tests Required
+
+```powershell
+uv run python -m app_test.client.test_llm_client_manager
+uv run python -m app_test.service.ddl_metadata.test_validator
+uv run python -m app_test.service.ddl_metadata.test_graph
+```
+
+These CI checks use deterministic fakes/mocks and do not contact or require a
+paid/live LLM. A real endpoint capability probe is an explicit deployment
+check and must be reported separately.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: best-effort text fallback bypasses the typed contract.
+result = json.loads(await model.ainvoke(prompt))
+
+# Correct: capability is checked at startup and every response is typed.
+structured = model.with_structured_output(ResponseModel, method=method)
+result = await structured.ainvoke(messages)
 ```

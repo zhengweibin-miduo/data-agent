@@ -15,7 +15,9 @@ setup_logging(config: LoggingConfig = app_config.logging) -> None
 logger.bind(trace_id="request-or-job-id").info("message")
 ```
 
-Call `setup_logging()` at the application entry point before the first application log.
+Call `setup_logging()` once from the owning process lifecycle before the first
+application log. The FastAPI lifespan and arq worker startup own this call;
+service, repository, graph, and route modules never add sinks.
 
 ### 3. Contracts
 
@@ -34,7 +36,15 @@ Log levels:
 - `WARNING`: recoverable degradation or unexpected input that was handled.
 - `ERROR` / `exception`: failed operations; use `exception` inside an exception handler when the traceback is needed.
 
-Never log passwords, API keys, access tokens, complete database URLs, or unbounded request/document contents.
+Never log passwords, API keys, access tokens, complete database or Redis URLs,
+raw DDL, user answers, prompts, full model responses, hidden reasoning, or
+unbounded request/document contents.
+
+DDL jobs bind the stable public job ID as `trace_id` across graph, worker, and
+persistence logs. Safe operational fields include graph node, public status
+transition, revision/attempt/round, elapsed time, bounded object counts, stable
+error code, and exception type. Do not use logical source names, DDL hashes, or
+memory content as substitutes for `trace_id`.
 
 ### 4. Validation & Error Matrix
 
@@ -63,6 +73,9 @@ The logging test must use a temporary directory and assert:
 - the configured file is created and readable as UTF-8.
 
 When the format or entry-point wiring changes, also run `main.py` once and inspect both console and file output.
+When graph or worker logging changes, exercise an interrupt/resume flow and
+verify no raw DDL, answers, prompts, model payloads, credentials, or complete
+URLs appear.
 
 ### 7. Wrong vs Correct
 
@@ -75,5 +88,5 @@ logger.info("Connecting to {}", app_config.mysql.url)
 from loguru import logger
 
 request_logger = logger.bind(trace_id=trace_id)
-request_logger.info("Starting MySQL operation")
+request_logger.info("node=persist_snapshot table_count={}", table_count)
 ```

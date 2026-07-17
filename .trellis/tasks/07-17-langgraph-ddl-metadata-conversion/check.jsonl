@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Check the completed feature against the repository backend scope and documented new boundaries."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify transaction atomicity, rollback, session isolation, scoped cleanup, and MySQL lifecycle."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify rejection versus retryable/system failure behavior and preservation of underlying exceptions."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify trace_id coverage and absence of secrets, DDL, answers, prompts, or raw model output in logs."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Verify Redis/LLM managed lifecycle and regression safety for existing external clients."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run and assess the repository-native lock, lint, type, compile, configuration, and integration checks."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace typed contracts and state transitions across browser, API, queue, graph, and MySQL."}
+{"file": ".trellis/tasks/07-17-langgraph-ddl-metadata-conversion/research/langgraph-redis-async-recovery.md", "reason": "Check implementation recovery claims against verified LangGraph, Redis, and arq semantics."}
+{"file": ".trellis/tasks/07-17-langgraph-ddl-metadata-conversion/research/usememos-memory-architecture.md", "reason": "Check long-term memory schema, payload rebuild, relation uniqueness, archive behavior, and failure handling against the referenced source patterns."}

@@ -2,10 +2,25 @@
 
 ## Current Strategy
 
-The repository has no custom exception hierarchy and no API response layer.
-Errors from configuration parsing and third-party async clients normally
-propagate to the caller unchanged. Local code adds an explicit `RuntimeError`
-only for a lifecycle misuse that it can identify precisely.
+Configuration and low-level client errors normally propagate unchanged.
+Lifecycle misuse still raises an actionable `RuntimeError`. The DDL metadata
+feature additionally defines one stable safe application error,
+`DdlMetadataError`, for business rejection and API/worker projection:
+
+```python
+DdlMetadataError(
+    code,
+    stage,
+    message,
+    retryable=False,
+    http_status=422,
+    details=None,
+)
+```
+
+`code`, `stage`, retryability, and safe bounded details may cross process or
+HTTP boundaries. The exception message is internal and must not contain raw
+DDL, answers, prompts, secrets, or full service URLs.
 
 ## Client Lifecycle Errors
 
@@ -49,12 +64,142 @@ a later `initialize()` creates a fresh resource after close.
 - Live checks acquire the managed client and close it in `finally`; see both
   files under `app_test/client/`. Keep cleanup independent of assertion or
   request success.
+- `CheckpointClientManager.initialize()` closes its partially entered saver if
+  Redis index setup fails; API and worker lifecycles close initialized clients
+  in reverse ownership order.
+- `SnapshotService.persist()` lets the original SQLAlchemy/asyncmy exception
+  escape so the worker can classify transient failures while the managed
+  Session rolls back Meta and memory together.
 
 ## API Error Responses
 
-There is no web framework, route handler, or serialized error response format
-in this repository. Do not invent status-code or JSON-envelope rules. Add this
-section only when an API boundary is implemented.
+`app/api/app.py` centrally maps `DdlMetadataError` to its declared status and a
+safe envelope:
+
+```json
+{
+  "error": {
+    "code": "stale_answer",
+    "stage": "waiting_input",
+    "retryable": false,
+    "details": {}
+  }
+}
+```
+
+Configured mappings include:
+
+- unknown jobs/memories: `404`;
+- stale answers, source leases, immutable/archive conflicts: `409`;
+- expired answers: `410`;
+- request/Pydantic validation, unknown/duplicate answer IDs, and business input
+  rejection: `422`;
+- Redis transport failure at the API boundary: `503`.
+
+FastAPI owns its standard `422` request-validation response. Do not expose
+exception reprs, stack traces, internal Redis fields, raw DDL, or model output.
+
+## Worker Retry and Terminal Errors
+
+The worker retries only the explicit transient exception set: OpenAI
+connection/timeout/rate-limit/5xx errors, SQLAlchemy `OperationalError`, Redis
+connection failures, and ordinary connection/timeouts. It transitions
+`running -> pending` before raising arq `Retry` with bounded exponential
+backoff and jitter.
+
+Business validation/rejection is graph state, not an infrastructure retry.
+After retry exhaustion or a non-retryable exception, the worker writes a safe
+`JobError`, moves the public job to `failed`, and deletes the graph checkpoint.
+Unknown exceptions expose only `error_type`; the original traceback remains in
+server logs. Revision-aware Redis transitions prevent a stale activation from
+overwriting a newer or terminal public state.
+
+Waiting-input expiry is an explicit transition, not passive TTL. The answer
+script and periodic sweep both check the deadline and revision so only one can
+win; terminal job summaries then receive the configured retention TTL.
+Every terminal transition also removes raw DDL, answers, current questions,
+question-set hashes, and deadline fields from the internal Redis Hash; only the
+safe public summary fields remain for retention. The same atomic transition
+adds a checkpoint-cleanup outbox item; periodic cleanup acknowledges it only
+after thread deletion succeeds.
+
+## Scenario: Local Asynchronous DDL Metadata API
+
+### 1. Scope / Trigger
+
+Use this contract when changing the local FastAPI routes, job transitions,
+metric answers, browser memory management, CORS, or safe error projection.
+
+### 2. Signatures
+
+```http
+POST /api/v1/metadata/ddl-jobs
+GET /api/v1/metadata/ddl-jobs/{job_id}
+POST /api/v1/metadata/ddl-jobs/{job_id}/answers
+GET /api/v1/metadata/memories
+GET /api/v1/metadata/memories/{memory_uid}
+PATCH /api/v1/metadata/memories/{memory_uid}
+POST /api/v1/metadata/memories/{memory_uid}/corrections
+```
+
+### 3. Contracts
+
+- Submit returns `202` only after the Redis job record, source lease, and
+  dispatch outbox are durable.
+- Status exposes only the stable public state, safe result/error, current
+  bounded questions, revision, and expiry.
+- Answer requires the current revision and question-set ID; its question IDs
+  must exactly match the current set.
+- Memory list requires a source, defaults to active records, caps page size,
+  and uses an opaque cursor. Detail caps relation projection at 500.
+- Pin/archive affect future retrieval only. Correction creates a
+  user-confirmed replacement and reports `requires_reprocess=true`; it does not
+  patch current Meta.
+- Default host is `127.0.0.1`; configured CORS origins must resolve to local
+  browser origins. Authentication and non-loopback deployment are unsupported.
+
+### 4. Validation & Error Matrix
+
+| Condition | HTTP/result |
+|---|---|
+| Accepted submit | `202 pending` with opaque job ID |
+| Unknown job or memory | `404` |
+| Stale answer, active source lease, immutable/archive conflict | `409` |
+| Answer deadline expired | `410 rejected` and checkpoint cleanup scheduled |
+| Invalid DDL, payload, filter, or answer IDs | `422` with safe error code |
+| Redis unavailable during submit/resume | `503`; never claim acceptance |
+| Valid memory correction | `201`, new UID, superseded UID, `requires_reprocess=true` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the browser polls an accepted job, answers the exact current question
+  set, and receives a terminal safe projection after atomic persistence.
+- Base: an expired answer loses the race to the deadline transition and gets
+  `410` without resuming the graph.
+- Bad: a route edits Redis fields or Meta rows directly, enables wildcard
+  CORS, or returns raw exception/model content.
+
+### 6. Tests Required
+
+```powershell
+uv run python -m app_test.api.test_ddl_metadata_api
+uv run python -m app_test.worker.test_ddl_metadata
+uv run python -m app_test.integration.test_ddl_metadata_flow
+```
+
+Tests must assert `202/404/409/410/422/503`, answer compare-and-set, timeout
+cleanup, bounded memory projection, correction reprocessing, loopback defaults,
+and rejection of non-local CORS origins.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: route-level state mutation bypasses revision, lease, and outboxes.
+await redis.hset(f"ddl:job:{job_id}", mapping={"status": "pending"})
+
+# Correct: routes delegate the atomic transition to JobStore.
+job = await job_store.submit_answers(job_id, request)
+```
 
 ## Common Mistakes
 
@@ -67,3 +212,9 @@ section only when an API boundary is implemented.
 - Do not skip async cleanup after a live integration assertion fails.
 - Do not add connection side effects to package `__init__.py` files; lifecycle
   remains explicit through manager methods.
+- Do not catch broad exceptions in repositories or graph nodes merely to return
+  `None`; preserve transaction rollback and worker classification.
+- Do not mark validation ambiguity retryable or translate it into `failed`;
+  deterministic/model business rejection ends as `rejected`.
+- Do not let API routes update Redis Hash fields directly; use `JobStore` so
+  transition, revision, lease, outbox, and retention rules remain atomic.
