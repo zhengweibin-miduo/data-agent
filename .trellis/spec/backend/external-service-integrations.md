@@ -9,14 +9,14 @@ Use this contract when changing the local TEI Compose service, its application c
 ### 2. Signatures
 
 ```python
-class TeiEmbeddings(HuggingFaceEndpointEmbeddings):
+class TEIEmbeddings(HuggingFaceEndpointEmbeddings):
     async def aembed_query(self, text: str) -> list[float]: ...
 
-class TeiEmbeddingClientManager:
+class TEIEmbeddingClient:
     @classmethod
-    def initialize(cls) -> TeiEmbeddings: ...
+    def initialize(cls) -> TEIEmbeddings: ...
     @classmethod
-    def get_client(cls) -> TeiEmbeddings: ...
+    def get_client(cls) -> TEIEmbeddings: ...
     @classmethod
     async def close(cls) -> None: ...
 ```
@@ -24,7 +24,8 @@ class TeiEmbeddingClientManager:
 ### 3. Contracts
 
 - Compose service: `text-embeddings-inference`.
-- Client modules live in the singular package `app/client/`; matching integration tests live in `app_test/client/`.
+- Shared client modules live in `src/data_agent/infrastructure/`; matching
+  integration tests live in `tests/integration/infrastructure/`.
 - Image: `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`; no GPU device requests.
 - Model: `BAAI/bge-large-zh-v1.5`; output dimension is 1024.
 - Endpoint: `conf/app_config.yaml` key `tei.url`, with Hugging Face requests sent to `{url}/embed`.
@@ -58,8 +59,8 @@ class TeiEmbeddingClientManager:
 ```powershell
 docker compose -f docs/docker/docker-compose.yml config
 docker compose -f docs/docker/docker-compose.yml up -d text-embeddings-inference
-uv run python -m app.conf.app_config
-uv run python -m app_test.client.test_tei_embedding_client_manager
+uv run python -m data_agent.settings
+uv run pytest tests/integration/infrastructure/test_tei_embeddings.py
 ```
 
 The integration test must assert the LangChain client type, `client is None`, async query/document calls, normalized vectors, and 1024 dimensions. Compose inspection must show a healthy container, the `/data` volume, and no GPU device request.
@@ -86,7 +87,7 @@ Use this contract when changing the MySQL application configuration, the managed
 ### 2. Signatures
 
 ```python
-class MysqlClientManager:
+class MySQLDatabase:
     @classmethod
     def initialize(cls) -> AsyncEngine: ...
     @classmethod
@@ -100,7 +101,7 @@ class MysqlClientManager:
 Business code uses one managed context and does not repeat transaction boilerplate:
 
 ```python
-async with MysqlClientManager.session() as session:
+async with MySQLDatabase.session() as session:
     await session.execute(statement)
 ```
 
@@ -144,10 +145,10 @@ async with MysqlClientManager.session() as session:
 ### 6. Tests Required
 
 ```powershell
-uv run python -m app.conf.app_config
-uv run python -m app_test.client.test_mysql_client_manager
-uv run --with ruff ruff check app app_test
-uv run --with pyright pyright app app_test
+uv run python -m data_agent.settings
+uv run pytest tests/integration/infrastructure/test_mysql.py
+uv run ruff check src tests
+uv run pyright src tests
 ```
 
 The focused test must assert engine health settings, factory reuse, `expire_on_commit=False`, distinct concurrent Sessions, automatic commit and rollback, Session closure, live Engine/Session `SELECT 1`, close/reinitialize behavior, and the initialize-during-dispose race.
@@ -179,9 +180,9 @@ checkpoint lifecycle.
 ### 2. Signatures
 
 ```python
-RedisClientManager.initialize() -> Redis
-await CheckpointClientManager.initialize() -> AsyncRedisSaver
-JobStore(redis).submit(request) -> JobRecord
+RedisClient.initialize() -> Redis
+await CheckpointStore.initialize() -> AsyncRedisSaver
+DDLJobStore(redis).submit(request) -> JobRecord
 ```
 
 ### 3. Contracts
@@ -191,8 +192,8 @@ JobStore(redis).submit(request) -> JobRecord
 - Compose publishes `127.0.0.1:6379`, mounts `/data`, and enables AOF with
   `appendfsync everysec`. Normal process/container restart is recoverable; an
   abrupt host loss may lose about one second of acknowledged Redis writes.
-- `RedisClientManager` owns the decoded application client used by `JobStore`.
-  `CheckpointClientManager` owns a separate `AsyncRedisSaver`, explicitly
+- `RedisClient` owns the decoded application client used by `DDLJobStore`.
+  `CheckpointStore` owns a separate `AsyncRedisSaver`, explicitly
   enters its async context, awaits `asetup()`, and closes that same context.
 - The public source of truth is `ddl:job:{job_id}` plus revision-aware
   transitions. LangGraph checkpoints are recovery state and arq result keys are
@@ -243,9 +244,9 @@ JobStore(redis).submit(request) -> JobRecord
 
 ```powershell
 docker compose -f docs/docker/docker-compose.yml config
-uv run python -m app_test.client.test_redis_client_manager
-uv run python -m app_test.worker.test_ddl_metadata
-uv run python -m app_test.integration.test_ddl_metadata_flow
+uv run pytest tests/integration/infrastructure/test_redis.py
+uv run pytest tests/integration/test_worker.py
+uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```
 
 The combined integration module requires both Redis and MySQL. It must prove
@@ -259,7 +260,7 @@ compatible-memory reuse.
 await checkpointer.adelete_thread(job_id)
 await redis.zrem(cleanup_key, job_id)
 
-# Correct: JobStore atomically schedules cleanup; acknowledge only on success.
+# Correct: DDLJobStore atomically schedules cleanup; acknowledge only on success.
 job = await job_store.transition_terminal(...)
 await checkpointer.adelete_thread(job.job_id)
 await job_store.ack_checkpoint_cleanup(job.job_id)
@@ -275,9 +276,9 @@ semantic/metric prompt boundaries, or worker startup capability checks.
 ### 2. Signatures
 
 ```python
-LlmClientManager.initialize() -> ChatOpenAI
-await LlmClientManager.check_structured_output_capability() -> None
-LlmMetadataModel.classify(...) -> SemanticMetadata
+LLMClient.initialize() -> ChatOpenAI
+await LLMClient.check_structured_output_capability() -> None
+LLMMetadataGenerator.classify(...) -> SemanticMetadata
 ```
 
 ### 3. Contracts
@@ -322,9 +323,9 @@ LlmMetadataModel.classify(...) -> SemanticMetadata
 ### 6. Tests Required
 
 ```powershell
-uv run python -m app_test.client.test_llm_client_manager
-uv run python -m app_test.service.ddl_metadata.test_validator
-uv run python -m app_test.service.ddl_metadata.test_graph
+uv run pytest tests/unit/infrastructure/test_llm_client.py
+uv run pytest tests/unit/ddl_metadata/test_validation.py
+uv run pytest tests/unit/ddl_metadata/test_graph.py
 ```
 
 These CI checks use deterministic fakes/mocks and do not contact or require a

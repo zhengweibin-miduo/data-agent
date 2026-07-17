@@ -4,14 +4,17 @@
 
 ### 1. Scope / Trigger
 
-Use this contract whenever application code emits logs or changes logging sinks. Loguru is configured once under `app/core`; business and client modules reuse the exported `logger` and must not configure their own sinks.
+Use this contract whenever application code emits logs or changes logging
+sinks. Loguru is configured once by `data_agent.logging`; feature and
+infrastructure modules reuse the exported `logger` and must not configure their
+own sinks.
 
 ### 2. Signatures
 
 ```python
-from app.core.logging import setup_logging
+from data_agent.logging import setup_logging
 
-setup_logging(config: LoggingConfig = app_config.logging) -> None
+setup_logging(config: LoggingSettings = app_config.logging) -> None
 logger.bind(trace_id="request-or-job-id").info("message")
 ```
 
@@ -72,7 +75,8 @@ The logging test must use a temporary directory and assert:
 - `logger.bind(trace_id="trace-1")` emits the bound ID;
 - the configured file is created and readable as UTF-8.
 
-When the format or entry-point wiring changes, also run `main.py` once and inspect both console and file output.
+When the format or entry-point wiring changes, also run
+`python -m data_agent.main` once and inspect both console and file output.
 When graph or worker logging changes, exercise an interrupt/resume flow and
 verify no raw DDL, answers, prompts, model payloads, credentials, or complete
 URLs appear.

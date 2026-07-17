@@ -23,18 +23,20 @@ local Docker services that exist in this repository.
 ## Scope Boundary
 
 The repository now has a loopback FastAPI boundary, typed application models,
-service and repository layers, a LangGraph workflow, and an arq worker. It
-still has no ORM entity layer or migration framework: SQLAlchemy Core table
-definitions and local bootstrap SQL own the current relational schema.
+feature-owned services and persistence, a LangGraph workflow, and an arq
+worker. Runtime code is installed from `src/data_agent/`; tests use pytest
+under `tests/`. It still has no ORM entity layer or migration framework:
+SQLAlchemy Core table definitions and local bootstrap SQL own the current
+relational schema.
 
 ## Pre-Development Checklist
 
 - Identify the concrete files involved: configuration belongs in
-  `app/conf/app_config.py` and `conf/app_config.yaml`, async service clients in
-  `app/client/`, shared contracts in `app/model/`, HTTP wiring in `app/api/`,
-  orchestration in `app/service/`, bound persistence statements in
-  `app/repository/`, worker recovery in `app/worker/`, logging setup in
-  `app/core/`, mirrored executable checks in `app_test/`, and local
+  `src/data_agent/settings.py` and `conf/app_config.yaml`, shared async
+  resources in `src/data_agent/infrastructure/`, DDL contracts and behavior in
+  `src/data_agent/ddl_metadata/`, application composition in
+  `src/data_agent/application.py`, logging setup in
+  `src/data_agent/logging.py`, pytest checks in `tests/`, and local
   infrastructure in `docs/docker/`.
 - Read [Directory Structure](./directory-structure.md) for every backend change.
 - Read [Database Guidelines](./database-guidelines.md) for MySQL, SQLAlchemy,
@@ -55,10 +57,11 @@ definitions and local bootstrap SQL own the current relational schema.
   when the corresponding service is available, and report an unavailable
   dependency instead of claiming the check passed.
 - Trace renamed package and configuration paths end to end. Current references
-  use `app.client`, `app_test.client`, and `conf/app_config.yaml`; the retired
-  `app.clients`, `app_test.clients`, and `conf/app.yaml` paths must not remain in
-  active code, CI, or current specs. Archived task and journal records may keep
-  the names that were accurate when those records were written.
+  use `data_agent.infrastructure`, `data_agent.ddl_metadata`, `tests`, and
+  `conf/app_config.yaml`; retired `app`, `app_test`, and root `main.py` paths
+  must not remain in active code, CI, or current specs. Archived task and
+  journal records may keep names that were accurate when those records were
+  written.
 - Re-read every changed guide and verify that its examples, commands, and links
   resolve to current repository files.
 

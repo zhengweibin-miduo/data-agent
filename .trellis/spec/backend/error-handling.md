@@ -5,10 +5,10 @@
 Configuration and low-level client errors normally propagate unchanged.
 Lifecycle misuse still raises an actionable `RuntimeError`. The DDL metadata
 feature additionally defines one stable safe application error,
-`DdlMetadataError`, for business rejection and API/worker projection:
+`DDLMetadataError`, for business rejection and API/worker projection:
 
 ```python
-DdlMetadataError(
+DDLMetadataError(
     code,
     stage,
     message,
@@ -24,22 +24,23 @@ DDL, answers, prompts, secrets, or full service URLs.
 
 ## Client Lifecycle Errors
 
-Every manager's `get_client()` rejects access before initialization. For
-example, `app/client/mysql_client_manager.py` uses this shape:
+Every infrastructure wrapper's `get_client()` rejects access before
+initialization. For example, `data_agent.infrastructure.mysql` uses this
+shape:
 
 ```python
 if cls._client is None:
     raise RuntimeError(
-        "MySQL 客户端尚未初始化，请先调用 MysqlClientManager.initialize()"
+        "MySQL 客户端尚未初始化，请先调用 MySQLDatabase.initialize()"
     )
 ```
 
-`QdrantClientManager`, `ElasticsearchClientManager`, and
-`TeiEmbeddingClientManager` follow the same pattern with service-specific
-messages. Keep the message actionable and preserve the concrete manager name.
+`QdrantClient`, `ElasticsearchClient`, and `TEIEmbeddingClient` follow the same
+pattern with service-specific messages. Keep the message actionable and
+preserve the concrete wrapper name.
 
-Closing an uninitialized or already closed manager is deliberately harmless.
-Most managers use this shape:
+Closing an uninitialized or already closed wrapper is deliberately harmless.
+Most wrappers use this shape:
 
 ```python
 if cls._client is None:
@@ -47,34 +48,33 @@ if cls._client is None:
 ```
 
 MySQL additionally clears its engine and Session-factory references before
-awaiting disposal so a concurrent replacement is not erased. In every manager,
+awaiting disposal so a concurrent replacement is not erased. In every wrapper,
 a later `initialize()` creates a fresh resource after close.
 
 ## Propagation and Cleanup
 
-- `AppConfigModel.from_yaml()` lets file, YAML, and Pydantic validation errors
-  propagate. `ConfigModel` uses `extra="forbid"`, so unknown keys are errors
+- `AppSettings.from_yaml()` lets file, YAML, and Pydantic validation errors
+  propagate. `SettingsModel` uses `extra="forbid"`, so unknown keys are errors
   rather than silently ignored values.
 - Client initialization and request failures are not wrapped in generic
   exceptions. The original SQLAlchemy, Elasticsearch, Qdrant, Hugging Face, or
   transport exception remains available to the caller.
-- `MysqlClientManager.session()` commits on normal exit; on any
+- `MySQLDatabase.session()` commits on normal exit; on any
   `BaseException`, it rolls back and re-raises the same exception. Session
   closure is owned by the async context manager.
-- Live checks acquire the managed client and close it in `finally`; see both
-  files under `app_test/client/`. Keep cleanup independent of assertion or
-  request success.
-- `CheckpointClientManager.initialize()` closes its partially entered saver if
+- Live integration fixtures acquire the managed client and close it in
+  `finally`; keep cleanup independent of assertion or request success.
+- `CheckpointStore.initialize()` closes its partially entered saver if
   Redis index setup fails; API and worker lifecycles close initialized clients
   in reverse ownership order.
-- `SnapshotService.persist()` lets the original SQLAlchemy/asyncmy exception
+- `MetadataSnapshotService.persist()` lets the original SQLAlchemy/asyncmy exception
   escape so the worker can classify transient failures while the managed
   Session rolls back Meta and memory together.
 
 ## API Error Responses
 
-`app/api/app.py` centrally maps `DdlMetadataError` to its declared status and a
-safe envelope:
+`data_agent.ddl_metadata.api` centrally maps `DDLMetadataError` to its declared
+status and a safe envelope:
 
 ```json
 {
@@ -182,9 +182,9 @@ POST /api/v1/metadata/memories/{memory_uid}/corrections
 ### 6. Tests Required
 
 ```powershell
-uv run python -m app_test.api.test_ddl_metadata_api
-uv run python -m app_test.worker.test_ddl_metadata
-uv run python -m app_test.integration.test_ddl_metadata_flow
+uv run pytest tests/integration/test_api.py
+uv run pytest tests/integration/test_worker.py
+uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```
 
 Tests must assert `202/404/409/410/422/503`, answer compare-and-set, timeout
@@ -197,7 +197,7 @@ and rejection of non-local CORS origins.
 # Wrong: route-level state mutation bypasses revision, lease, and outboxes.
 await redis.hset(f"ddl:job:{job_id}", mapping={"status": "pending"})
 
-# Correct: routes delegate the atomic transition to JobStore.
+# Correct: routes delegate the atomic transition to DDLJobStore.
 job = await job_store.submit_answers(job_id, request)
 ```
 
@@ -211,10 +211,10 @@ job = await job_store.submit_answers(job_id, request)
   and preserve the original failure.
 - Do not skip async cleanup after a live integration assertion fails.
 - Do not add connection side effects to package `__init__.py` files; lifecycle
-  remains explicit through manager methods.
+  remains explicit through infrastructure wrapper methods.
 - Do not catch broad exceptions in repositories or graph nodes merely to return
   `None`; preserve transaction rollback and worker classification.
 - Do not mark validation ambiguity retryable or translate it into `failed`;
   deterministic/model business rejection ends as `rejected`.
-- Do not let API routes update Redis Hash fields directly; use `JobStore` so
+- Do not let API routes update Redis Hash fields directly; use `DDLJobStore` so
   transition, revision, lease, outbox, and retention rules remain atomic.

@@ -4,27 +4,27 @@
 
 MySQL is the only relational database currently wired into the application.
 The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
-`asyncmy` driver. The DSN is validated by `MysqlConfig` in
-`app/conf/app_config.py`; engine and Session-factory lifecycle is owned by
-`app/client/mysql_client_manager.py`.
+`asyncmy` driver. The DSN is validated by `MySQLSettings` in
+`src/data_agent/settings.py`; engine and Session-factory lifecycle is owned by
+`src/data_agent/infrastructure/mysql.py`.
 
 The DDL metadata feature uses SQLAlchemy Core table definitions in
-`app/repository/ddl_metadata/schema.py` plus Session-scoped repositories. It
-deliberately does not add ORM entities or a migration framework.
-`MetaRepository` owns the four Meta snapshot tables; `MemoryRepository` owns
-canonical long-term memory, typed relations, filters, cursors, and lifecycle
-updates. The Meta tables use the default database in `mysql.url`; both memory
-tables are schema-qualified to `memory.database` (`data_agent` by default).
-They still share one engine and Session so MySQL can commit the two InnoDB
-databases atomically.
+`src/data_agent/ddl_metadata/persistence/tables.py` plus Session-scoped
+repositories. It deliberately does not add ORM entities or a migration
+framework. `MetadataRepository` owns the four Meta snapshot tables;
+`MemoryRepository` owns canonical long-term memory, typed relations, filters,
+cursors, and lifecycle updates. The Meta tables use the default database in
+`mysql.url`; both memory tables are schema-qualified to `memory.database`
+(`data_agent` by default). They still share one engine and Session so MySQL can
+commit the two InnoDB databases atomically.
 
 ## Engine Lifecycle
 
-Follow the existing manager pattern instead of constructing engines at each
+Follow the existing database lifecycle instead of constructing engines at each
 call site:
 
 ```python
-class MysqlClientManager:
+class MySQLDatabase:
     _client: ClassVar[AsyncEngine | None] = None
     _session_factory: ClassVar[async_sessionmaker[AsyncSession] | None] = None
 
@@ -54,7 +54,7 @@ Business code uses the manager-owned async context instead of sharing an
 `AsyncSession` or repeating commit/rollback boilerplate:
 
 ```python
-async with MysqlClientManager.session() as session:
+async with MySQLDatabase.session() as session:
     await session.execute(statement)
 ```
 
@@ -76,16 +76,16 @@ statements. A repository receives the caller's `AsyncSession` and never commits
 or closes it:
 
 ```python
-async with MysqlClientManager.session() as session:
-    await MetaRepository(session).synchronize(schema, metadata, metrics)
+async with MySQLDatabase.session() as session:
+    await MetadataRepository(session).synchronize(schema, metadata, metrics)
     await MemoryRepository(session).upsert_candidates(memories)
 ```
 
 Contracts:
 
 - Table and column identifiers come from
-  `app/repository/ddl_metadata/schema.py`, never interpolated request or model
-  output.
+  `data_agent.ddl_metadata.persistence.tables`, never interpolated request or
+  model output.
 - MySQL upserts use `sqlalchemy.dialects.mysql.insert()` with explicit update
   columns.
 - Repository methods accept and return typed application contracts or bounded
@@ -109,14 +109,15 @@ persistence.
 ### 2. Signatures
 
 ```python
-await SnapshotService.persist(snapshot, memory_candidates) -> SnapshotResult
-await MemoryManagementService.correct(memory_uid, content) -> CorrectionResult
+await MetadataSnapshotService.persist(snapshot, memory_candidates) -> SnapshotResult
+await MemoryService.correct(memory_uid, content) -> CorrectionResult
 await MemoryPayloadRebuilder.rebuild(after_id=None) -> PayloadRebuildResult
 ```
 
 ### 3. Contracts
 
-`SnapshotService.persist()` is the only accepted-snapshot commit boundary. In
+`MetadataSnapshotService.persist()` is the only accepted-snapshot commit
+boundary. In
 one managed MySQL transaction spanning the default Meta database and the
 configured application memory database it:
 
@@ -175,10 +176,9 @@ fingerprint matches.
 ### 6. Tests Required
 
 ```powershell
-uv run python -m app_test.repository.ddl_metadata.test_meta
-uv run python -m app_test.repository.ddl_metadata.test_memory
-uv run python -m app_test.service.ddl_metadata.test_memory
-uv run python -m app_test.integration.test_ddl_metadata_flow
+uv run pytest tests/integration/persistence
+uv run pytest tests/integration/test_memory_services.py
+uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```
 
 Tests must assert full rollback, unrelated-table preservation, repeat
@@ -193,7 +193,7 @@ await meta_repository.persist(snapshot)
 await memory_repository.persist(candidates)
 
 # Correct: both repositories receive the same managed Session.
-async with MysqlClientManager.session() as session:
+async with MySQLDatabase.session() as session:
     await meta_repository.persist(session, snapshot)
     await memory_repository.persist(session, candidates)
 ```
@@ -307,7 +307,7 @@ GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
 - The YAML key `memory.database` selects the application-owned memory database,
   defaults to `data_agent`, accepts only strict ASCII MySQL identifiers, and
   must differ case-insensitively from the default database in `mysql.url`.
-- The URL uses `mysql+asyncmy://` and is typed as `str` by `MysqlConfig`.
+- The URL uses `mysql+asyncmy://` and is typed as `str` by `MySQLSettings`.
 - Local Compose and CI use `data_agent` as the application user and `meta` as
   the application's default database.
 - Do not duplicate the DSN in client modules; read it from the shared
@@ -316,13 +316,13 @@ GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
 ## Common Mistakes
 
 - Do not use SQLAlchemy's synchronous engine in async application code.
-- Do not create an engine per query; reuse `MysqlClientManager`.
+- Do not create an engine per query; reuse `MySQLDatabase`.
 - Do not share one `AsyncSession` across concurrent tasks; enter a new
-  `MysqlClientManager.session()` context per transaction.
+  `MySQLDatabase.session()` context per transaction.
 - Do not clear shared manager state after awaiting disposal; detach the old
   state first so concurrent reinitialization survives.
 - Do not leave an initialized engine undisposed. The executable check uses
-  `try/finally` and always awaits `MysqlClientManager.close()`.
+  fixture/finally cleanup and always awaits `MySQLDatabase.close()`.
 - Do not introduce an ORM or migration convention in a spec before the
   corresponding implementation exists.
 - Do not commit inside a repository; the calling service owns atomic

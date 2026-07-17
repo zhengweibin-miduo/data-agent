@@ -2,141 +2,193 @@
 
 ## Current Scope
 
-This repository is a backend-only Python application. Runtime code is under
-`app/` and now includes a loopback HTTP API, deterministic/LLM orchestration,
-repository-owned persistence, and an asynchronous worker. Keep those
-responsibilities separate instead of moving workflow or SQL logic into routes.
+This repository is a backend-only installable Python application. Runtime code
+lives under `src/data_agent/` and is organized by business feature first.
+Shared external-resource lifecycles live under `infrastructure`; DDL metadata
+contracts, workflow, persistence, API routes, and worker behavior live together
+under `ddl_metadata`.
+
+Keep application composition, infrastructure lifecycle, deterministic business
+logic, persistence, and HTTP/worker boundaries separate. Do not move workflow
+or SQL behavior into routes.
 
 ## Directory Layout
 
 ```text
-app/
+src/data_agent/
 ├── __init__.py
-├── api/
+├── main.py                         # ASGI object and executable entry
+├── application.py                  # FastAPI factory and lifespan composition
+├── settings.py                     # Typed YAML settings and shared instance
+├── logging.py                      # Central Loguru sink configuration
+├── infrastructure/
 │   ├── __init__.py
-│   └── app.py             # FastAPI factory, lifespan, routes, error mapping
-├── client/                 # Async external-service client managers
-│   ├── __init__.py
-│   └── *_client_manager.py
-├── model/
-│   ├── __init__.py
-│   └── ddl_metadata.py    # Shared Pydantic boundary contracts
-├── repository/
-│   ├── __init__.py
-│   └── ddl_metadata/
-│       ├── __init__.py
-│       ├── schema.py      # Meta tables + schema-qualified memory tables
-│       ├── meta.py
-│       └── memory.py
-├── service/
-│   ├── __init__.py
-│   └── ddl_metadata/
-│       ├── __init__.py
-│       ├── graph.py
-│       ├── parser.py
-│       ├── validator.py
-│       ├── llm.py
-│       ├── job_store.py
-│       ├── memory.py
-│       ├── memory_context.py
-│       ├── memory_management.py
-│       ├── identifiers.py
-│       └── errors.py
-├── worker/
-│   ├── __init__.py
-│   └── ddl_metadata.py
-├── core/
-│   ├── __init__.py
-│   └── logging.py          # Central Loguru sink configuration
-└── conf/
+│   ├── mysql.py                    # Engine, Session, transaction lifecycle
+│   ├── redis.py                    # Decoded application Redis client
+│   ├── checkpoint_store.py         # LangGraph Redis saver lifecycle
+│   ├── llm_client.py               # OpenAI-compatible ChatOpenAI lifecycle
+│   ├── tei_embeddings.py           # TEI/Hugging Face embedding lifecycle
+│   ├── elasticsearch.py
+│   └── qdrant.py
+└── ddl_metadata/
     ├── __init__.py
-    └── app_config.py       # Typed configuration models and shared config
-app_test/
-├── __init__.py
-├── api/
-├── client/
-├── core/
-├── integration/
-├── repository/ddl_metadata/
-├── service/ddl_metadata/
-└── worker/                 # Mirrors the runtime package boundaries
+    ├── api.py                      # Feature router and safe HTTP mapping
+    ├── worker.py                   # arq execution, retry, and recovery
+    ├── errors.py
+    ├── identifiers.py
+    ├── parsing.py
+    ├── validation.py
+    ├── models/
+    │   ├── __init__.py
+    │   ├── base.py
+    │   ├── physical.py
+    │   ├── semantic.py
+    │   ├── memory.py
+    │   └── jobs.py
+    ├── workflow/
+    │   ├── __init__.py
+    │   ├── graph.py
+    │   └── metadata_generator.py
+    ├── jobs/
+    │   ├── __init__.py
+    │   └── store.py
+    ├── memory/
+    │   ├── __init__.py
+    │   ├── context.py
+    │   ├── payloads.py
+    │   ├── service.py
+    │   └── snapshots.py
+    └── persistence/
+        ├── __init__.py
+        ├── tables.py
+        ├── metadata_repository.py
+        └── memory_repository.py
+tests/
+├── conftest.py
+├── helpers/
+├── unit/
+│   ├── infrastructure/
+│   └── ddl_metadata/
+└── integration/
+    ├── infrastructure/
+    ├── persistence/
+    ├── test_api.py
+    ├── test_worker.py
+    ├── test_memory_services.py
+    └── test_ddl_metadata_flow.py
 conf/
-└── app_config.yaml         # Local application configuration values
+└── app_config.yaml
 docs/docker/
-├── docker-compose.yml      # Local service definitions
-└── elasticsearch/          # Service-specific image customization
-main.py                     # Uvicorn entry point using the application factory
+├── docker-compose.yml
+├── elasticsearch/
+└── mysql/
 ```
+
+The distribution name is `data-agent`; its Python import package is
+`data_agent`. The project uses a declared build backend and `uv sync` installs
+the package from `src/`.
 
 ## Module Boundaries
 
-- `app/conf/app_config.py` owns the Pydantic configuration schema, YAML loading,
-  and the shared `app_config` instance.
-- `app/client/` owns lifecycle adapters around third-party async clients. The
-  repeated local shape is `initialize()`, `get_client()`, and async `close()`;
-  `CheckpointClientManager.initialize()` is async because it also owns
-  checkpointer context entry and `asetup()`.
-- `app/model/ddl_metadata.py` is the shared typed contract owner for HTTP,
-  graph state values, Redis projections, model responses, and repositories.
-- `app/api/app.py` owns the FastAPI factory, configured CORS, lifespan-managed
-  API clients, route serialization, and safe exception-to-HTTP mapping.
-  `ApiConfig` fixes the bind host to `127.0.0.1` and rejects any CORS Origin
-  whose host is not `localhost` or a loopback IP.
-- `app/service/ddl_metadata/` owns parsing, deterministic validation and
-  identifiers, LangGraph orchestration, Redis job transitions, model
-  adaptation, and memory application behavior. Services do not own SQL text
-  or FastAPI request types.
-- `app/repository/ddl_metadata/` owns SQLAlchemy Core tables and bound
-  statements. Repository instances receive an `AsyncSession`; transaction
-  commit/rollback remains with `MysqlClientManager.session()` and the calling
-  service.
-- `app/worker/ddl_metadata.py` owns arq activation, graph checkpoint
+- `data_agent.settings` owns Pydantic settings schemas, YAML loading, and the
+  shared `app_config` instance.
+- `data_agent.infrastructure` owns explicit third-party resource lifecycle.
+  Resource wrappers keep idempotent `initialize()`, guarded `get_client()`, and
+  async `close()` behavior where applicable.
+- `data_agent.ddl_metadata.models` owns typed contracts shared by HTTP,
+  workflow state, Redis projections, model responses, and persistence.
+- `data_agent.application` owns the FastAPI factory, configured CORS, shared
+  API resource lifespan, router inclusion, and application-level setup.
+- `data_agent.ddl_metadata.api` owns DDL metadata routes and safe
+  exception-to-HTTP mapping; it does not mutate Redis or SQL directly.
+- `data_agent.ddl_metadata.workflow` owns LangGraph orchestration and the typed
+  metadata-generation boundary.
+- `data_agent.ddl_metadata.jobs` owns revision-aware Redis job transitions,
+  leases, dispatch, retention, and cleanup outboxes.
+- `data_agent.ddl_metadata.memory` owns trusted-memory context loading,
+  payload construction/rebuilding, snapshot persistence orchestration, and
+  browser-facing management behavior.
+- `data_agent.ddl_metadata.persistence` owns SQLAlchemy Core tables and bound
+  statements. Repositories receive `AsyncSession`; transaction ownership stays
+  with `MySQLDatabase.session()` and the calling service.
+- `data_agent.ddl_metadata.worker` owns arq activation, checkpoint
   reconciliation, bounded retry, outbox dispatch, and waiting-input expiry.
-- `app/core/logging.py` owns Loguru sink setup; API and worker lifecycles call
-  it before application logs.
-- `app_test/` mirrors runtime boundaries and the DDL metadata service/repository
-  domain packages while keeping focused executable modules.
-  `app_test/integration/test_ddl_metadata_flow.py` is the combined live
-  Redis-checkpoint/MySQL flow.
-- `conf/` contains values, while `app/conf/` contains Python models and loading
-  behavior. Keep this distinction when adding a configuration field.
-- `docs/docker/` is local infrastructure, not application runtime code. Keep
-  service image and volume details there.
+- `data_agent.logging` owns Loguru sink setup. Application and worker
+  lifecycles call it before emitting application logs.
+- `tests/unit` contains deterministic tests without live services.
+  `tests/integration` contains tests requiring MySQL, Redis, optional TEI, or
+  combined application boundaries. TEI tests carry the additional `tei`
+  marker so CI can exclude them unless the service is provisioned. Reusable
+  fakes and factories live in `tests/helpers`, never another `test_*.py`
+  module.
+- `conf/` contains configuration values; `data_agent.settings` contains Python
+  schemas and loading behavior.
+- `docs/docker/` owns local infrastructure, not application runtime code.
 
-There is no generic `utils` package or ORM entity layer. Keep deterministic
-helpers beside their owner (`identifiers.py`, parser, validator) until a real
-cross-feature abstraction exists.
+There is no generic root `utils`, `common`, `service`, or `repository` package
+and no ORM entity layer. Keep deterministic helpers beside their feature owner
+until a real cross-feature abstraction exists.
 
 ## Naming Conventions
 
-- Python packages, modules, functions, and configuration keys use
+- Python packages, modules, functions, variables, and configuration keys use
   `snake_case`.
-- Client lifecycle modules use the singular package `app/client/` and the file
-  suffix `_client_manager.py`.
-- Manager and configuration classes use `PascalCase`, for example
-  `MysqlClientManager`, `CheckpointClientManager`, and `MysqlConfig`.
-- Test modules mirror the runtime module name with a `test_` prefix.
-- Package directories contain `__init__.py`; the current marker files contain
-  only package docstrings. They import no application modules and perform no
-  connection or configuration side effects.
+- Classes use `PascalCase`; established acronyms keep their canonical forms,
+  including `DDL`, `LLM`, `API`, `TEI`, and `MySQL`.
+- Runtime configuration classes use the `Settings` suffix.
+- Capability names use precise suffixes such as `Client`, `Repository`,
+  `Store`, `Service`, `Loader`, or `Factory`. Do not introduce generic
+  `Manager`, `Helper`, or `Utils` names when a concrete responsibility exists.
+- Test modules use a `test_` prefix and pytest collects them from `tests/`.
+- Public packages, modules, classes, functions, methods, fixtures, and tests
+  use Chinese Google Style Docstrings.
+- Package `__init__.py` files contain a meaningful package Docstring, import no
+  application modules, and perform no connection or configuration side
+  effects.
 
-## Observed External-Service Layout
+## Dependency Direction
 
-Configured infrastructure follows these repository-backed paths:
+The intended direction is:
 
-1. A typed section in `app/conf/app_config.py` and a matching key in
+```text
+main/application
+    ├── infrastructure
+    └── ddl_metadata.api / ddl_metadata.worker
+            ├── workflow / jobs / memory
+            │       ├── models
+            │       └── persistence
+            └── models
+```
+
+Models, parsing, validation, identifiers, and errors do not depend on FastAPI,
+arq, initialized Redis clients, or active SQLAlchemy Sessions. Persistence does
+not own commits or resource lifecycle.
+
+## External-Service Layout
+
+A configured shared dependency normally has:
+
+1. A typed section in `data_agent.settings` and matching values in
    `conf/app_config.yaml`.
-2. An async lifecycle adapter under `app/client/`.
-3. A local service definition under `docs/docker/` when the dependency runs
-   locally.
-4. A focused executable manager check under `app_test/client/` when application
-   code owns lifecycle or compatibility behavior.
+2. A lifecycle adapter under `data_agent.infrastructure`.
+3. A local service definition under `docs/docker/` when it runs locally.
+4. Focused unit or marked integration coverage under `tests/`.
 
-Redis uses separate managers for the decoded application client and the
-LangGraph checkpointer because their lifecycle and serialization requirements
-differ. The LLM manager reads its API key only from
-`DATA_AGENT_LLM_API_KEY`; YAML owns only non-secret model settings.
+Redis uses separate application-client and LangGraph-checkpoint wrappers because
+their serialization and lifecycle contracts differ. The LLM client reads its
+API key only from `DATA_AGENT_LLM_API_KEY`; YAML contains non-secret model
+settings only.
 
-Use `external-service-integrations.md` for TEI, MySQL, Redis/checkpoint, and LLM
-contracts; use `database-guidelines.md` for repository transactions and
-snapshot scope; use `logging-guidelines.md` for Loguru behavior.
+## Retired Layout
+
+The hard migration does not provide compatibility packages for:
+
+- `app.*`;
+- `app_test.*`;
+- repository-root `main.py`;
+- horizontal root `api`, `client`, `model`, `service`, `repository`, or
+  `worker` ownership.
+
+Active source, CI, current specs, and validation commands must use
+`data_agent.*` and `tests/`. Archived tasks and developer journals remain
+historical records and may retain paths that were correct when written.
