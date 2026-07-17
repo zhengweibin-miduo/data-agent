@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~239 | Active |
+| `journal-1.md` | ~275 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-17 | LangGraph DDL 元数据异步转换 | `dfe7326`, `27cb590`, `c7229c3`, `9ae3d09` | `feature/langgraph-ddl-metadata-20260717` |
 | 7 | 2026-07-17 | 规范 Codex GitHub 审查与修复模板 | `dd275c8` | `docs/codex-review-templates-20260717` |
 | 6 | 2026-07-16 | 停止创建 data_agent 数据库 | `3d247e4` | `master` |
 | 5 | 2026-07-16 | 初始化 MySQL 示例数据库 | `29f318be81133d0a7dd7f2cd45ddfb15321d6c5d`, `0dfe4a726e3c5b22e64e53216ea23803abdeae4c` | `master` |
