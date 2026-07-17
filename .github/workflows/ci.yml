@@ -38,6 +38,15 @@ jobs:
           --health-timeout=5s
           --health-retries=12
           --health-start-period=30s
+      redis:
+        image: redis:8.8.0
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
 
     steps:
       - name: Checkout repository
@@ -56,6 +65,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Initialize application memory database
+        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_agent.sql
+
       - name: Check lock file
         run: uv lock --check
 
@@ -71,5 +83,29 @@ jobs:
       - name: Validate application configuration
         run: uv run python -m app.conf.app_config
 
-      - name: Run MySQL integration test
-        run: uv run python -m app_test.client.test_mysql_client_manager
+      - name: Run core and client checks
+        run: |
+          uv run python -m app_test.core.test_logging
+          uv run python -m app_test.client.test_mysql_client_manager
+          uv run python -m app_test.client.test_redis_client_manager
+          uv run python -m app_test.client.test_llm_client_manager
+
+      - name: Run parser, validator, and graph checks
+        run: |
+          uv run python -m app_test.service.ddl_metadata.test_parser
+          uv run python -m app_test.service.ddl_metadata.test_validator
+          uv run python -m app_test.service.ddl_metadata.test_graph
+
+      - name: Run repository and memory checks
+        run: |
+          uv run python -m app_test.repository.ddl_metadata.test_meta
+          uv run python -m app_test.repository.ddl_metadata.test_memory
+          uv run python -m app_test.service.ddl_metadata.test_memory
+
+      - name: Run worker and API checks
+        run: |
+          uv run python -m app_test.worker.test_ddl_metadata
+          uv run python -m app_test.api.test_ddl_metadata_api
+
+      - name: Run DDL metadata integration flow
+        run: uv run python -m app_test.integration.test_ddl_metadata_flow
