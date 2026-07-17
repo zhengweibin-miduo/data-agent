@@ -48,7 +48,7 @@ services:
 
   text-embeddings-inference:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-    command: --model-id BAAI/bge-small-zh-v1.5
+    command: --model-id BAAI/bge-large-zh-v1.5
     ports:
       - "8080:80"
     volumes:
