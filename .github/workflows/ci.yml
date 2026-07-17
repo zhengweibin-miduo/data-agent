@@ -72,40 +72,16 @@ jobs:
         run: uv lock --check
 
       - name: Run Ruff lint
-        run: uv run --with ruff ruff check app app_test
+        run: uv run ruff check src tests
 
       - name: Run Pyright
-        run: uv run --with pyright pyright app app_test
+        run: uv run pyright src tests
 
       - name: Compile Python modules
-        run: uv run python -m compileall -q app app_test main.py
+        run: uv run python -m compileall -q src tests
 
       - name: Validate application configuration
-        run: uv run python -m app.conf.app_config
+        run: uv run python -m data_agent.settings
 
-      - name: Run core and client checks
-        run: |
-          uv run python -m app_test.core.test_logging
-          uv run python -m app_test.client.test_mysql_client_manager
-          uv run python -m app_test.client.test_redis_client_manager
-          uv run python -m app_test.client.test_llm_client_manager
-
-      - name: Run parser, validator, and graph checks
-        run: |
-          uv run python -m app_test.service.ddl_metadata.test_parser
-          uv run python -m app_test.service.ddl_metadata.test_validator
-          uv run python -m app_test.service.ddl_metadata.test_graph
-
-      - name: Run repository and memory checks
-        run: |
-          uv run python -m app_test.repository.ddl_metadata.test_meta
-          uv run python -m app_test.repository.ddl_metadata.test_memory
-          uv run python -m app_test.service.ddl_metadata.test_memory
-
-      - name: Run worker and API checks
-        run: |
-          uv run python -m app_test.worker.test_ddl_metadata
-          uv run python -m app_test.api.test_ddl_metadata_api
-
-      - name: Run DDL metadata integration flow
-        run: uv run python -m app_test.integration.test_ddl_metadata_flow
+      - name: Run pytest suite
+        run: uv run pytest -m "not tei"
