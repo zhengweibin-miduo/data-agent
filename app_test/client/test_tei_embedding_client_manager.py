@@ -7,7 +7,7 @@ from langchain_huggingface import HuggingFaceEndpointEmbeddings
 
 from app.client.tei_embedding_client_manager import TeiEmbeddingClientManager
 
-EMBEDDING_DIMENSION = 512
+EMBEDDING_DIMENSION = 1024
 
 
 async def _test_tei_embedding_client() -> None:
