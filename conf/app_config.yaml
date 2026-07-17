@@ -20,3 +20,40 @@ tei:
 
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
+
+api:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins:
+    - http://127.0.0.1:3000
+    - http://localhost:3000
+  max_ddl_bytes: 262144
+  max_tables: 50
+  max_columns: 500
+
+redis:
+  url: redis://localhost:6379/0
+  key_prefix: ddl
+  checkpoint_retention_seconds: 86400
+  result_retention_seconds: 86400
+  waiting_timeout_seconds: 1800
+  worker_concurrency: 4
+  worker_job_timeout_seconds: 600
+
+llm:
+  base_url: http://127.0.0.1:11434/v1
+  model: local-model
+  request_timeout_seconds: 60
+  semantic_confidence_threshold: 0.75
+  structured_output_method: json_schema
+  max_concurrency: 4
+  max_retries: 2
+  prompt_version: v1
+  graph_version: v1
+
+memory:
+  database: data_agent
+  content_version: v1
+  payload_version: v1
+  source_lease_seconds: 3600
+  rebuild_batch_size: 100
