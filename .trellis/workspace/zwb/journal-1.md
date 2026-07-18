@@ -340,3 +340,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: 测试结果可观察化与自动回归检查
+
+**Date**: 2026-07-18
+**Task**: 测试结果可观察化与自动回归检查
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+将 tests 下 228 处裸 assert 统一改为带 PASS/FAIL 输出的检查辅助调用，并通过 pytest.fail 保留自动回归阻断；单元测试和 MySQL/Redis 集成测试通过，TEI 因服务不可达未执行。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7f1f420` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

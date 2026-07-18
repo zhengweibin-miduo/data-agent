@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-07-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~342 | Active |
+| `journal-1.md` | ~375 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-07-18 | 测试结果可观察化与自动回归检查 | `7f1f420` | `feature/langgraph-ddl-metadata-20260717` |
 | 10 | 2026-07-18 | 将适合的 for 循环改为推导式 | `cdf46b4` | `feature/langgraph-ddl-metadata-20260717` |
 | 9 | 2026-07-18 | 重构 Python 项目结构与命名注释规范 | `e19692b`, `bbb2eac` | `feature/langgraph-ddl-metadata-20260717` |
 | 8 | 2026-07-17 | LangGraph DDL 元数据异步转换 | `dfe7326`, `27cb590`, `c7229c3`, `9ae3d09` | `feature/langgraph-ddl-metadata-20260717` |
