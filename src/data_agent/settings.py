@@ -29,6 +29,8 @@ class FileLoggingSettings(SettingsModel):
     enable: bool
     # 文件日志的最低级别。
     level: str
+    # 文件日志的渲染格式。
+    format: Literal["text", "json"]
     # 日志文件写入目录。
     path: Path
     # 单个日志文件触发轮转的最大大小。
@@ -44,11 +46,15 @@ class ConsoleLoggingSettings(SettingsModel):
     enable: bool
     # 控制台日志的最低级别。
     level: str
+    # 控制台日志的渲染格式。
+    format: Literal["text", "json"]
 
 
 class LoggingSettings(SettingsModel):
     """日志配置。"""
 
+    service_name: str
+    deployment_environment: str
     file: FileLoggingSettings
     console: ConsoleLoggingSettings
 

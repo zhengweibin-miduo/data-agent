@@ -130,8 +130,14 @@ def build_ddl_metadata_graph(
     """构建串行、修订安全且可同步持久化的工作流。"""
 
     async def parse_node(state: DDLGraphState) -> DDLGraphState:
-        request_logger = logger.bind(trace_id=_state_string(state, "job_id"))
-        request_logger.info("node=parse_ddl")
+        logger.bind(
+            trace_id=_state_string(state, "job_id"),
+            component="ddl_metadata.workflow",
+            event_name="ddl_metadata.workflow.node.started",
+            operation="parse_ddl",
+            outcome="started",
+            node_name="parse_ddl",
+        ).info("开始解析 DDL")
         try:
             schema = parse_ddl(
                 _state_string(state, "source"),
@@ -152,9 +158,14 @@ def build_ddl_metadata_graph(
         }
 
     async def load_memory_node(state: DDLGraphState) -> DDLGraphState:
-        logger.bind(trace_id=_state_string(state, "job_id")).info(
-            "node=load_and_validate_memory"
-        )
+        logger.bind(
+            trace_id=_state_string(state, "job_id"),
+            component="ddl_metadata.workflow",
+            event_name="ddl_metadata.workflow.node.started",
+            operation="load_and_validate_memory",
+            outcome="started",
+            node_name="load_and_validate_memory",
+        ).info("开始加载并校验记忆")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         try:
             context = await dependencies.memory_context.load(schema)
@@ -185,10 +196,15 @@ def build_ddl_metadata_graph(
         return update
 
     async def classify_node(state: DDLGraphState) -> DDLGraphState:
-        logger.bind(trace_id=_state_string(state, "job_id")).info(
-            "node=classify_metadata attempt={}",
-            state.get("semantic_attempts", 0) + 1,
-        )
+        logger.bind(
+            trace_id=_state_string(state, "job_id"),
+            component="ddl_metadata.workflow",
+            event_name="ddl_metadata.workflow.node.started",
+            operation="classify_metadata",
+            outcome="started",
+            node_name="classify_metadata",
+            attempt=state.get("semantic_attempts", 0) + 1,
+        ).info("开始分类元数据")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         issues = [
             ValidationIssue.model_validate(issue)
@@ -254,10 +270,15 @@ def build_ddl_metadata_graph(
         return _error_update(error)
 
     async def plan_questions_node(state: DDLGraphState) -> DDLGraphState:
-        logger.bind(trace_id=_state_string(state, "job_id")).info(
-            "node=plan_metric_questions round={}",
-            state.get("question_round", 0) + 1,
-        )
+        logger.bind(
+            trace_id=_state_string(state, "job_id"),
+            component="ddl_metadata.workflow",
+            event_name="ddl_metadata.workflow.node.started",
+            operation="plan_metric_questions",
+            outcome="started",
+            node_name="plan_metric_questions",
+            question_round=state.get("question_round", 0) + 1,
+        ).info("开始规划指标问题")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         metadata = SemanticMetadata.model_validate(state.get("semantic_metadata"))
         fact_ids = {
@@ -348,10 +369,15 @@ def build_ddl_metadata_graph(
         }
 
     async def generate_metrics_node(state: DDLGraphState) -> DDLGraphState:
-        logger.bind(trace_id=_state_string(state, "job_id")).info(
-            "node=generate_metrics attempt={}",
-            state.get("metric_attempts", 0) + 1,
-        )
+        logger.bind(
+            trace_id=_state_string(state, "job_id"),
+            component="ddl_metadata.workflow",
+            event_name="ddl_metadata.workflow.node.started",
+            operation="generate_metrics",
+            outcome="started",
+            node_name="generate_metrics",
+            attempt=state.get("metric_attempts", 0) + 1,
+        ).info("开始生成指标")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         metadata = SemanticMetadata.model_validate(state.get("semantic_metadata"))
         questions = [
@@ -500,9 +526,14 @@ def build_ddl_metadata_graph(
         }
 
     async def persist_node(state: DDLGraphState) -> DDLGraphState:
-        logger.bind(trace_id=_state_string(state, "job_id")).info(
-            "node=persist_snapshot"
-        )
+        logger.bind(
+            trace_id=_state_string(state, "job_id"),
+            component="ddl_metadata.workflow",
+            event_name="ddl_metadata.workflow.node.started",
+            operation="persist_snapshot",
+            outcome="started",
+            node_name="persist_snapshot",
+        ).info("开始持久化快照")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         metadata = SemanticMetadata.model_validate(state.get("semantic_metadata"))
         questions = [

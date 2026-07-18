@@ -1,13 +1,17 @@
 logging:
+  service_name: data-agent
+  deployment_environment: local
   file:
     enable: true
     level: INFO
+    format: json
     path: logs
     rotation: "10 MB"
     retention: "7 days"
   console:
     enable: true
     level: INFO
+    format: text
 
 qdrant:
   url: http://localhost:6333

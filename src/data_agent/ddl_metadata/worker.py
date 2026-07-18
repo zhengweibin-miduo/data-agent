@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+from time import perf_counter
 from typing import Any, cast
 
 from arq import Retry, cron, func
@@ -36,6 +37,7 @@ from data_agent.ddl_metadata.memory.context import MemoryContextLoader
 from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
 from data_agent.ddl_metadata.models import (
     JobError,
+    JobRecord,
     JobResult,
     JobStatus,
     MetricQuestion,
@@ -66,6 +68,78 @@ _RETRYABLE = (
 )
 
 
+def _log_execution_outcome(
+    record: JobRecord,
+    started_at: float,
+    *,
+    error: Exception | None = None,
+) -> None:
+    """记录一次 worker 执行产生的完整公开结果。"""
+    fields: dict[str, object] = {
+        "trace_id": record.job_id,
+        "component": "ddl_metadata.worker",
+        "event_name": "ddl_metadata.job.execution.completed",
+        "operation": "execute_job",
+        "outcome": record.status.value,
+        "job_status": record.status.value,
+        "attempt": record.attempt,
+        "revision": record.revision,
+        "question_round": record.question_round,
+        "duration_ms": max(0, round((perf_counter() - started_at) * 1000)),
+    }
+    if record.questions is not None:
+        fields["question_count"] = len(record.questions)
+    if record.result is not None:
+        fields.update(
+            table_count=record.result.table_count,
+            column_count=record.result.column_count,
+            metric_count=record.result.metric_count,
+        )
+    if record.error is not None:
+        fields.update(
+            error_code=record.error.code,
+            stage=record.error.stage,
+            retryable=record.error.retryable,
+        )
+        error_type = record.error.details.get("error_type")
+        if error_type is not None:
+            fields["error_type"] = error_type
+    event_logger = logger.bind(**fields)
+    if record.status in {JobStatus.SUCCEEDED, JobStatus.WAITING_INPUT}:
+        event_logger.info("DDL 元数据任务执行完成")
+    elif record.status == JobStatus.REJECTED:
+        event_logger.warning("DDL 元数据任务已拒绝")
+    elif error is not None and not isinstance(error, DDLMetadataError):
+        event_logger.opt(exception=error).error("DDL 元数据任务执行失败")
+    else:
+        event_logger.error("DDL 元数据任务执行失败")
+
+
+def _log_retry_scheduled(
+    job_id: str,
+    revision: int,
+    attempt: int,
+    error: Exception,
+    *,
+    job_status: JobStatus | None = None,
+) -> None:
+    """记录一次可恢复的 worker 重试安排。"""
+    fields: dict[str, object] = {
+        "trace_id": job_id,
+        "component": "ddl_metadata.worker",
+        "event_name": "ddl_metadata.job.retry_scheduled",
+        "operation": "execute_job",
+        "outcome": "retry_scheduled",
+        "attempt": attempt,
+        "revision": revision,
+        "error_type": type(error).__name__,
+        "retryable": True,
+    }
+    if job_status is not None:
+        fields["job_status"] = job_status.value
+    logger.bind(**fields).warning("DDL 元数据任务已安排重试")
+
+
 class _InterruptProjection(BaseModel):
     """检查点 interrupt 的公开投影。"""
 
@@ -88,10 +162,9 @@ def _interrupt_payload(
 async def _project_snapshot(
     jobs: DDLJobStore,
     graph: CompiledStateGraph,
-    job_id: str,
-    revision: int,
+    record: JobRecord,
     config: RunnableConfig,
-) -> bool:
+) -> JobRecord | None:
     """把检查点 interrupt/终态修复到公开 Redis 投影。"""
     snapshot = await graph.aget_state(config)
     interrupt_payload = _interrupt_payload(snapshot)
@@ -101,35 +174,50 @@ async def _project_snapshot(
             for value in interrupt_payload.questions
         ]
         await jobs.mark_waiting(
-            job_id,
-            revision,
+            record.job_id,
+            record.revision,
             questions,
             interrupt_payload.question_round,
         )
-        return True
+        return record.model_copy(
+            update={
+                "status": JobStatus.WAITING_INPUT,
+                "questions": questions,
+                "question_round": interrupt_payload.question_round,
+            }
+        )
     status_value = snapshot.values.get("status")
     if status_value == JobStatus.SUCCEEDED.value:
         result = JobResult.model_validate(snapshot.values["result"])
         await jobs.mark_terminal(
-            job_id,
-            revision,
+            record.job_id,
+            record.revision,
             JobStatus.SUCCEEDED,
             result=result,
         )
-        return True
+        return record.model_copy(
+            update={
+                "status": JobStatus.SUCCEEDED,
+                "result": result,
+            }
+        )
     if status_value == JobStatus.REJECTED.value:
-        record = await jobs.get(job_id)
         error = JobError.model_validate(snapshot.values["error"]).model_copy(
             update={"attempt": record.attempt}
         )
         await jobs.mark_terminal(
-            job_id,
-            revision,
+            record.job_id,
+            record.revision,
             JobStatus.REJECTED,
             error=error,
         )
-        return True
-    return False
+        return record.model_copy(
+            update={
+                "status": JobStatus.REJECTED,
+                "error": error,
+            }
+        )
+    return None
 
 
 async def run_ddl_job(
@@ -138,6 +226,7 @@ async def run_ddl_job(
     revision: int,
 ) -> None:
     """执行或恢复一个公开任务修订。"""
+    started_at = perf_counter()
     jobs = cast(DDLJobStore, ctx["jobs"])
     graph = cast(CompiledStateGraph, ctx["graph"])
     try:
@@ -148,6 +237,7 @@ async def run_ddl_job(
         ConnectionError,
         TimeoutError,
     ) as error:
+        _log_retry_scheduled(job_id, revision, 0, error)
         raise Retry(defer=2) from error
     if record.status in {
         JobStatus.WAITING_INPUT,
@@ -161,16 +251,27 @@ async def run_ddl_job(
     if record.graph_version != app_config.llm.graph_version:
         if record.status == JobStatus.PENDING:
             await jobs.mark_running(job_id, revision)
+            record = record.model_copy(
+                update={
+                    "status": JobStatus.RUNNING,
+                    "attempt": record.attempt + 1,
+                }
+            )
+        job_error = JobError(
+            code="graph_version_mismatch",
+            stage="worker",
+            retryable=False,
+            attempt=record.attempt,
+        )
         await jobs.mark_terminal(
             job_id,
             revision,
             JobStatus.FAILED,
-            error=JobError(
-                code="graph_version_mismatch",
-                stage="worker",
-                retryable=False,
-                attempt=record.attempt,
-            ),
+            error=job_error,
+        )
+        _log_execution_outcome(
+            record.model_copy(update={"status": JobStatus.FAILED, "error": job_error}),
+            started_at,
         )
         await cleanup_checkpoints(ctx)
         return
@@ -182,6 +283,13 @@ async def run_ddl_job(
         ConnectionError,
         TimeoutError,
     ) as error:
+        _log_retry_scheduled(
+            job_id,
+            revision,
+            record.attempt,
+            error,
+            job_status=record.status,
+        )
         raise Retry(defer=2) from error
     if not renewed:
         if record.status == JobStatus.PENDING and not await jobs.mark_running(
@@ -189,22 +297,40 @@ async def run_ddl_job(
             revision,
         ):
             return
+        if record.status == JobStatus.PENDING:
+            record = record.model_copy(
+                update={
+                    "status": JobStatus.RUNNING,
+                    "attempt": record.attempt + 1,
+                }
+            )
+        job_error = JobError(
+            code="source_lease_lost",
+            stage="worker",
+            retryable=False,
+            attempt=record.attempt,
+        )
         await jobs.mark_terminal(
             job_id,
             revision,
             JobStatus.FAILED,
-            error=JobError(
-                code="source_lease_lost",
-                stage="worker",
-                retryable=False,
-                attempt=record.attempt,
-            ),
+            error=job_error,
+        )
+        _log_execution_outcome(
+            record.model_copy(update={"status": JobStatus.FAILED, "error": job_error}),
+            started_at,
         )
         await cleanup_checkpoints(ctx)
         return
     if record.status == JobStatus.PENDING:
         if not await jobs.mark_running(job_id, revision):
             return
+        record = record.model_copy(
+            update={
+                "status": JobStatus.RUNNING,
+                "attempt": record.attempt + 1,
+            }
+        )
     elif record.status != JobStatus.RUNNING:
         return
 
@@ -226,23 +352,25 @@ async def run_ddl_job(
         elif interrupt_payload is not None:
             answer_json = await jobs.stored_answers(job_id)
             if answer_json is None:
-                await _project_snapshot(
+                projected = await _project_snapshot(
                     jobs,
                     graph,
-                    job_id,
-                    revision,
+                    record,
                     config,
                 )
+                if projected is not None:
+                    _log_execution_outcome(projected, started_at)
                 return
             graph_input = Command(resume=json.loads(answer_json))
         elif not snapshot.next:
-            if await _project_snapshot(
+            projected = await _project_snapshot(
                 jobs,
                 graph,
-                job_id,
-                revision,
+                record,
                 config,
-            ):
+            )
+            if projected is not None:
+                _log_execution_outcome(projected, started_at)
                 await cleanup_checkpoints(ctx)
                 return
             graph_input = None
@@ -253,13 +381,14 @@ async def run_ddl_job(
             config,
             durability="sync",
         )
-        await _project_snapshot(
+        projected = await _project_snapshot(
             jobs,
             graph,
-            job_id,
-            revision,
+            record,
             config,
         )
+        if projected is not None:
+            _log_execution_outcome(projected, started_at)
         await cleanup_checkpoints(ctx)
     except Exception as error:
         try:
@@ -270,6 +399,13 @@ async def run_ddl_job(
             ConnectionError,
             TimeoutError,
         ) as redis_error:
+            _log_retry_scheduled(
+                job_id,
+                revision,
+                record.attempt,
+                redis_error,
+                job_status=record.status,
+            )
             raise Retry(defer=2) from redis_error
         if isinstance(error, _RETRYABLE) and latest.attempt < 3:
             await jobs.transition(
@@ -278,28 +414,37 @@ async def run_ddl_job(
                 JobStatus.RUNNING,
                 JobStatus.PENDING,
             )
+            _log_retry_scheduled(
+                job_id,
+                revision,
+                latest.attempt,
+                error,
+                job_status=JobStatus.PENDING,
+            )
             raise Retry(defer=(2**latest.attempt) + random.uniform(0, 1)) from error
+        job_error = JobError(
+            code=(
+                error.code if isinstance(error, DDLMetadataError) else "worker_failed"
+            ),
+            stage=(error.stage if isinstance(error, DDLMetadataError) else "worker"),
+            retryable=False,
+            attempt=latest.attempt,
+            details=(
+                error.details
+                if isinstance(error, DDLMetadataError)
+                else {"error_type": type(error).__name__}
+            ),
+        )
         await jobs.mark_terminal(
             job_id,
             revision,
             JobStatus.FAILED,
-            error=JobError(
-                code=(
-                    error.code
-                    if isinstance(error, DDLMetadataError)
-                    else "worker_failed"
-                ),
-                stage=(
-                    error.stage if isinstance(error, DDLMetadataError) else "worker"
-                ),
-                retryable=False,
-                attempt=latest.attempt,
-                details=(
-                    error.details
-                    if isinstance(error, DDLMetadataError)
-                    else {"error_type": type(error).__name__}
-                ),
-            ),
+            error=job_error,
+        )
+        _log_execution_outcome(
+            latest.model_copy(update={"status": JobStatus.FAILED, "error": job_error}),
+            started_at,
+            error=error,
         )
         await cleanup_checkpoints(ctx)
 
@@ -329,10 +474,15 @@ async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
         try:
             await checkpointer.adelete_thread(job_id)
         except RedisError as error:
-            logger.bind(trace_id=job_id).warning(
-                "终态检查点清理延后 error_type={}",
-                type(error).__name__,
-            )
+            logger.bind(
+                trace_id=job_id,
+                component="ddl_metadata.worker",
+                event_name="ddl_metadata.checkpoint.cleanup_deferred",
+                operation="cleanup_checkpoint",
+                outcome="deferred",
+                error_type=type(error).__name__,
+                retryable=True,
+            ).warning("终态检查点清理延后")
             continue
         await jobs.acknowledge_checkpoint_cleanup(job_id)
 
@@ -356,6 +506,13 @@ async def startup(ctx: dict[Any, Any]) -> None:
     )
     await dispatch_pending(ctx)
     await cleanup_checkpoints(ctx)
+    logger.bind(
+        component="application.worker",
+        event_name="application.lifecycle.started",
+        operation="run_worker",
+        outcome="started",
+        worker_role="ddl_metadata",
+    ).info("DDL 元数据 worker 已启动")
 
 
 async def shutdown(ctx: dict[Any, Any]) -> None:
@@ -365,6 +522,13 @@ async def shutdown(ctx: dict[Any, Any]) -> None:
     await LLMClient.close()
     await MySQLDatabase.close()
     await RedisClient.close()
+    logger.bind(
+        component="application.worker",
+        event_name="application.lifecycle.stopped",
+        operation="run_worker",
+        outcome="stopped",
+        worker_role="ddl_metadata",
+    ).info("DDL 元数据 worker 已停止")
 
 
 class WorkerSettings:

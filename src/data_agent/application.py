@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from loguru import logger
 from redis.exceptions import RedisError
 
 from data_agent.ddl_metadata.api import router as ddl_metadata_router
@@ -27,11 +28,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     jobs = DDLJobStore(redis)
     app.state.jobs = jobs
     app.state.memories = MemoryService(jobs)
+    logger.bind(
+        component="application.api",
+        event_name="application.lifecycle.started",
+        operation="serve_api",
+        outcome="started",
+        worker_role="api",
+    ).info("API 服务已启动")
     try:
         yield
     finally:
         await MySQLDatabase.close()
         await RedisClient.close()
+        logger.bind(
+            component="application.api",
+            event_name="application.lifecycle.stopped",
+            operation="serve_api",
+            outcome="stopped",
+            worker_role="api",
+        ).info("API 服务已停止")
 
 
 async def _handle_business_error(
