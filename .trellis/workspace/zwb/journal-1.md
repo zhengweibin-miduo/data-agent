@@ -373,3 +373,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 规范化应用结构化日志
+
+**Date**: 2026-07-19
+**Task**: 规范化应用结构化日志
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+实现 Loguru 文本与扁平 JSON 双格式、稳定事件字段、DDL 任务与 Worker 生命周期日志，迁移现有调用点并补齐安全与并发测试；独立检查修复异常消息泄露和非有限浮点 JSON 问题。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a688be1` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
