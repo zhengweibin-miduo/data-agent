@@ -1,10 +1,12 @@
 """提供可观察且保留自动失败语义的测试检查函数。"""
 
+import os
 from typing import NoReturn
 
 import pytest
 
 _USE_CONDITION = object()
+_LAST_TEST_ID: str | None = None
 
 
 def check_equal(label: str, actual: object, expected: object) -> None:
@@ -77,7 +79,7 @@ def fail_check(label: str, *, actual: object, expected: object) -> NoReturn:
         expected: 人类可读的期望值或期望描述。
     """
     message = f"[FAIL] {label} | actual={actual!r} | expected={expected!r}"
-    print(message)
+    _print_result(message)
     pytest.fail(message, pytrace=False)
 
 
@@ -91,6 +93,17 @@ def _report(
     """输出统一检查结果，并在失败时交由 pytest 终止测试。"""
     status = "PASS" if passed else "FAIL"
     message = f"[{status}] {label} | actual={actual!r} | expected={expected!r}"
-    print(message)
+    _print_result(message)
     if not passed:
         pytest.fail(message, pytrace=False)
+
+
+def _print_result(message: str) -> None:
+    """输出检查结果，并在当前测试的首条结果前换行。"""
+    global _LAST_TEST_ID
+
+    current_test_id = os.environ.get("PYTEST_CURRENT_TEST")
+    if current_test_id is not None and current_test_id != _LAST_TEST_ID:
+        print()
+        _LAST_TEST_ID = current_test_id
+    print(message)
