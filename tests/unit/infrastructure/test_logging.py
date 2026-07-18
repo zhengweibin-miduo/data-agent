@@ -11,6 +11,7 @@ from data_agent.settings import (
     FileLoggingSettings,
     LoggingSettings,
 )
+from tests.helpers.checks import check_condition, check_equal
 
 
 def test_setup_logging() -> None:
@@ -35,8 +36,20 @@ def test_setup_logging() -> None:
             logger.bind(trace_id="trace-1").info("trace-check")
 
             output = (log_dir / "data-agent.log").read_text(encoding="utf-8")
-            assert output.count("setup-check") == 1
-            assert "trace_id=- | setup-check" in output
-            assert "trace_id=trace-1 | trace-check" in output
+            check_equal(
+                "test_setup_logging 检查点 1",
+                output.count("setup-check"),
+                1,
+            )
+            check_condition(
+                "test_setup_logging 检查点 2",
+                "trace_id=- | setup-check" in output,
+                expected="原断言条件成立",
+            )
+            check_condition(
+                "test_setup_logging 检查点 3",
+                "trace_id=trace-1 | trace-check" in output,
+                expected="原断言条件成立",
+            )
         finally:
             logger.remove()

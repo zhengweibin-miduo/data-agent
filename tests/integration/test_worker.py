@@ -1,6 +1,7 @@
 """Redis 任务状态机、回答 CAS 和超时检查。"""
 
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from data_agent.ddl_metadata.jobs.store import DDLJobStore, question_set_id
 from data_agent.ddl_metadata.models import (
     AnswerRequest,
     DDLJobRequest,
+    JobError,
     JobStatus,
     MetricAnswer,
     MetricQuestion,
@@ -28,6 +30,12 @@ from data_agent.ddl_metadata.workflow.graph import (
 )
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.redis import RedisClient
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 from tests.helpers.fakes import (
     FakeMetadataGenerator,
     _NoMemory,
@@ -58,31 +66,71 @@ async def _test_job_state_machine() -> None:
     )
     record = await store.submit(request)
     try:
-        assert record.status == JobStatus.PENDING
+        check_equal(
+            "_test_job_state_machine 检查点 1",
+            record.status,
+            JobStatus.PENDING,
+        )
         try:
             await store.submit(request)
         except DDLMetadataError as error:
-            assert error.code == "source_busy"
+            check_exception(
+                "_test_job_state_machine 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_job_state_machine 检查点 2",
+                error.code,
+                "source_busy",
+            )
         else:
-            raise AssertionError("同一来源只能有一个活动任务")
+            fail_check(
+                "_test_job_state_machine",
+                actual="未抛出预期异常",
+                expected="同一来源只能有一个活动任务",
+            )
 
-        assert await store.mark_running(record.job_id, 0)
+        check_condition(
+            "_test_job_state_machine 检查点 3",
+            await store.mark_running(record.job_id, 0),
+            expected="原断言条件成立",
+        )
         question = MetricQuestion(
             question_id="metric.definition",
             prompt="Define metric",
             fact_table_id="fact-id",
             column_ids=["column-id"],
         )
-        assert await store.mark_waiting(record.job_id, 0, [question], 1)
+        check_condition(
+            "_test_job_state_machine 检查点 4",
+            await store.mark_waiting(record.job_id, 0, [question], 1),
+            expected="原断言条件成立",
+        )
         waiting = await store.get(record.job_id)
-        assert waiting.status == JobStatus.WAITING_INPUT
-        assert waiting.question_set_id == question_set_id([question])
-        assert waiting.question_set_id is not None
-        assert waiting.expires_at is not None
+        check_equal(
+            "_test_job_state_machine 检查点 5",
+            waiting.status,
+            JobStatus.WAITING_INPUT,
+        )
+        check_equal(
+            "_test_job_state_machine 检查点 6",
+            waiting.question_set_id,
+            question_set_id([question]),
+        )
+        check_condition(
+            "_test_job_state_machine 检查点 7",
+            waiting.question_set_id is not None,
+            expected="原断言条件成立",
+        )
+        waiting_question_set_id = cast(str, waiting.question_set_id)
+        check_condition(
+            "_test_job_state_machine 检查点 8",
+            waiting.expires_at is not None,
+            expected="原断言条件成立",
+        )
 
         invalid_answer = AnswerRequest(
             revision=0,
-            question_set_id=waiting.question_set_id,
+            question_set_id=waiting_question_set_id,
             answers=[
                 MetricAnswer(
                     question_id="unknown",
@@ -93,13 +141,24 @@ async def _test_job_state_machine() -> None:
         try:
             await store.submit_answers(record.job_id, invalid_answer)
         except DDLMetadataError as error:
-            assert error.code == "invalid_answers"
+            check_exception(
+                "_test_job_state_machine 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_job_state_machine 检查点 9",
+                error.code,
+                "invalid_answers",
+            )
         else:
-            raise AssertionError("回答不能引用当前轮次以外的问题")
+            fail_check(
+                "_test_job_state_machine",
+                actual="未抛出预期异常",
+                expected="回答不能引用当前轮次以外的问题",
+            )
 
         stale = AnswerRequest(
             revision=1,
-            question_set_id=waiting.question_set_id,
+            question_set_id=waiting_question_set_id,
             answers=[
                 MetricAnswer(
                     question_id=question.question_id,
@@ -110,42 +169,91 @@ async def _test_job_state_machine() -> None:
         try:
             await store.submit_answers(record.job_id, stale)
         except DDLMetadataError as error:
-            assert error.code == "stale_answer"
+            check_exception(
+                "_test_job_state_machine 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_job_state_machine 检查点 10",
+                error.code,
+                "stale_answer",
+            )
         else:
-            raise AssertionError("旧修订回答必须冲突")
+            fail_check(
+                "_test_job_state_machine",
+                actual="未抛出预期异常",
+                expected="旧修订回答必须冲突",
+            )
 
         answer = stale.model_copy(update={"revision": 0})
         pending, accepted = await store.submit_answers(record.job_id, answer)
-        assert accepted
-        assert pending.status == JobStatus.PENDING
-        assert pending.revision == 1
+        check_condition(
+            "_test_job_state_machine 检查点 11", accepted, expected="原断言条件成立"
+        )
+        check_equal(
+            "_test_job_state_machine 检查点 12",
+            pending.status,
+            JobStatus.PENDING,
+        )
+        check_equal("_test_job_state_machine 检查点 13", pending.revision, 1)
         repeated, accepted = await store.submit_answers(record.job_id, answer)
-        assert not accepted
-        assert repeated.revision == 1
+        check_condition(
+            "_test_job_state_machine 检查点 14",
+            not accepted,
+            expected="原断言条件成立",
+        )
+        check_equal("_test_job_state_machine 检查点 15", repeated.revision, 1)
         dispatch_count = await redis.execute_command(
             "ZCOUNT",
             store.dispatch_key,
             "-inf",
             "+inf",
         )
-        assert dispatch_count is not None
-        assert int(dispatch_count) >= 1
+        check_condition(
+            "_test_job_state_machine 检查点 16",
+            dispatch_count is not None,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_job_state_machine 检查点 17",
+            int(cast(str, dispatch_count)) >= 1,
+            expected="原断言条件成立",
+        )
 
-        assert await store.mark_running(record.job_id, 1)
-        assert await store.mark_terminal(
-            record.job_id,
-            1,
+        check_condition(
+            "_test_job_state_machine 检查点 18",
+            await store.mark_running(record.job_id, 1),
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_job_state_machine 检查点 19",
+            await store.mark_terminal(
+                record.job_id,
+                1,
+                JobStatus.SUCCEEDED,
+            ),
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_job_state_machine 检查点 20",
+            (await store.get(record.job_id)).status,
             JobStatus.SUCCEEDED,
         )
-        assert (await store.get(record.job_id)).status == JobStatus.SUCCEEDED
-        assert await redis.execute_command("GET", store._source_key(source)) is None
-        assert await redis.execute_command(
-            "HMGET",
-            store._job_key(record.job_id),
-            "ddl",
-            "answer_json",
-            "questions_json",
-        ) == [None, None, None]
+        check_condition(
+            "_test_job_state_machine 检查点 21",
+            await redis.execute_command("GET", store._source_key(source)) is None,
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_job_state_machine 检查点 22",
+            await redis.execute_command(
+                "HMGET",
+                store._job_key(record.job_id),
+                "ddl",
+                "answer_json",
+                "questions_json",
+            ),
+            [None, None, None],
+        )
     finally:
         await _delete_job(store, record.job_id, source)
 
@@ -162,7 +270,11 @@ async def _test_running_recovery() -> None:
         )
     )
     try:
-        assert await store.mark_running(record.job_id, 0)
+        check_condition(
+            "_test_running_recovery 检查点 1",
+            await store.mark_running(record.job_id, 0),
+            expected="原断言条件成立",
+        )
         graph = build_ddl_metadata_graph(
             DDLGraphDependencies(
                 FakeMetadataGenerator(),
@@ -177,8 +289,12 @@ async def _test_running_recovery() -> None:
             0,
         )
         recovered = await store.get(record.job_id)
-        assert recovered.status == JobStatus.WAITING_INPUT
-        assert recovered.revision == 0
+        check_equal(
+            "_test_running_recovery 检查点 2",
+            recovered.status,
+            JobStatus.WAITING_INPUT,
+        )
+        check_equal("_test_running_recovery 检查点 3", recovered.revision, 0)
     finally:
         await _delete_job(store, record.job_id, source)
 
@@ -195,13 +311,21 @@ async def _test_waiting_expiry() -> None:
         )
     )
     try:
-        assert await store.mark_running(record.job_id, 0)
+        check_condition(
+            "_test_waiting_expiry 检查点 1",
+            await store.mark_running(record.job_id, 0),
+            expected="原断言条件成立",
+        )
         question = MetricQuestion(
             question_id="metric.definition",
             prompt="Define metric",
             fact_table_id="fact-id",
         )
-        assert await store.mark_waiting(record.job_id, 0, [question], 1)
+        check_condition(
+            "_test_waiting_expiry 检查点 2",
+            await store.mark_waiting(record.job_id, 0, [question], 1),
+            expected="原断言条件成立",
+        )
         past = datetime.now(UTC).timestamp() - 1
         await redis.execute_command(
             "HSET",
@@ -216,17 +340,33 @@ async def _test_waiting_expiry() -> None:
             f"{record.job_id}:0",
         )
         expired = await store.expire_waiting()
-        assert expired == [record.job_id]
+        check_equal("_test_waiting_expiry 检查点 3", expired, [record.job_id])
         result = await store.get(record.job_id)
-        assert result.status == JobStatus.REJECTED
-        assert result.error is not None
-        assert result.error.code == "answer_timeout"
-        assert await redis.execute_command(
-            "HMGET",
-            store._job_key(record.job_id),
-            "ddl",
-            "questions_json",
-        ) == [None, None]
+        check_equal(
+            "_test_waiting_expiry 检查点 4",
+            result.status,
+            JobStatus.REJECTED,
+        )
+        check_condition(
+            "_test_waiting_expiry 检查点 5",
+            result.error is not None,
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_waiting_expiry 检查点 6",
+            cast(JobError, result.error).code,
+            "answer_timeout",
+        )
+        check_equal(
+            "_test_waiting_expiry 检查点 7",
+            await redis.execute_command(
+                "HMGET",
+                store._job_key(record.job_id),
+                "ddl",
+                "questions_json",
+            ),
+            [None, None],
+        )
     finally:
         await _delete_job(store, record.job_id, source)
 
@@ -243,15 +383,28 @@ async def _test_answer_expiry_cleanup_outbox() -> None:
         )
     )
     try:
-        assert await store.mark_running(record.job_id, 0)
+        check_condition(
+            "_test_answer_expiry_cleanup_outbox 检查点 1",
+            await store.mark_running(record.job_id, 0),
+            expected="原断言条件成立",
+        )
         question = MetricQuestion(
             question_id="metric.definition",
             prompt="Define metric",
             fact_table_id="fact-id",
         )
-        assert await store.mark_waiting(record.job_id, 0, [question], 1)
+        check_condition(
+            "_test_answer_expiry_cleanup_outbox 检查点 2",
+            await store.mark_waiting(record.job_id, 0, [question], 1),
+            expected="原断言条件成立",
+        )
         waiting = await store.get(record.job_id)
-        assert waiting.question_set_id is not None
+        check_condition(
+            "_test_answer_expiry_cleanup_outbox 检查点 3",
+            waiting.question_set_id is not None,
+            expected="原断言条件成立",
+        )
+        waiting_question_set_id = cast(str, waiting.question_set_id)
         past = datetime.now(UTC).timestamp() - 1
         await redis.execute_command(
             "HSET",
@@ -264,7 +417,7 @@ async def _test_answer_expiry_cleanup_outbox() -> None:
                 record.job_id,
                 AnswerRequest(
                     revision=0,
-                    question_set_id=waiting.question_set_id,
+                    question_set_id=waiting_question_set_id,
                     answers=[
                         MetricAnswer(
                             question_id=question.question_id,
@@ -274,16 +427,31 @@ async def _test_answer_expiry_cleanup_outbox() -> None:
                 ),
             )
         except DDLMetadataError as error:
-            assert error.code == "answer_timeout"
+            check_exception(
+                "_test_answer_expiry_cleanup_outbox 捕获预期异常",
+                error,
+                DDLMetadataError,
+            )
+            check_equal(
+                "_test_answer_expiry_cleanup_outbox 检查点 4",
+                error.code,
+                "answer_timeout",
+            )
         else:
-            raise AssertionError("截止时间后的回答必须被拒绝")
-        assert (
+            fail_check(
+                "_test_answer_expiry_cleanup_outbox",
+                actual="未抛出预期异常",
+                expected="截止时间后的回答必须被拒绝",
+            )
+        check_condition(
+            "_test_answer_expiry_cleanup_outbox 检查点 5",
             await redis.execute_command(
                 "ZSCORE",
                 store.cleanup_key,
                 record.job_id,
             )
-            is not None
+            is not None,
+            expected="原断言条件成立",
         )
     finally:
         await _delete_job(store, record.job_id, source)
@@ -294,9 +462,21 @@ async def _test_redis_durability_config() -> None:
     redis = RedisClient.get_client()
     appendonly = await redis.execute_command("CONFIG", "GET", "appendonly")
     appendfsync = await redis.execute_command("CONFIG", "GET", "appendfsync")
-    assert appendonly == ["appendonly", "yes"]
-    assert appendfsync == ["appendfsync", "everysec"]
-    assert isinstance(RedisTimeoutError("timeout"), _RETRYABLE)
+    check_equal(
+        "_test_redis_durability_config 检查点 1",
+        appendonly,
+        ["appendonly", "yes"],
+    )
+    check_equal(
+        "_test_redis_durability_config 检查点 2",
+        appendfsync,
+        ["appendfsync", "everysec"],
+    )
+    check_condition(
+        "_test_redis_durability_config 检查点 3",
+        isinstance(RedisTimeoutError("timeout"), _RETRYABLE),
+        expected="原断言条件成立",
+    )
 
 
 async def _test_checkpoint_cleanup_outbox() -> None:
@@ -312,10 +492,18 @@ async def _test_checkpoint_cleanup_outbox() -> None:
         new=AsyncMock(side_effect=RedisTimeoutError("timeout")),
     ):
         await cleanup_checkpoints({"jobs": store})
-    assert await redis.execute_command("ZSCORE", store.cleanup_key, job_id) is not None
+    check_condition(
+        "_test_checkpoint_cleanup_outbox 检查点 1",
+        await redis.execute_command("ZSCORE", store.cleanup_key, job_id) is not None,
+        expected="原断言条件成立",
+    )
 
     await cleanup_checkpoints({"jobs": store})
-    assert await redis.execute_command("ZSCORE", store.cleanup_key, job_id) is None
+    check_condition(
+        "_test_checkpoint_cleanup_outbox 检查点 2",
+        await redis.execute_command("ZSCORE", store.cleanup_key, job_id) is None,
+        expected="原断言条件成立",
+    )
 
 
 @pytest.mark.integration

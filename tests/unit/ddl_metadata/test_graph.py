@@ -7,6 +7,7 @@ from data_agent.ddl_metadata.workflow.graph import (
     DDLGraphDependencies,
     build_ddl_metadata_graph,
 )
+from tests.helpers.checks import check_equal, check_exception, fail_check
 from tests.helpers.fakes import (
     DIM_DDL,
     FACT_DDL,
@@ -35,7 +36,11 @@ async def _run_success_and_recovery() -> None:
     }
     await graph.ainvoke(initial, config, durability="sync")
     state = await graph.aget_state(config)
-    assert state.next == ("await_metric_answers",)
+    check_equal(
+        "_run_success_and_recovery 检查点 1",
+        state.next,
+        ("await_metric_answers",),
+    )
 
     try:
         await graph.ainvoke(
@@ -50,22 +55,37 @@ async def _run_success_and_recovery() -> None:
             config,
             durability="sync",
         )
-    except ConnectionError:
+    except ConnectionError as captured_error:
+        check_exception(
+            "_run_success_and_recovery 捕获预期异常", captured_error, ConnectionError
+        )
         pass
     else:
-        raise AssertionError("第一次持久化必须注入失败")
+        fail_check(
+            "_run_success_and_recovery",
+            actual="未抛出预期异常",
+            expected="第一次持久化必须注入失败",
+        )
     counts = (
         model.classify_calls,
         model.question_calls,
         model.metric_calls,
     )
     result = await graph.ainvoke(None, config, durability="sync")
-    assert result["status"] == "succeeded"
-    assert snapshot.calls == 2
-    assert counts == (
-        model.classify_calls,
-        model.question_calls,
-        model.metric_calls,
+    check_equal(
+        "_run_success_and_recovery 检查点 2",
+        result["status"],
+        "succeeded",
+    )
+    check_equal("_run_success_and_recovery 检查点 3", snapshot.calls, 2)
+    check_equal(
+        "_run_success_and_recovery 检查点 4",
+        counts,
+        (
+            model.classify_calls,
+            model.question_calls,
+            model.metric_calls,
+        ),
     )
 
 
@@ -87,8 +107,16 @@ async def _run_rejection_and_dimension_path() -> None:
         _config("parse-rejected"),
         durability="sync",
     )
-    assert rejected["status"] == "rejected"
-    assert model.classify_calls == 0
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 1",
+        rejected["status"],
+        "rejected",
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 2",
+        model.classify_calls,
+        0,
+    )
 
     hallucinating = FakeMetadataGenerator(hallucinate=True)
     graph = build_ddl_metadata_graph(
@@ -105,8 +133,16 @@ async def _run_rejection_and_dimension_path() -> None:
         _config("hallucination"),
         durability="sync",
     )
-    assert rejected["status"] == "rejected"
-    assert hallucinating.classify_calls == 2
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 3",
+        rejected["status"],
+        "rejected",
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 4",
+        hallucinating.classify_calls,
+        2,
+    )
 
     model = FakeMetadataGenerator()
     snapshot = _Snapshot()
@@ -124,10 +160,22 @@ async def _run_rejection_and_dimension_path() -> None:
         _config("dimension"),
         durability="sync",
     )
-    assert result["status"] == "succeeded"
-    assert model.question_calls == 0
-    assert model.metric_calls == 0
-    assert snapshot.calls == 1
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 5",
+        result["status"],
+        "succeeded",
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 6",
+        model.question_calls,
+        0,
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 7",
+        model.metric_calls,
+        0,
+    )
+    check_equal("_run_rejection_and_dimension_path 检查点 8", snapshot.calls, 1)
 
     reused_model = FakeMetadataGenerator()
     reused_snapshot = _Snapshot()
@@ -149,11 +197,31 @@ async def _run_rejection_and_dimension_path() -> None:
         _config("memory-reuse"),
         durability="sync",
     )
-    assert reused["status"] == "succeeded"
-    assert reused_model.classify_calls == 0
-    assert reused_model.question_calls == 0
-    assert reused_model.metric_calls == 0
-    assert reused_snapshot.calls == 1
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 9",
+        reused["status"],
+        "succeeded",
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 10",
+        reused_model.classify_calls,
+        0,
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 11",
+        reused_model.question_calls,
+        0,
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 12",
+        reused_model.metric_calls,
+        0,
+    )
+    check_equal(
+        "_run_rejection_and_dimension_path 检查点 13",
+        reused_snapshot.calls,
+        1,
+    )
 
 
 async def _run_structured_output_repair() -> None:
@@ -177,8 +245,16 @@ async def _run_structured_output_repair() -> None:
         _config("classify-structure-repair"),
         durability="sync",
     )
-    assert result["status"] == "succeeded"
-    assert classify_model.classify_calls == 2
+    check_equal(
+        "_run_structured_output_repair 检查点 1",
+        result["status"],
+        "succeeded",
+    )
+    check_equal(
+        "_run_structured_output_repair 检查点 2",
+        classify_model.classify_calls,
+        2,
+    )
 
     question_model = FakeMetadataGenerator(invalid_questions=True)
     graph = build_ddl_metadata_graph(
@@ -199,8 +275,16 @@ async def _run_structured_output_repair() -> None:
         _config("question-structure-rejected"),
         durability="sync",
     )
-    assert result["status"] == "rejected"
-    assert result["error"]["code"] == "invalid_metric_questions"
+    check_equal(
+        "_run_structured_output_repair 检查点 3",
+        result["status"],
+        "rejected",
+    )
+    check_equal(
+        "_run_structured_output_repair 检查点 4",
+        result["error"]["code"],
+        "invalid_metric_questions",
+    )
 
     metric_model = FakeMetadataGenerator(invalid_metric_once=True)
     graph = build_ddl_metadata_graph(
@@ -234,8 +318,16 @@ async def _run_structured_output_repair() -> None:
         config,
         durability="sync",
     )
-    assert result["status"] == "succeeded"
-    assert metric_model.metric_calls == 2
+    check_equal(
+        "_run_structured_output_repair 检查点 5",
+        result["status"],
+        "succeeded",
+    )
+    check_equal(
+        "_run_structured_output_repair 检查点 6",
+        metric_model.metric_calls,
+        2,
+    )
 
 
 async def _run_two_round_ambiguity() -> None:
@@ -267,11 +359,23 @@ async def _run_two_round_ambiguity() -> None:
     )
     await graph.ainvoke(answer, config, durability="sync")
     state = await graph.aget_state(config)
-    assert state.next == ("await_metric_answers",)
+    check_equal(
+        "_run_two_round_ambiguity 检查点 1",
+        state.next,
+        ("await_metric_answers",),
+    )
     result = await graph.ainvoke(answer, config, durability="sync")
-    assert result["status"] == "rejected"
-    assert result["error"]["code"] == "metric_ambiguity"
-    assert snapshot.calls == 0
+    check_equal(
+        "_run_two_round_ambiguity 检查点 2",
+        result["status"],
+        "rejected",
+    )
+    check_equal(
+        "_run_two_round_ambiguity 检查点 3",
+        result["error"]["code"],
+        "metric_ambiguity",
+    )
+    check_equal("_run_two_round_ambiguity 检查点 4", snapshot.calls, 0)
 
 
 async def test_ddl_metadata_graph() -> None:

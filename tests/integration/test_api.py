@@ -11,6 +11,12 @@ from data_agent.application import create_app
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.models import DDLJobRequest
 from data_agent.settings import APISettings, AppSettings, app_config
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 
 class _UnavailableJobs:
@@ -37,49 +43,78 @@ async def _cleanup(store: DDLJobStore, job_id: str, source: str) -> None:
 async def _test_api() -> None:
     """验证 202/404/409/422/503、回环默认值和 CORS。"""
     app = create_app()
-    assert app_config.api.host == "127.0.0.1"
+    check_equal(
+        "_test_api 检查点 1",
+        app_config.api.host,
+        "127.0.0.1",
+    )
     invalid_api_config = app_config.api.model_dump(mode="json")
     invalid_api_config["cors_origins"] = ["https://frontend.example.com"]
     try:
         APISettings.model_validate(invalid_api_config)
-    except ValidationError:
+    except ValidationError as captured_error:
+        check_exception("_test_api 捕获预期异常", captured_error, ValidationError)
         pass
     else:
-        raise AssertionError("CORS 配置必须拒绝非本机 Origin")
+        fail_check(
+            "_test_api",
+            actual="未抛出预期异常",
+            expected="CORS 配置必须拒绝非本机 Origin",
+        )
     invalid_lease_config = app_config.model_dump(mode="json")
     invalid_lease_config["memory"]["source_lease_seconds"] = 1
     try:
         AppSettings.model_validate(invalid_lease_config)
-    except ValidationError:
+    except ValidationError as captured_error:
+        check_exception("_test_api 捕获预期异常", captured_error, ValidationError)
         pass
     else:
-        raise AssertionError("来源租约必须覆盖 worker 和等待超时")
+        fail_check(
+            "_test_api",
+            actual="未抛出预期异常",
+            expected="来源租约必须覆盖 worker 和等待超时",
+        )
     invalid_database_config = app_config.model_dump(mode="json")
     invalid_database_config["memory"]["database"] = "invalid-database"
     try:
         AppSettings.model_validate(invalid_database_config)
-    except ValidationError:
+    except ValidationError as captured_error:
+        check_exception("_test_api 捕获预期异常", captured_error, ValidationError)
         pass
     else:
-        raise AssertionError("记忆数据库必须是严格 MySQL 标识符")
+        fail_check(
+            "_test_api",
+            actual="未抛出预期异常",
+            expected="记忆数据库必须是严格 MySQL 标识符",
+        )
     same_database_config = app_config.model_dump(mode="json")
     same_database_config["memory"]["database"] = "meta"
     try:
         AppSettings.model_validate(same_database_config)
-    except ValidationError:
+    except ValidationError as captured_error:
+        check_exception("_test_api 捕获预期异常", captured_error, ValidationError)
         pass
     else:
-        raise AssertionError("记忆数据库不能使用 Meta 默认数据库")
+        fail_check(
+            "_test_api",
+            actual="未抛出预期异常",
+            expected="记忆数据库不能使用 Meta 默认数据库",
+        )
     missing_default_database_config = app_config.model_dump(mode="json")
     missing_default_database_config["mysql"]["url"] = (
         "mysql+asyncmy://data_agent:data_agent@localhost:3306"
     )
     try:
         AppSettings.model_validate(missing_default_database_config)
-    except ValidationError:
+    except ValidationError as captured_error:
+        check_exception("_test_api 捕获预期异常", captured_error, ValidationError)
         pass
     else:
-        raise AssertionError("MySQL URL 必须提供 Meta 默认数据库")
+        fail_check(
+            "_test_api",
+            actual="未抛出预期异常",
+            expected="MySQL URL 必须提供 Meta 默认数据库",
+        )
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(
@@ -93,10 +128,11 @@ async def _test_api() -> None:
                     "Access-Control-Request-Method": "POST",
                 },
             )
-            assert allowed.status_code == 200
-            assert (
-                allowed.headers["access-control-allow-origin"]
-                == "http://127.0.0.1:3000"
+            check_equal("_test_api 检查点 2", allowed.status_code, 200)
+            check_equal(
+                "_test_api 检查点 3",
+                allowed.headers["access-control-allow-origin"],
+                "http://127.0.0.1:3000",
             )
             denied = await client.options(
                 "/api/v1/metadata/ddl-jobs",
@@ -105,17 +141,25 @@ async def _test_api() -> None:
                     "Access-Control-Request-Method": "POST",
                 },
             )
-            assert "access-control-allow-origin" not in denied.headers
+            check_condition(
+                "_test_api 检查点 4",
+                "access-control-allow-origin" not in denied.headers,
+                expected="原断言条件成立",
+            )
 
             invalid = await client.post(
                 "/api/v1/metadata/ddl-jobs",
                 json={"source": "contains space", "ddl": ""},
             )
-            assert invalid.status_code == 422
+            check_equal("_test_api 检查点 5", invalid.status_code, 422)
 
             missing = await client.get("/api/v1/metadata/ddl-jobs/missing")
-            assert missing.status_code == 404
-            assert missing.json()["error"]["code"] == "job_not_found"
+            check_equal("_test_api 检查点 6", missing.status_code, 404)
+            check_equal(
+                "_test_api 检查点 7",
+                missing.json()["error"]["code"],
+                "job_not_found",
+            )
 
             source = f"api_{uuid4().hex}"
             response = await client.post(
@@ -126,13 +170,21 @@ async def _test_api() -> None:
                     "ddl": "CREATE TABLE fact_api (id BIGINT PRIMARY KEY)",
                 },
             )
-            assert response.status_code == 202
+            check_equal("_test_api 检查点 8", response.status_code, 202)
             accepted = response.json()
             job_id = accepted["job_id"]
             try:
                 status_response = await client.get(accepted["status_url"])
-                assert status_response.status_code == 200
-                assert status_response.json()["status"] == "pending"
+                check_equal(
+                    "_test_api 检查点 9",
+                    status_response.status_code,
+                    200,
+                )
+                check_equal(
+                    "_test_api 检查点 10",
+                    status_response.json()["status"],
+                    "pending",
+                )
 
                 conflict = await client.post(
                     f"/api/v1/metadata/ddl-jobs/{job_id}/answers",
@@ -147,8 +199,12 @@ async def _test_api() -> None:
                         ],
                     },
                 )
-                assert conflict.status_code == 409
-                assert conflict.json()["error"]["code"] == "stale_answer"
+                check_equal("_test_api 检查点 11", conflict.status_code, 409)
+                check_equal(
+                    "_test_api 检查点 12",
+                    conflict.json()["error"]["code"],
+                    "stale_answer",
+                )
             finally:
                 await _cleanup(app.state.jobs, job_id, source)
 
@@ -162,8 +218,16 @@ async def _test_api() -> None:
                 },
             )
             app.state.jobs = jobs
-            assert unavailable.status_code == 503
-            assert unavailable.json()["error"]["code"] == "redis_unavailable"
+            check_equal(
+                "_test_api 检查点 13",
+                unavailable.status_code,
+                503,
+            )
+            check_equal(
+                "_test_api 检查点 14",
+                unavailable.json()["error"]["code"],
+                "redis_unavailable",
+            )
 
 
 @pytest.mark.integration

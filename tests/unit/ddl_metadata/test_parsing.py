@@ -3,6 +3,7 @@
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.settings import app_config
+from tests.helpers.checks import check_equal, check_exception, fail_check
 
 DDL = """
 CREATE TABLE dim_customer (
@@ -25,29 +26,58 @@ def _assert_rejected(ddl: str, code: str) -> None:
     try:
         parse_ddl("test_source", ddl)
     except DDLMetadataError as error:
-        assert error.code == code
+        check_exception("_assert_rejected 捕获预期异常", error, DDLMetadataError)
+        check_equal("_assert_rejected 检查点 1", error.code, code)
     else:
-        raise AssertionError(f"DDL 应被 {code} 拒绝")
+        fail_check(
+            "_assert_rejected",
+            actual="未抛出预期异常",
+            expected=f"DDL 应被 {code} 拒绝",
+        )
 
 
 def test_ddl_parser() -> None:
     """覆盖多表、约束、注释、稳定 ID 和拒绝边界。"""
     schema = parse_ddl("test_source", DDL)
     repeated = parse_ddl("test_source", DDL)
-    assert schema == repeated
-    assert len(schema.tables) == 2
-    assert schema.tables[0].comment == "customers"
-    assert schema.tables[0].columns[0].comment == "customer key"
-    assert schema.tables[0].columns[0].structural_role == "primary_key"
-    assert schema.tables[1].qualified_name == "sales.fact_order"
+    check_equal("test_ddl_parser 检查点 1", schema, repeated)
+    check_equal("test_ddl_parser 检查点 2", len(schema.tables), 2)
+    check_equal(
+        "test_ddl_parser 检查点 3",
+        schema.tables[0].comment,
+        "customers",
+    )
+    check_equal(
+        "test_ddl_parser 检查点 4",
+        schema.tables[0].columns[0].comment,
+        "customer key",
+    )
+    check_equal(
+        "test_ddl_parser 检查点 5",
+        schema.tables[0].columns[0].structural_role,
+        "primary_key",
+    )
+    check_equal(
+        "test_ddl_parser 检查点 6",
+        schema.tables[1].qualified_name,
+        "sales.fact_order",
+    )
     roles = {column.name: column.structural_role for column in schema.tables[1].columns}
-    assert roles == {
-        "order_id": "primary_key",
-        "customer_id": "foreign_key",
-        "amount": None,
-    }
-    assert len(schema.ddl_hash) == 64
-    assert len(schema.schema_fingerprint) == 64
+    check_equal(
+        "test_ddl_parser 检查点 7",
+        roles,
+        {
+            "order_id": "primary_key",
+            "customer_id": "foreign_key",
+            "amount": None,
+        },
+    )
+    check_equal("test_ddl_parser 检查点 8", len(schema.ddl_hash), 64)
+    check_equal(
+        "test_ddl_parser 检查点 9",
+        len(schema.schema_fingerprint),
+        64,
+    )
 
     _assert_rejected("ALTER TABLE x ADD y INT", "unsupported_statement")
     _assert_rejected("CREATE VIEW x AS SELECT 1", "unsupported_statement")
@@ -67,6 +97,13 @@ def test_ddl_parser() -> None:
     try:
         parse_ddl("test_source", DDL, tiny_limits)
     except DDLMetadataError as error:
-        assert error.code == "ddl_too_large"
+        check_exception("test_ddl_parser 捕获预期异常", error, DDLMetadataError)
+        check_equal(
+            "test_ddl_parser 检查点 10",
+            error.code,
+            "ddl_too_large",
+        )
     else:
-        raise AssertionError("DDL 字节限制必须生效")
+        fail_check(
+            "test_ddl_parser", actual="未抛出预期异常", expected="DDL 字节限制必须生效"
+        )

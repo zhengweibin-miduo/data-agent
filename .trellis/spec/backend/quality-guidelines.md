@@ -33,6 +33,15 @@
   cleanup. Tests never reset or delete the shared developer Docker volume.
 - Async tests are native pytest async tests. Do not add `asyncio.run()`
   wrappers or test-module `if __name__ == "__main__"` entry points.
+- Test result checks use `tests.helpers.checks.check_equal()` or
+  `check_condition()` so every check emits a labeled `PASS` / `FAIL` record
+  with actual and expected values before `pytest.fail()` blocks a regression.
+  Use `fail_check()` when an expected exception or other required branch does
+  not occur. Do not add bare `assert` statements to `tests/`.
+- Keep pytest's default output capture for CI and routine runs. Use
+  `uv run pytest -s ...` only when a developer needs to observe every check
+  result live; visible output must complement, never replace, automatic
+  failure semantics.
 - Tests requiring live MySQL or Redis use the `integration` marker. The
   optional TEI live test uses both `integration` and `tei`; CI excludes `tei`
   unless that service is explicitly provisioned. Reusable fakes and factories

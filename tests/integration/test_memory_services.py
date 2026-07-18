@@ -1,5 +1,6 @@
 """长期记忆派生载荷重建检查。"""
 
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,7 @@ from data_agent.ddl_metadata.models import (
 from data_agent.ddl_metadata.persistence.tables import llm_memory
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
+from tests.helpers.checks import check_condition, check_equal
 from tests.helpers.factories import ensure_schema
 
 
@@ -40,7 +42,12 @@ async def _test_payload_rebuilder() -> None:
         ),
     )
     payload = build_memory_payload(content)
-    assert content.table is not None
+    check_condition(
+        "_test_payload_rebuilder 检查点 1",
+        content.table is not None,
+        expected="原断言条件成立",
+    )
+    content_table = cast(SemanticTable, content.table)
     valid_uid = stable_id("memory", source, "valid")
     invalid_uid = stable_id("memory", source, "invalid")
     try:
@@ -52,7 +59,7 @@ async def _test_payload_rebuilder() -> None:
                         "uid": valid_uid,
                         "source": source,
                         "kind": MemoryKind.SEMANTIC_DECISION.value,
-                        "scope_key": content.table.table_id,
+                        "scope_key": content_table.table_id,
                         "schema_fingerprint": stable_id("schema", source),
                         "row_status": MemoryRowStatus.NORMAL.value,
                         "pinned": False,
@@ -75,24 +82,38 @@ async def _test_payload_rebuilder() -> None:
                 ],
             )
         first = await MemoryPayloadRebuilder().rebuild(source)
-        assert first.processed == 1
-        assert first.succeeded == 1
-        assert first.failed == 0
-        assert first.next_after_id is not None
+        check_equal("_test_payload_rebuilder 检查点 2", first.processed, 1)
+        check_equal("_test_payload_rebuilder 检查点 3", first.succeeded, 1)
+        check_equal("_test_payload_rebuilder 检查点 4", first.failed, 0)
+        check_condition(
+            "_test_payload_rebuilder 检查点 5",
+            first.next_after_id is not None,
+            expected="原断言条件成立",
+        )
+        first_next_after_id = cast(int, first.next_after_id)
         second = await MemoryPayloadRebuilder().rebuild(
             source,
-            after_id=first.next_after_id,
+            after_id=first_next_after_id,
         )
-        assert second.processed == 1
-        assert second.succeeded == 0
-        assert second.failed == 1
-        assert second.next_after_id is not None
+        check_equal("_test_payload_rebuilder 检查点 6", second.processed, 1)
+        check_equal("_test_payload_rebuilder 检查点 7", second.succeeded, 0)
+        check_equal("_test_payload_rebuilder 检查点 8", second.failed, 1)
+        check_condition(
+            "_test_payload_rebuilder 检查点 9",
+            second.next_after_id is not None,
+            expected="原断言条件成立",
+        )
+        second_next_after_id = cast(int, second.next_after_id)
         finished = await MemoryPayloadRebuilder().rebuild(
             source,
-            after_id=second.next_after_id,
+            after_id=second_next_after_id,
         )
-        assert finished.processed == 0
-        assert finished.next_after_id is None
+        check_equal("_test_payload_rebuilder 检查点 10", finished.processed, 0)
+        check_condition(
+            "_test_payload_rebuilder 检查点 11",
+            finished.next_after_id is None,
+            expected="原断言条件成立",
+        )
         async with MySQLDatabase.session() as session:
             values = (
                 await session.execute(
@@ -104,8 +125,16 @@ async def _test_payload_rebuilder() -> None:
                 )
             ).all()
             rows = {str(row[0]): (row[1], row[2]) for row in values}
-        assert rows[invalid_uid][0] == {"bad": "content"}
-        assert rows[valid_uid][1]["version"] == app_config.memory.payload_version
+        check_equal(
+            "_test_payload_rebuilder 检查点 12",
+            rows[invalid_uid][0],
+            {"bad": "content"},
+        )
+        check_equal(
+            "_test_payload_rebuilder 检查点 13",
+            rows[valid_uid][1]["version"],
+            app_config.memory.payload_version,
+        )
     finally:
         app_config.memory.rebuild_batch_size = original_batch_size
         async with MySQLDatabase.session() as session:

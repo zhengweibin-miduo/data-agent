@@ -1,5 +1,6 @@
 """长期记忆检索、管理、修正和载荷重建检查。"""
 
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,7 @@ from data_agent.ddl_metadata.models import (
     MetricAnswer,
     MetricDefinitionContent,
     SemanticDecisionContent,
+    SemanticMetadata,
     UserAnswerContent,
 )
 from data_agent.ddl_metadata.parsing import parse_ddl
@@ -30,6 +32,12 @@ from data_agent.ddl_metadata.persistence.tables import table_info
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.settings import app_config
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 from tests.helpers.factories import (
     cleanup_schema,
     ensure_schema,
@@ -88,7 +96,7 @@ async def _test_memory_repository() -> None:
             )
         )
     context = await MemoryContextLoader().load(schema)
-    assert context.answers == answers
+    check_equal("_test_memory_repository 检查点 1", context.answers, answers)
     redis = RedisClient.initialize()
     store = DDLJobStore(redis)
     service = MemoryService(store)
@@ -102,12 +110,21 @@ async def _test_memory_repository() -> None:
             limit=100,
             cursor=None,
         )
-        assert len(page.items) >= 6
+        check_condition(
+            "_test_memory_repository 检查点 2",
+            len(page.items) >= 6,
+            expected="原断言条件成立",
+        )
         metric_item = next(
             item for item in page.items if item.kind == MemoryKind.METRIC_DEFINITION
         )
         metric_detail = await service.get_detail(metric_item.uid)
-        assert isinstance(metric_detail.content, MetricDefinitionContent)
+        check_condition(
+            "_test_memory_repository 检查点 3",
+            isinstance(metric_detail.content, MetricDefinitionContent),
+            expected="原断言条件成立",
+        )
+        metric_content = cast(MetricDefinitionContent, metric_detail.content)
         reference_uids = {
             relation.related_memory_uid
             for relation in metric_detail.relations
@@ -133,22 +150,37 @@ async def _test_memory_repository() -> None:
                 and answer_detail.content.answer == answers[0]
             ):
                 expected_reference_uids.add(item.uid)
-        assert expected_reference_uids <= reference_uids
+        check_condition(
+            "_test_memory_repository 检查点 4",
+            expected_reference_uids <= reference_uids,
+            expected="原断言条件成立",
+        )
         try:
             await service.correct(
                 metric_item.uid,
-                metric_detail.content.model_copy(
+                metric_content.model_copy(
                     update={
-                        "metric": metric_detail.content.metric.model_copy(
+                        "metric": metric_content.metric.model_copy(
                             update={"name": "renamed_metric"}
                         )
                     }
                 ),
             )
         except DDLMetadataError as error:
-            assert error.code == "memory_scope_conflict"
+            check_exception(
+                "_test_memory_repository 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_memory_repository 检查点 5",
+                error.code,
+                "memory_scope_conflict",
+            )
         else:
-            raise AssertionError("指标修正不能改变稳定 ID 输入")
+            fail_check(
+                "_test_memory_repository",
+                actual="未抛出预期异常",
+                expected="指标修正不能改变稳定 ID 输入",
+            )
         target_item = next(
             item
             for item in page.items
@@ -156,48 +188,100 @@ async def _test_memory_repository() -> None:
             and item.scope_key == schema.tables[0].id
         )
         target = await service.get_detail(target_item.uid)
-        assert isinstance(target.content, SemanticDecisionContent)
+        check_condition(
+            "_test_memory_repository 检查点 6",
+            isinstance(target.content, SemanticDecisionContent),
+            expected="原断言条件成立",
+        )
+        target_content = cast(SemanticDecisionContent, target.content)
 
         pinned = await service.patch(
             target.uid,
             MemoryPatchRequest(pinned=True),
         )
-        assert pinned.pinned
+        check_condition(
+            "_test_memory_repository 检查点 7",
+            pinned.pinned,
+            expected="原断言条件成立",
+        )
         pinned_again = await service.patch(
             target.uid,
             MemoryPatchRequest(pinned=True),
         )
-        assert pinned_again.pinned
+        check_condition(
+            "_test_memory_repository 检查点 8",
+            pinned_again.pinned,
+            expected="原断言条件成立",
+        )
 
-        replacement_content = target.content.model_copy(
+        replacement_content = target_content.model_copy(
             update={
-                "table": target.content.table.model_copy(
+                "table": target_content.table.model_copy(
                     update={"description": "user corrected description"}
                 )
-                if target.content.table is not None
+                if target_content.table is not None
                 else None
             }
         )
         correction = await service.correct(target.uid, replacement_content)
-        assert correction.requires_reprocess
+        check_condition(
+            "_test_memory_repository 检查点 9",
+            correction.requires_reprocess,
+            expected="原断言条件成立",
+        )
         old = await service.get_detail(target.uid)
         replacement = await service.get_detail(correction.memory_uid)
-        assert old.row_status == MemoryRowStatus.ARCHIVED
-        assert replacement.row_status == MemoryRowStatus.NORMAL
-        assert replacement.pinned
-        assert replacement.content.trust == "user_confirmed"
-        assert replacement.payload.trust == "user_confirmed"
-        assert any(
-            relation.relation_type.value == "SUPERSEDES"
-            and relation.related_memory_uid == target.uid
-            for relation in replacement.relations
+        check_equal(
+            "_test_memory_repository 检查点 10",
+            old.row_status,
+            MemoryRowStatus.ARCHIVED,
+        )
+        check_equal(
+            "_test_memory_repository 检查点 11",
+            replacement.row_status,
+            MemoryRowStatus.NORMAL,
+        )
+        check_condition(
+            "_test_memory_repository 检查点 12",
+            replacement.pinned,
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_memory_repository 检查点 13",
+            replacement.content.trust,
+            "user_confirmed",
+        )
+        check_equal(
+            "_test_memory_repository 检查点 14",
+            replacement.payload.trust,
+            "user_confirmed",
+        )
+        check_condition(
+            "_test_memory_repository 检查点 15",
+            any(
+                relation.relation_type.value == "SUPERSEDES"
+                and relation.related_memory_uid == target.uid
+                for relation in replacement.relations
+            ),
+            expected="原断言条件成立",
         )
         try:
             await service.correct(replacement.uid, replacement.content)
         except DDLMetadataError as error:
-            assert error.code == "unchanged_correction"
+            check_exception(
+                "_test_memory_repository 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_memory_repository 检查点 16",
+                error.code,
+                "unchanged_correction",
+            )
         else:
-            raise AssertionError("相同用户确认内容不能自我替代")
+            fail_check(
+                "_test_memory_repository",
+                actual="未抛出预期异常",
+                expected="相同用户确认内容不能自我替代",
+            )
 
         async with MySQLDatabase.session() as session:
             description = await session.scalar(
@@ -205,19 +289,28 @@ async def _test_memory_repository() -> None:
                     table_info.c.id == schema.tables[0].id
                 )
             )
-        assert description == metadata.tables[0].description
+        check_equal(
+            "_test_memory_repository 检查点 17",
+            description,
+            metadata.tables[0].description,
+        )
 
         reprocessed = await MemoryContextLoader().load(schema)
-        assert reprocessed.complete_semantic is not None
+        check_condition(
+            "_test_memory_repository 检查点 18",
+            reprocessed.complete_semantic is not None,
+            expected="原断言条件成立",
+        )
+        complete_semantic = cast(SemanticMetadata, reprocessed.complete_semantic)
         await MetadataSnapshotService().persist(
             schema,
-            reprocessed.complete_semantic,
+            complete_semantic,
             reprocessed.questions,
             reprocessed.answers,
             reprocessed.metrics,
             build_accepted_memories(
                 schema,
-                reprocessed.complete_semantic,
+                complete_semantic,
                 reprocessed.questions,
                 reprocessed.answers,
                 reprocessed.metrics,
@@ -225,15 +318,27 @@ async def _test_memory_repository() -> None:
             ),
         )
         reapplied = await service.get_detail(correction.memory_uid)
-        assert reapplied.row_status == MemoryRowStatus.NORMAL
-        assert reapplied.content.trust == "user_confirmed"
+        check_equal(
+            "_test_memory_repository 检查点 19",
+            reapplied.row_status,
+            MemoryRowStatus.NORMAL,
+        )
+        check_equal(
+            "_test_memory_repository 检查点 20",
+            reapplied.content.trust,
+            "user_confirmed",
+        )
         async with MySQLDatabase.session() as session:
             description = await session.scalar(
                 select(table_info.c.description).where(
                     table_info.c.id == schema.tables[0].id
                 )
             )
-        assert description == "user corrected description"
+        check_equal(
+            "_test_memory_repository 检查点 21",
+            description,
+            "user corrected description",
+        )
 
         question_item = next(
             item for item in page.items if item.kind == MemoryKind.METRIC_QUESTION
@@ -245,9 +350,20 @@ async def _test_memory_repository() -> None:
                 question_detail.content,
             )
         except DDLMetadataError as error:
-            assert error.code == "immutable_memory_kind"
+            check_exception(
+                "_test_memory_repository 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_memory_repository 检查点 22",
+                error.code,
+                "immutable_memory_kind",
+            )
         else:
-            raise AssertionError("问题记忆必须不可修正")
+            fail_check(
+                "_test_memory_repository",
+                actual="未抛出预期异常",
+                expected="问题记忆必须不可修正",
+            )
 
         active = await store.submit(
             DDLJobRequest(
@@ -262,9 +378,20 @@ async def _test_memory_repository() -> None:
                 MemoryPatchRequest(pinned=False),
             )
         except DDLMetadataError as error:
-            assert error.code == "source_busy"
+            check_exception(
+                "_test_memory_repository 捕获预期异常", error, DDLMetadataError
+            )
+            check_equal(
+                "_test_memory_repository 检查点 23",
+                error.code,
+                "source_busy",
+            )
         else:
-            raise AssertionError("活动来源任务必须阻止记忆变更")
+            fail_check(
+                "_test_memory_repository",
+                actual="未抛出预期异常",
+                expected="活动来源任务必须阻止记忆变更",
+            )
         await _cleanup_job(store, active.job_id, source)
         active_job_id = None
 
@@ -272,7 +399,11 @@ async def _test_memory_repository() -> None:
             correction.memory_uid,
             MemoryPatchRequest(row_status=MemoryRowStatus.ARCHIVED),
         )
-        assert archived.row_status == MemoryRowStatus.ARCHIVED
+        check_equal(
+            "_test_memory_repository 检查点 24",
+            archived.row_status,
+            MemoryRowStatus.ARCHIVED,
+        )
         async with MySQLDatabase.session() as session:
             compatible = await MemoryRepository(session).find_compatible(
                 source,
@@ -282,7 +413,7 @@ async def _test_memory_repository() -> None:
                 app_config.memory.payload_version,
                 app_config.memory.content_version,
             )
-        assert compatible == []
+        check_equal("_test_memory_repository 检查点 25", compatible, [])
 
     finally:
         if active_job_id is not None:

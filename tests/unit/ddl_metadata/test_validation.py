@@ -17,6 +17,7 @@ from data_agent.ddl_metadata.validation import (
     validate_metadata,
     validate_metric_questions,
 )
+from tests.helpers.checks import check_condition, check_equal
 
 DDL = """
 CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(100));
@@ -72,7 +73,11 @@ def _valid_metadata() -> tuple[PhysicalSchema, SemanticMetadata]:
 def test_metadata_validator() -> None:
     """覆盖成功、幻觉、结构角色、置信度和指标引用。"""
     schema, metadata = _valid_metadata()
-    assert validate_metadata(schema, metadata) == []
+    check_equal(
+        "test_metadata_validator 检查点 1",
+        validate_metadata(schema, metadata),
+        [],
+    )
 
     first_column = metadata.columns[0]
     invalid = metadata.model_copy(
@@ -90,11 +95,16 @@ def test_metadata_validator() -> None:
         }
     )
     codes = {issue.code for issue in validate_metadata(schema, invalid)}
-    assert {
-        "hallucinated_object",
-        "missing_object",
-        "low_confidence",
-    } <= codes
+    check_condition(
+        "test_metadata_validator 检查点 2",
+        {
+            "hallucinated_object",
+            "missing_object",
+            "low_confidence",
+        }
+        <= codes,
+        expected="原断言条件成立",
+    )
 
     fact_id = next(
         table.table_id for table in metadata.tables if table.role == TableRole.FACT
@@ -111,7 +121,11 @@ def test_metadata_validator() -> None:
         fact_table_id=fact_id,
         column_ids=[amount_id],
     )
-    assert validate_metric_questions(schema, metadata, [question]) == []
+    check_equal(
+        "test_metadata_validator 检查点 3",
+        validate_metric_questions(schema, metadata, [question]),
+        [],
+    )
     answer = MetricAnswer(
         question_id=question.question_id,
         answer="SUM(amount) / COUNT(DISTINCT id), all orders, yuan",
@@ -131,8 +145,8 @@ def test_metadata_validator() -> None:
         [answer],
         [metric],
     )
-    assert issues == []
-    assert len(finalized[0].id) == 64
+    check_equal("test_metadata_validator 检查点 4", issues, [])
+    check_equal("test_metadata_validator 检查点 5", len(finalized[0].id), 64)
 
     unsupported = metric.model_copy(update={"answer_question_ids": ["not_answered"]})
     _, issues = finalize_and_validate_metrics(
@@ -143,4 +157,8 @@ def test_metadata_validator() -> None:
         [answer],
         [unsupported],
     )
-    assert {issue.code for issue in issues} == {"unsupported_metric_claim"}
+    check_equal(
+        "test_metadata_validator 检查点 6",
+        {issue.code for issue in issues},
+        {"unsupported_metric_claim"},
+    )

@@ -4,6 +4,7 @@ import pytest
 
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.redis import RedisClient
+from tests.helpers.checks import check_condition, check_exception, fail_check
 
 
 async def _test_clients() -> None:
@@ -13,18 +14,47 @@ async def _test_clients() -> None:
     try:
         RedisClient.get_client()
     except RuntimeError as error:
-        assert "RedisClient.initialize()" in str(error)
+        check_exception("_test_clients 捕获预期异常", error, RuntimeError)
+        check_condition(
+            "_test_clients 检查点 1",
+            "RedisClient.initialize()" in str(error),
+            expected="原断言条件成立",
+        )
     else:
-        raise AssertionError("未初始化时不应返回 Redis 客户端")
+        fail_check(
+            "_test_clients",
+            actual="未抛出预期异常",
+            expected="未初始化时不应返回 Redis 客户端",
+        )
 
     redis = RedisClient.initialize()
     try:
-        assert RedisClient.initialize() is redis
-        assert RedisClient.get_client() is redis
-        assert await redis.ping()
+        check_condition(
+            "_test_clients 检查点 2",
+            RedisClient.initialize() is redis,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_clients 检查点 3",
+            RedisClient.get_client() is redis,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_clients 检查点 4",
+            await redis.ping(),
+            expected="原断言条件成立",
+        )
         checkpointer = await CheckpointStore.initialize()
-        assert await CheckpointStore.initialize() is checkpointer
-        assert CheckpointStore.get_client() is checkpointer
+        check_condition(
+            "_test_clients 检查点 5",
+            await CheckpointStore.initialize() is checkpointer,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_clients 检查点 6",
+            CheckpointStore.get_client() is checkpointer,
+            expected="原断言条件成立",
+        )
         await checkpointer.adelete_thread("checkpoint-store-test")
     finally:
         await CheckpointStore.close()
@@ -32,8 +62,16 @@ async def _test_clients() -> None:
 
     replacement = RedisClient.initialize()
     try:
-        assert replacement is not redis
-        assert await replacement.ping()
+        check_condition(
+            "_test_clients 检查点 7",
+            replacement is not redis,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_clients 检查点 8",
+            await replacement.ping(),
+            expected="原断言条件成立",
+        )
     finally:
         await RedisClient.close()
 

@@ -7,6 +7,12 @@ from data_agent.infrastructure.llm_client import (
     _CapabilityProbe,
 )
 from data_agent.settings import app_config
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 
 async def _test_llm_client() -> None:
@@ -17,11 +23,25 @@ async def _test_llm_client() -> None:
         {"DATA_AGENT_LLM_API_KEY": "test-only-key"},
     ):
         client = LLMClient.initialize()
-        assert LLMClient.initialize() is client
-        assert LLMClient.get_client() is client
-        assert client.model_name == app_config.llm.model
-        assert str(client.openai_api_base).rstrip("/") == (
-            app_config.llm.base_url.rstrip("/")
+        check_condition(
+            "_test_llm_client 检查点 1",
+            LLMClient.initialize() is client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_llm_client 检查点 2",
+            LLMClient.get_client() is client,
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_llm_client 检查点 3",
+            client.model_name,
+            app_config.llm.model,
+        )
+        check_equal(
+            "_test_llm_client 检查点 4",
+            str(client.openai_api_base).rstrip("/"),
+            app_config.llm.base_url.rstrip("/"),
         )
     await LLMClient.close()
 
@@ -41,9 +61,18 @@ async def _test_llm_client() -> None:
         try:
             LLMClient.initialize()
         except RuntimeError as error:
-            assert "DATA_AGENT_LLM_API_KEY" in str(error)
+            check_exception("_test_llm_client 捕获预期异常", error, RuntimeError)
+            check_condition(
+                "_test_llm_client 检查点 5",
+                "DATA_AGENT_LLM_API_KEY" in str(error),
+                expected="原断言条件成立",
+            )
         else:
-            raise AssertionError("缺少模型密钥时必须失败")
+            fail_check(
+                "_test_llm_client",
+                actual="未抛出预期异常",
+                expected="缺少模型密钥时必须失败",
+            )
 
 
 async def test_llm_client() -> None:

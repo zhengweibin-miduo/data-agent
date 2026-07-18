@@ -8,6 +8,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from data_agent.infrastructure.mysql import MySQLDatabase
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 
 class _RollbackSignal(Exception):
@@ -21,28 +27,78 @@ async def _test_database_configuration() -> None:
     try:
         MySQLDatabase.get_client()
     except RuntimeError as error:
-        assert "MySQLDatabase.initialize()" in str(error)
+        check_exception(
+            "_test_database_configuration 捕获预期异常", error, RuntimeError
+        )
+        check_condition(
+            "_test_database_configuration 检查点 1",
+            "MySQLDatabase.initialize()" in str(error),
+            expected="原断言条件成立",
+        )
     else:
-        raise AssertionError("未初始化时不应返回 MySQL 引擎")
+        fail_check(
+            "_test_database_configuration",
+            actual="未抛出预期异常",
+            expected="未初始化时不应返回 MySQL 引擎",
+        )
 
     try:
         async with MySQLDatabase.session():
             pass
     except RuntimeError as error:
-        assert "MySQLDatabase.initialize()" in str(error)
+        check_exception(
+            "_test_database_configuration 捕获预期异常", error, RuntimeError
+        )
+        check_condition(
+            "_test_database_configuration 检查点 2",
+            "MySQLDatabase.initialize()" in str(error),
+            expected="原断言条件成立",
+        )
     else:
-        raise AssertionError("未初始化时不应创建 MySQL Session")
+        fail_check(
+            "_test_database_configuration",
+            actual="未抛出预期异常",
+            expected="未初始化时不应创建 MySQL Session",
+        )
 
     client = MySQLDatabase.initialize()
     session_factory = MySQLDatabase._session_factory
     try:
-        assert isinstance(client, AsyncEngine)
-        assert MySQLDatabase.get_client() is client
-        assert MySQLDatabase.initialize() is client
-        assert MySQLDatabase._session_factory is session_factory
-        assert client.url.drivername == "mysql+asyncmy"
-        assert client.pool._pre_ping is True
-        assert client.pool._recycle == 3600
+        check_condition(
+            "_test_database_configuration 检查点 3",
+            isinstance(client, AsyncEngine),
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 4",
+            MySQLDatabase.get_client() is client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 5",
+            MySQLDatabase.initialize() is client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 6",
+            MySQLDatabase._session_factory is session_factory,
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_database_configuration 检查点 7",
+            client.url.drivername,
+            "mysql+asyncmy",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 8",
+            client.pool._pre_ping is True,
+            expected="原断言条件成立",
+        )
+        check_equal(
+            "_test_database_configuration 检查点 9",
+            client.pool._recycle,
+            3600,
+        )
 
         barrier = asyncio.Barrier(2)
 
@@ -55,23 +111,67 @@ async def _test_database_configuration() -> None:
             capture_session(),
             capture_session(),
         )
-        assert isinstance(first_session, AsyncSession)
-        assert isinstance(second_session, AsyncSession)
-        assert first_session is not second_session
-        assert first_session.bind is client
-        assert second_session.bind is client
-        assert first_session.sync_session.expire_on_commit is False
-        assert second_session.sync_session.expire_on_commit is False
+        check_condition(
+            "_test_database_configuration 检查点 10",
+            isinstance(first_session, AsyncSession),
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 11",
+            isinstance(second_session, AsyncSession),
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 12",
+            first_session is not second_session,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 13",
+            first_session.bind is client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 14",
+            second_session.bind is client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 15",
+            first_session.sync_session.expire_on_commit is False,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 16",
+            second_session.sync_session.expire_on_commit is False,
+            expected="原断言条件成立",
+        )
     finally:
         await MySQLDatabase.close()
 
-    assert MySQLDatabase._client is None
-    assert MySQLDatabase._session_factory is None
+    check_condition(
+        "_test_database_configuration 检查点 17",
+        MySQLDatabase._client is None,
+        expected="原断言条件成立",
+    )
+    check_condition(
+        "_test_database_configuration 检查点 18",
+        MySQLDatabase._session_factory is None,
+        expected="原断言条件成立",
+    )
 
     new_client = MySQLDatabase.initialize()
     try:
-        assert new_client is not client
-        assert MySQLDatabase._session_factory is not session_factory
+        check_condition(
+            "_test_database_configuration 检查点 19",
+            new_client is not client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_database_configuration 检查点 20",
+            MySQLDatabase._session_factory is not session_factory,
+            expected="原断言条件成立",
+        )
     finally:
         await MySQLDatabase.close()
 
@@ -84,7 +184,11 @@ async def _test_session_transaction_lifecycle() -> None:
 
     with patch.object(MySQLDatabase, "_session_factory", normal_factory):
         async with MySQLDatabase.session() as session:
-            assert session is normal_session
+            check_condition(
+                "_test_session_transaction_lifecycle 检查点 1",
+                session is normal_session,
+                expected="原断言条件成立",
+            )
 
     normal_session.commit.assert_awaited_once_with()
     normal_session.rollback.assert_not_awaited()
@@ -100,9 +204,20 @@ async def _test_session_transaction_lifecycle() -> None:
             async with MySQLDatabase.session():
                 raise signal
     except _RollbackSignal as error:
-        assert error is signal
+        check_exception(
+            "_test_session_transaction_lifecycle 捕获预期异常", error, _RollbackSignal
+        )
+        check_condition(
+            "_test_session_transaction_lifecycle 检查点 2",
+            error is signal,
+            expected="原断言条件成立",
+        )
     else:
-        raise AssertionError("Session 上下文必须继续抛出业务异常")
+        fail_check(
+            "_test_session_transaction_lifecycle",
+            actual="未抛出预期异常",
+            expected="Session 上下文必须继续抛出业务异常",
+        )
 
     failed_session.commit.assert_not_awaited()
     failed_session.rollback.assert_awaited_once_with()
@@ -113,8 +228,16 @@ async def _test_session_transaction_lifecycle() -> None:
 
     async def dispose_and_reinitialize() -> None:
         nonlocal replacement_client
-        assert MySQLDatabase._client is None
-        assert MySQLDatabase._session_factory is None
+        check_condition(
+            "dispose_and_reinitialize 检查点 1",
+            MySQLDatabase._client is None,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "dispose_and_reinitialize 检查点 2",
+            MySQLDatabase._session_factory is None,
+            expected="原断言条件成立",
+        )
         replacement_client = MySQLDatabase.initialize()
 
     client.dispose = AsyncMock(side_effect=dispose_and_reinitialize)
@@ -125,13 +248,33 @@ async def _test_session_transaction_lifecycle() -> None:
     ):
         await MySQLDatabase.close()
         client.dispose.assert_awaited_once_with()
-        assert MySQLDatabase._client is replacement_client
-        assert replacement_client is not client
-        assert MySQLDatabase._session_factory is not None
+        check_condition(
+            "_test_session_transaction_lifecycle 检查点 3",
+            MySQLDatabase._client is replacement_client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_session_transaction_lifecycle 检查点 4",
+            replacement_client is not client,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_session_transaction_lifecycle 检查点 5",
+            MySQLDatabase._session_factory is not None,
+            expected="原断言条件成立",
+        )
 
         await MySQLDatabase.close()
-        assert MySQLDatabase._client is None
-        assert MySQLDatabase._session_factory is None
+        check_condition(
+            "_test_session_transaction_lifecycle 检查点 6",
+            MySQLDatabase._client is None,
+            expected="原断言条件成立",
+        )
+        check_condition(
+            "_test_session_transaction_lifecycle 检查点 7",
+            MySQLDatabase._session_factory is None,
+            expected="原断言条件成立",
+        )
 
 
 async def _test_mysql_client_integration() -> None:
@@ -139,7 +282,11 @@ async def _test_mysql_client_integration() -> None:
     client = MySQLDatabase.initialize()
     try:
         async with client.connect() as connection:
-            assert await connection.scalar(text("SELECT 1")) == 1
+            check_equal(
+                "_test_mysql_client_integration 检查点 1",
+                await connection.scalar(text("SELECT 1")),
+                1,
+            )
 
         async with client.begin() as connection:
             await connection.execute(
@@ -148,7 +295,11 @@ async def _test_mysql_client_integration() -> None:
 
         try:
             async with MySQLDatabase.session() as session:
-                assert await session.scalar(text("SELECT 1")) == 1
+                check_equal(
+                    "_test_mysql_client_integration 检查点 2",
+                    await session.scalar(text("SELECT 1")),
+                    1,
+                )
                 await session.execute(
                     text(
                         "CREATE TABLE session_transaction_test "
@@ -160,11 +311,12 @@ async def _test_mysql_client_integration() -> None:
                 )
 
             async with MySQLDatabase.session() as session:
-                assert (
+                check_equal(
+                    "_test_mysql_client_integration 检查点 3",
                     await session.scalar(
                         text("SELECT COUNT(*) FROM session_transaction_test")
-                    )
-                    == 1
+                    ),
+                    1,
                 )
 
             try:
@@ -177,11 +329,12 @@ async def _test_mysql_client_integration() -> None:
                 pass
 
             async with MySQLDatabase.session() as session:
-                assert (
+                check_equal(
+                    "_test_mysql_client_integration 检查点 4",
                     await session.scalar(
                         text("SELECT COUNT(*) FROM session_transaction_test")
-                    )
-                    == 1
+                    ),
+                    1,
                 )
         finally:
             async with client.begin() as connection:
