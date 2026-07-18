@@ -186,15 +186,14 @@ def finalize_and_validate_metrics(
     column_ids = {column.id for table in schema.tables for column in table.columns}
     question_ids = {question.question_id for question in questions}
     answered_ids = {answer.question_id for answer in answers if answer.answer.strip()}
-    finalized: list[MetricMetadata] = []
-    for metric in metrics:
-        finalized.append(
-            metric.model_copy(
-                update={
-                    "id": metric_id(source, metric.fact_table_id, metric.name),
-                }
-            )
+    finalized = [
+        metric.model_copy(
+            update={
+                "id": metric_id(source, metric.fact_table_id, metric.name),
+            }
         )
+        for metric in metrics
+    ]
     issues: list[ValidationIssue] = []
     names = [
         f"{metric.fact_table_id}\0{metric.name.strip().casefold()}"

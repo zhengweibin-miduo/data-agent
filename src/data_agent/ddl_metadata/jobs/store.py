@@ -322,8 +322,7 @@ class DDLJobStore:
             str(int(target in _TERMINAL)),
             str(len(values)),
         ]
-        for key, value in values.items():
-            arguments.extend((key, value))
+        arguments.extend(item for pair in values.items() for item in pair)
         arguments.append(str(app_config.redis.result_retention_seconds))
         changed = await _redis_awaitable(
             self._redis.eval(
