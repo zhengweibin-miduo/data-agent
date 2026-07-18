@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "按后端 Quality Check 核验完整范围。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "确认改动未越过运行时代码边界。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验静态检查、类型检查和测试结果。"}
+{"file": "code_review.md", "reason": "遵守项目 AI 代码审查与修复结论格式。"}
