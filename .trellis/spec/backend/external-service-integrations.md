@@ -78,6 +78,115 @@ HuggingFaceEndpointEmbeddings.model_construct(
 )
 ```
 
+## Scenario: Rebuildable Memory Search Projections
+
+### 1. Scope / Trigger
+
+Use this contract when changing memory indexing, the ES/Qdrant/TEI projection
+payload, outbox dispatch/rebuild, hybrid ranking, or search degradation.
+
+### 2. Signatures
+
+```python
+await MemoryElasticsearchIndex.setup() -> None
+await MemoryElasticsearchIndex.upsert(projection) -> None
+await MemoryElasticsearchIndex.delete(memory_uid) -> None
+await MemoryElasticsearchIndex.search(query, source, kinds, limit) -> list[str]
+
+await MemoryQdrantIndex.setup() -> None
+await MemoryQdrantIndex.upsert(projection, vector) -> None
+await MemoryQdrantIndex.delete(memory_uid) -> None
+await MemoryQdrantIndex.search(vector, source, kinds, limit) -> list[str]
+
+await MemoryIndexDispatcher.dispatch() -> int
+await MemoryIndexRebuilder.reset_indexes() -> None
+await MemoryIndexRebuilder.enqueue_batch(after_id=0) -> MemoryRebuildResult
+await MemorySearchService.search(
+    query,
+    source,
+    *,
+    kinds=None,
+    limit=None,
+    exact_uids=(),
+    allowed_object_ids=None,
+) -> MemorySearchResponse
+```
+
+### 3. Contracts
+
+- MySQL `agent_memory` is authoritative. ES and Qdrant are disposable derived
+  projections and may return only candidate UIDs.
+- Elasticsearch stores deterministic `memory_text` for BM25. Qdrant stores TEI
+  document embeddings under a stable point ID and the same bounded metadata.
+- Both indexes filter `source`, optional `kind`, `ACTIVE`, `content_version`,
+  and `projection_version` before ranking.
+- The outbox has one desired state per `(memory_uid, target)`. A target is
+  acknowledged independently only after its idempotent upsert/delete succeeds.
+  Failures retain the row with bounded exponential retry and a safe exception
+  type.
+- Full rebuild may recreate only the configured project index/collection, then
+  scans ACTIVE MySQL rows by primary-key cursor and enqueues both targets.
+- Search runs ES BM25 and TEI/Qdrant concurrently with the configured timeout,
+  excludes target signals that still have pending outbox work, and combines
+  the remaining ranks with stable RRF.
+- Before returning, search batch-loads MySQL and rejects missing, deleted,
+  wrong-source, wrong-kind, wrong-version, content-hash-mismatched, or
+  structurally incompatible rows. Index payload content is never returned.
+- One failed target degrades independently. If both fail, the MySQL exact
+  baseline remains available.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| ES unavailable or times out | Report ES degradation and continue with Qdrant plus MySQL exact |
+| TEI or Qdrant unavailable or times out | Report Qdrant degradation and continue with ES plus MySQL exact |
+| Both projection paths fail | Return only validated MySQL exact results |
+| A target has pending outbox work for a UID | Exclude that target's ranking signal for that UID |
+| Index UID is missing, deleted, stale, wrong-source, or hash-mismatched in MySQL | Reject it |
+| External write succeeds but outbox acknowledgement fails | Retry the idempotent desired state |
+| TEI vector dimension differs from Qdrant configuration | Raise `ValueError`; retain the outbox row for retry |
+| Rebuild is requested | Recreate only configured memory resources and repopulate via cursor batches |
+
+### 5. Good / Base / Bad Cases
+
+- Good: gather candidate UIDs concurrently, remove pending-target signals,
+  fuse ranks, and return only current MySQL rows after all contract checks.
+- Base: one exact MySQL result remains usable while either derived index is
+  unavailable.
+- Bad: return ES/Qdrant payloads directly, acknowledge before the external
+  write completes, share one acknowledgement across targets, or delete an
+  unscoped index/collection during rebuild.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/unit/ddl_metadata/test_memory.py
+uv run pytest tests/integration/test_memory_services.py
+uv run pytest tests/integration/test_memory_api.py
+uv run pytest -m "not tei"
+uv run ruff check src tests
+uv run pyright src tests
+```
+
+The tests must cover stable RRF, target-independent outbox handling, pending
+signal exclusion, MySQL revalidation, content-hash rejection, exact fallback,
+soft deletion, API history/update/delete, and rebuild cursor behavior. Live
+ES/Qdrant/TEI verification is a separate deployment check when Docker is
+available.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: a derived payload bypasses authority and staleness checks.
+return elasticsearch_hit["_source"]
+
+# Correct: indexes contribute only UIDs; MySQL content is reloaded and checked.
+candidate_uids = await index.search(query, source, kinds, limit)
+memories = await repository.get_many_active(candidate_uids)
+return validate_and_rank(memories)
+```
+
 ## Scenario: MySQL Async Engine and Transactional Sessions
 
 ### 1. Scope / Trigger

@@ -13,18 +13,24 @@ from data_agent.ddl_metadata.api import router as ddl_metadata_router
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.memory.service import MemoryService
+from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
+from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.logging import setup_logging
 from data_agent.settings import app_config
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """显式管理 API 进程内的 Redis/MySQL 生命周期。"""
+    """显式管理 API 进程内的数据库与派生检索客户端。"""
     setup_logging()
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
+    ElasticsearchClient.initialize()
+    QdrantClient.initialize()
+    TEIEmbeddingClient.initialize()
     jobs = DDLJobStore(redis)
     app.state.jobs = jobs
     app.state.memories = MemoryService(jobs)
@@ -38,6 +44,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await TEIEmbeddingClient.close()
+        await QdrantClient.close()
+        await ElasticsearchClient.close()
         await MySQLDatabase.close()
         await RedisClient.close()
         logger.bind(
@@ -100,7 +109,7 @@ def create_app() -> FastAPI:
             str(origin).rstrip("/") for origin in app_config.api.cors_origins
         ],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
     app.add_exception_handler(DDLMetadataError, _handle_business_error)

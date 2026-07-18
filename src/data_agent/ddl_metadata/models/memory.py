@@ -1,4 +1,4 @@
-"""长期记忆内容、关系与管理契约。"""
+"""Mem0 风格长期语义记忆的领域契约。"""
 
 from __future__ import annotations
 
@@ -27,19 +27,57 @@ class MemoryKind(StrEnum):
     METRIC_DEFINITION = "METRIC_DEFINITION"
 
 
-class MemoryRowStatus(StrEnum):
-    """长期记忆行状态。"""
+class MemoryStatus(StrEnum):
+    """权威记忆状态。"""
 
-    NORMAL = "NORMAL"
-    ARCHIVED = "ARCHIVED"
+    ACTIVE = "ACTIVE"
+    DELETED = "DELETED"
 
 
-class MemoryRelationType(StrEnum):
-    """长期记忆关系类型。"""
+class MemoryTrust(StrEnum):
+    """记忆事实的可信来源。"""
 
-    REFERENCE = "REFERENCE"
-    COMMENT = "COMMENT"
+    MODEL_VALIDATED = "model_validated"
+    USER_CONFIRMED = "user_confirmed"
+
+
+class MemoryEventType(StrEnum):
+    """只追加历史事件类型。"""
+
+    ADD = "ADD"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    LINK = "LINK"
+
+
+class MemoryActorType(StrEnum):
+    """记忆事件执行者类型。"""
+
+    WORKFLOW = "WORKFLOW"
+    USER = "USER"
+    SYSTEM = "SYSTEM"
+
+
+class MemoryLinkType(StrEnum):
+    """领域记忆关联类型。"""
+
+    RELATED = "RELATED"
+    DERIVED_FROM = "DERIVED_FROM"
     SUPERSEDES = "SUPERSEDES"
+
+
+class MemoryIndexTarget(StrEnum):
+    """可重建索引目标。"""
+
+    ELASTICSEARCH = "ELASTICSEARCH"
+    QDRANT = "QDRANT"
+
+
+class MemoryIndexOperation(StrEnum):
+    """索引期望操作。"""
+
+    UPSERT = "UPSERT"
+    DELETE = "DELETE"
 
 
 class SemanticDecisionContent(ContractModel):
@@ -92,105 +130,145 @@ MemoryContent = Annotated[
 MEMORY_CONTENT_ADAPTER = TypeAdapter(MemoryContent)
 
 
-class MemoryPayload(ContractModel):
-    """可从规范内容重建的检索载荷。"""
+class MemoryProjection(ContractModel):
+    """ES 与 Qdrant 共享的有界索引投影。"""
 
-    version: str
-    trust: Literal["model_validated", "user_confirmed"]
-    object_ids: list[str]
-    tags: list[str]
-    model: str | None = None
-    prompt_version: str
-    graph_version: str
-
-
-class MemoryCandidate(ContractModel):
-    """与 Meta 快照一并提交的长期记忆候选。"""
-
-    uid: str
-    source: str
-    kind: MemoryKind
-    scope_key: str
-    schema_fingerprint: str
-    pinned: bool = False
-    content: MemoryContent
-    payload: MemoryPayload
-    content_version: str
-    reference_uids: list[str] = Field(default_factory=list)
-    comment_uids: list[str] = Field(default_factory=list)
-    supersedes_uids: list[str] = Field(default_factory=list)
-
-
-class MemoryRelation(ContractModel):
-    """浏览器可见的记忆关系。"""
-
-    relation_type: MemoryRelationType
     memory_uid: str
-    related_memory_uid: str
-
-
-class MemoryListItem(ContractModel):
-    """有界记忆列表项。"""
-
-    uid: str
     source: str
     kind: MemoryKind
     scope_key: str
     schema_fingerprint: str
-    row_status: MemoryRowStatus
-    pinned: bool
-    summary: str
+    memory_text: str
+    content_hash: str
+    object_ids: list[str]
+    trust: MemoryTrust
+    status: MemoryStatus
+    content_version: str
+    projection_version: str
     created_at: datetime
     updated_at: datetime
 
 
-class MemoryDetail(MemoryListItem):
-    """有界记忆详情。"""
+class MemoryCandidate(ContractModel):
+    """与 Meta 快照一并提交的权威记忆候选。"""
+
+    uid: str
+    source: str
+    kind: MemoryKind
+    scope_key: str
+    schema_fingerprint: str
+    memory_text: str
+    content: MemoryContent
+    content_hash: str
+    trust: MemoryTrust
+    content_version: str
+    projection_version: str
+    created_job_id: str
+    derived_from_uids: list[str] = Field(default_factory=list)
+    related_uids: list[str] = Field(default_factory=list)
+    supersedes_uids: list[str] = Field(default_factory=list)
+
+
+class MemoryLink(ContractModel):
+    """浏览器可见的记忆关联。"""
+
+    link_type: MemoryLinkType
+    memory_uid: str
+    linked_memory_uid: str
+
+
+class MemoryDetail(ContractModel):
+    """来自 MySQL 权威内容的有界记忆详情。"""
+
+    uid: str
+    source: str
+    kind: MemoryKind
+    scope_key: str
+    schema_fingerprint: str
+    memory_text: str
+    content: MemoryContent
+    content_hash: str
+    trust: MemoryTrust
+    status: MemoryStatus
+    content_version: str
+    projection_version: str
+    created_job_id: str
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+    links: list[MemoryLink] = Field(default_factory=list)
+
+
+class MemorySearchHit(ContractModel):
+    """经过 MySQL 回查的混合检索结果。"""
+
+    memory: MemoryDetail
+    score: float = Field(ge=0)
+    signals: list[str]
+
+
+class MemorySearchResponse(ContractModel):
+    """有界混合检索响应。"""
+
+    items: list[MemorySearchHit]
+    degraded_targets: list[MemoryIndexTarget] = Field(default_factory=list)
+
+
+class MemoryEvent(ContractModel):
+    """一条有界的只追加历史事件。"""
+
+    id: int
+    memory_uid: str
+    event_type: MemoryEventType
+    old_content: MemoryContent | None = None
+    new_content: MemoryContent | None = None
+    job_id: str | None = None
+    actor_type: MemoryActorType
+    created_at: datetime
+
+
+class MemoryHistoryPage(ContractModel):
+    """偏移分页的记忆历史。"""
+
+    items: list[MemoryEvent]
+    offset: int
+    limit: int
+    has_more: bool
+
+
+class MemoryUpdateRequest(ContractModel):
+    """同种类、同作用域的结构化用户修正。"""
 
     content: MemoryContent
-    payload: MemoryPayload
-    relations: list[MemoryRelation]
 
 
-class MemoryPage(ContractModel):
-    """游标分页的记忆列表。"""
-
-    items: list[MemoryListItem]
-    next_cursor: str | None = None
-
-
-class MemoryPatchRequest(ContractModel):
-    """记忆 pin/archive 管理请求。"""
-
-    pinned: bool | None = None
-    row_status: Literal[MemoryRowStatus.ARCHIVED] | None = None
-
-    @model_validator(mode="after")
-    def validate_single_change(self) -> MemoryPatchRequest:
-        """一次请求只允许一种管理变更。"""
-        if (self.pinned is None) == (self.row_status is None):
-            raise ValueError("必须且只能提供 pinned 或 row_status")
-        return self
-
-
-class MemoryCorrectionRequest(ContractModel):
-    """结构化记忆修正请求。"""
-
-    content: MemoryContent
-
-
-class MemoryCorrectionResponse(ContractModel):
-    """记忆修正响应。"""
+class MemoryUpdateResponse(ContractModel):
+    """待重新处理的用户修正响应。"""
 
     memory_uid: str
-    supersedes_uid: str
+    event_id: int
     requires_reprocess: Literal[True] = True
 
 
-class PayloadRebuildResult(ContractModel):
-    """记忆载荷批量重建结果。"""
+class MemoryDeleteResponse(ContractModel):
+    """可审计软删除响应。"""
+
+    memory_uid: str
+    deleted: Literal[True] = True
+
+
+class MemoryOutboxItem(ContractModel):
+    """worker 领取的一条索引期望状态。"""
+
+    memory_uid: str
+    target: MemoryIndexTarget
+    operation: MemoryIndexOperation
+    projection_version: str
+    attempts: int
+
+
+class MemoryRebuildResult(ContractModel):
+    """全量重建批次结果。"""
 
     processed: int
-    succeeded: int
-    failed: int
     next_after_id: int | None = None

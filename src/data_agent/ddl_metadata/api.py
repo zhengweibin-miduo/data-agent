@@ -10,13 +10,13 @@ from data_agent.ddl_metadata.models import (
     DDLJobAccepted,
     DDLJobRequest,
     JobRecord,
-    MemoryCorrectionRequest,
-    MemoryCorrectionResponse,
+    MemoryDeleteResponse,
     MemoryDetail,
+    MemoryHistoryPage,
     MemoryKind,
-    MemoryPage,
-    MemoryPatchRequest,
-    MemoryRowStatus,
+    MemorySearchResponse,
+    MemoryUpdateRequest,
+    MemoryUpdateResponse,
 )
 
 router = APIRouter()
@@ -92,26 +92,22 @@ async def answer_job(
 
 
 @router.get(
-    "/api/v1/metadata/memories",
-    response_model=MemoryPage,
+    "/api/v1/metadata/memories/search",
+    response_model=MemorySearchResponse,
 )
-async def list_memories(
+async def search_memories(
     request: Request,
+    query: str = Query(min_length=1, max_length=2000),
     source: str = Query(min_length=1, max_length=128),
-    kind: MemoryKind | None = None,
-    row_status: MemoryRowStatus = MemoryRowStatus.NORMAL,
-    pinned: bool | None = None,
-    limit: int = Query(default=50, ge=1, le=100),
-    cursor: str | None = None,
-) -> MemoryPage:
-    """按来源和有界过滤条件分页列出记忆。"""
-    return await _memories(request).list_page(
+    kind: list[MemoryKind] | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> MemorySearchResponse:
+    """按来源、查询和可选类型执行混合检索。"""
+    return await _memories(request).search(
+        query,
         source,
-        kind=kind,
-        row_status=row_status,
-        pinned=pinned,
+        kinds=set(kind) if kind else None,
         limit=limit,
-        cursor=cursor,
     )
 
 
@@ -120,32 +116,48 @@ async def list_memories(
     response_model=MemoryDetail,
 )
 async def get_memory(memory_uid: str, request: Request) -> MemoryDetail:
-    """读取一条有界记忆详情。"""
-    return await _memories(request).get_detail(memory_uid)
+    """从 MySQL 读取一条权威记忆详情。"""
+    return await _memories(request).get(memory_uid)
+
+
+@router.get(
+    "/api/v1/metadata/memories/{memory_uid}/history",
+    response_model=MemoryHistoryPage,
+)
+async def get_memory_history(
+    memory_uid: str,
+    request: Request,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> MemoryHistoryPage:
+    """读取记忆的有界只追加历史。"""
+    return await _memories(request).history(
+        memory_uid,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.patch(
     "/api/v1/metadata/memories/{memory_uid}",
-    response_model=MemoryDetail,
+    response_model=MemoryUpdateResponse,
 )
-async def patch_memory(
+async def update_memory(
     memory_uid: str,
-    body: MemoryPatchRequest,
+    body: MemoryUpdateRequest,
     request: Request,
-) -> MemoryDetail:
-    """幂等修改记忆的 pin 或 archive 状态。"""
-    return await _memories(request).patch(memory_uid, body)
+) -> MemoryUpdateResponse:
+    """记录结构化用户修正并要求重新处理 DDL。"""
+    return await _memories(request).update(memory_uid, body.content)
 
 
-@router.post(
-    "/api/v1/metadata/memories/{memory_uid}/corrections",
-    response_model=MemoryCorrectionResponse,
-    status_code=status.HTTP_201_CREATED,
+@router.delete(
+    "/api/v1/metadata/memories/{memory_uid}",
+    response_model=MemoryDeleteResponse,
 )
-async def correct_memory(
+async def delete_memory(
     memory_uid: str,
-    body: MemoryCorrectionRequest,
     request: Request,
-) -> MemoryCorrectionResponse:
-    """追加用户确认的记忆修正。"""
-    return await _memories(request).correct(memory_uid, body.content)
+) -> MemoryDeleteResponse:
+    """执行可审计软删除并排除未来召回。"""
+    return await _memories(request).delete(memory_uid)

@@ -4,10 +4,12 @@ from dataclasses import dataclass, field
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.identifiers import scope_fingerprint
+from data_agent.ddl_metadata.memory.payloads import memory_content_hash
+from data_agent.ddl_metadata.memory.search import MemorySearchService
 from data_agent.ddl_metadata.models import (
     MemoryContent,
     MemoryKind,
-    MemoryRelationType,
+    MemoryLinkType,
     MetricAnswer,
     MetricDefinitionContent,
     MetricMetadata,
@@ -48,11 +50,9 @@ def _choose_memory(
     scope_key: str,
     memories: list[StoredMemory],
 ) -> StoredMemory | None:
-    """应用 pinned user-confirmed 优先级并拒绝活动冲突。"""
+    """应用用户确认优先级并拒绝同作用域活动冲突。"""
     preferred = [
-        memory
-        for memory in memories
-        if memory.item.pinned and memory.content.trust == "user_confirmed"
+        memory for memory in memories if memory.content.trust == "user_confirmed"
     ]
     choices = preferred or memories
     if not choices:
@@ -91,9 +91,17 @@ class MemoryContextLoader:
                 schema.source,
                 fingerprints,
                 MemoryKind.SEMANTIC_DECISION,
-                app_config.memory.payload_version,
                 app_config.memory.content_version,
             )
+            grouped = {
+                scope: [
+                    memory
+                    for memory in memories
+                    if memory_content_hash(memory.content)
+                    == memory.detail.content_hash
+                ]
+                for scope, memories in grouped.items()
+            }
             metric_memories = await repository.find_active_by_fingerprint(
                 schema.source,
                 schema.schema_fingerprint,
@@ -102,10 +110,14 @@ class MemoryContextLoader:
                     MemoryKind.USER_ANSWER,
                     MemoryKind.METRIC_DEFINITION,
                 },
-                app_config.memory.payload_version,
                 app_config.memory.content_version,
             )
-            metric_reference_uids = await repository.related_uids(
+            metric_memories = [
+                memory
+                for memory in metric_memories
+                if memory_content_hash(memory.content) == memory.detail.content_hash
+            ]
+            metric_reference_uids = await repository.linked_uids(
                 {
                     memory.id
                     for memory in metric_memories
@@ -114,8 +126,45 @@ class MemoryContextLoader:
                         MetricDefinitionContent,
                     )
                 },
-                MemoryRelationType.REFERENCE,
+                MemoryLinkType.DERIVED_FROM,
             )
+            pending_updates = await repository.pending_user_updates(
+                schema.source,
+                {
+                    *fingerprints,
+                    *(memory.detail.scope_key for memory in metric_memories),
+                },
+            )
+        allowed_object_ids = set(fingerprints)
+        query = "；".join(
+            value
+            for table in schema.tables
+            for value in (
+                f"表 {table.qualified_name} {table.comment or ''}",
+                *(
+                    f"列 {table.qualified_name}.{column.name} "
+                    f"{column.data_type} {column.comment or ''}"
+                    for column in table.columns
+                ),
+            )
+        )[:2000]
+        hybrid = await MemorySearchService().search(
+            query,
+            schema.source,
+            kinds={MemoryKind.SEMANTIC_DECISION},
+            limit=app_config.memory.search_limit,
+            allowed_object_ids=allowed_object_ids,
+        )
+        for hit in hybrid.items:
+            scope = hit.memory.scope_key
+            if scope not in grouped or grouped[scope]:
+                continue
+            grouped[scope] = [
+                StoredMemory(
+                    id=0,
+                    detail=hit.memory,
+                )
+            ]
         capsule: list[MemoryContent] = []
         tables: list[SemanticTable] = []
         columns: list[SemanticColumn] = []
@@ -123,10 +172,8 @@ class MemoryContextLoader:
             selected = _choose_memory(scope_key, memories)
             if selected is None:
                 continue
-            content = selected.content
+            content = pending_updates.get(scope_key, selected.content)
             if not isinstance(content, SemanticDecisionContent):
-                continue
-            if set(selected.payload.object_ids) != {scope_key}:
                 continue
             if content.table is not None and content.table.table_id == scope_key:
                 tables.append(content.table)
@@ -136,28 +183,39 @@ class MemoryContextLoader:
                 continue
             capsule.append(content)
         metadata = SemanticMetadata(tables=tables, columns=columns)
-        if validate_metadata(schema, metadata):
+        semantic_issues = validate_metadata(schema, metadata)
+        if any(issue.code != "missing_object" for issue in semantic_issues):
+            return LoadedMemoryContext([], None, [], [], [])
+        if semantic_issues:
             return LoadedMemoryContext(capsule, None, [], [], [])
 
         referenced_uids = {
             uid for uids in metric_reference_uids.values() for uid in uids
         }
+
+        def effective(memory: StoredMemory) -> MemoryContent:
+            """优先返回待重新处理的用户确认内容。"""
+            return pending_updates.get(
+                memory.detail.scope_key,
+                memory.content,
+            )
+
         questions = [
-            memory.content.question
+            content.question
             for memory in metric_memories
-            if isinstance(memory.content, MetricQuestionContent)
-            and memory.item.uid in referenced_uids
+            if isinstance((content := effective(memory)), MetricQuestionContent)
+            and memory.detail.uid in referenced_uids
         ]
         answers = [
-            memory.content.answer
+            content.answer
             for memory in metric_memories
-            if isinstance(memory.content, UserAnswerContent)
-            and memory.item.uid in referenced_uids
+            if isinstance((content := effective(memory)), UserAnswerContent)
+            and memory.detail.uid in referenced_uids
         ]
         metrics = [
-            memory.content.metric
+            content.metric
             for memory in metric_memories
-            if isinstance(memory.content, MetricDefinitionContent)
+            if isinstance((content := effective(memory)), MetricDefinitionContent)
         ]
         finalized, metric_issues = finalize_and_validate_metrics(
             schema.source,
@@ -172,22 +230,19 @@ class MemoryContextLoader:
             answers = []
             finalized = []
         reused_metrics = {metric.id for metric in finalized}
+        reused_metric_content: list[MemoryContent] = []
+        for memory in metric_memories:
+            content = effective(memory)
+            if (
+                isinstance(content, MetricDefinitionContent)
+                and content.metric.id in reused_metrics
+            ):
+                reused_metric_content.append(content)
         return LoadedMemoryContext(
             semantic_capsule=capsule,
             complete_semantic=metadata,
             questions=questions,
             answers=answers,
             metrics=finalized,
-            reused_memory=[
-                *capsule,
-                *[
-                    memory.content
-                    for memory in metric_memories
-                    if isinstance(
-                        memory.content,
-                        MetricDefinitionContent,
-                    )
-                    and memory.content.metric.id in reused_metrics
-                ],
-            ],
+            reused_memory=[*capsule, *reused_metric_content],
         )

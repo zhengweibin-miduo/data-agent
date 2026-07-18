@@ -34,6 +34,11 @@ from sqlalchemy.exc import OperationalError
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.memory.context import MemoryContextLoader
+from data_agent.ddl_metadata.memory.indexes import (
+    MemoryElasticsearchIndex,
+    MemoryQdrantIndex,
+)
+from data_agent.ddl_metadata.memory.outbox import MemoryIndexDispatcher
 from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
 from data_agent.ddl_metadata.models import (
     JobError,
@@ -49,9 +54,12 @@ from data_agent.ddl_metadata.workflow.graph import (
 )
 from data_agent.ddl_metadata.workflow.metadata_generator import LLMMetadataGenerator
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
+from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.llm_client import LLMClient
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
+from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.logging import setup_logging
 from data_agent.settings import app_config
 
@@ -487,11 +495,43 @@ async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
         await jobs.acknowledge_checkpoint_cleanup(job_id)
 
 
+async def dispatch_memory_index_outbox(ctx: dict[Any, Any]) -> None:
+    """周期性同步可重建 ES/Qdrant 记忆投影。"""
+    del ctx
+    await MemoryIndexDispatcher().dispatch()
+
+
 async def startup(ctx: dict[Any, Any]) -> None:
     """显式初始化 worker 的全部长生命周期依赖。"""
     setup_logging()
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
+    elasticsearch = ElasticsearchClient.initialize()
+    qdrant = QdrantClient.initialize()
+    TEIEmbeddingClient.initialize()
+    for target, setup in (
+        (
+            "ELASTICSEARCH",
+            MemoryElasticsearchIndex(elasticsearch).setup,
+        ),
+        (
+            "QDRANT",
+            MemoryQdrantIndex(qdrant).setup,
+        ),
+    ):
+        try:
+            await setup()
+        except Exception as error:
+            logger.bind(
+                trace_id="-",
+                component="ddl_metadata.worker",
+                event_name="ddl_metadata.memory.index_initialization_deferred",
+                operation="setup_memory_index",
+                outcome="deferred",
+                stage=target.lower(),
+                error_type=type(error).__name__,
+                retryable=True,
+            ).warning("记忆索引初始化延后")
     LLMClient.initialize()
     await LLMClient.check_structured_output_capability()
     checkpointer = await CheckpointStore.initialize()
@@ -520,6 +560,9 @@ async def shutdown(ctx: dict[Any, Any]) -> None:
     del ctx
     await CheckpointStore.close()
     await LLMClient.close()
+    await TEIEmbeddingClient.close()
+    await QdrantClient.close()
+    await ElasticsearchClient.close()
     await MySQLDatabase.close()
     await RedisClient.close()
     logger.bind(
@@ -552,6 +595,11 @@ class WorkerSettings:
         cron(
             cleanup_checkpoints,
             second={5, 15, 25, 35, 45, 55},
+        ),
+        cron(
+            dispatch_memory_index_outbox,
+            second={2, 12, 22, 32, 42, 52},
+            run_at_startup=True,
         ),
     ]
     on_startup = startup

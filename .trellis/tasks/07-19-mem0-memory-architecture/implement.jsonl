@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "定义 memory、workflow、persistence、infrastructure、API 与 worker 的模块边界。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "定义 MySQL Session、跨库原子事务、SQLAlchemy Core 和权威记忆持久化边界。"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "定义 TEI、Redis checkpoint 和外部异步客户端生命周期。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "定义 API 安全错误、worker 重试和索引降级行为。"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "定义 outbox、检索和外部服务日志的安全边界。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "定义测试结构、CI 命令、中文 Docstring 和集成测试要求。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "该变更跨 API、图状态、MySQL、outbox、ES、Qdrant 和 worker，需要完整数据流检查。"}
+{"file": ".trellis/tasks/07-19-mem0-memory-architecture/research/mem0-open-source-architecture.md", "reason": "提供固定提交的 Mem0 add/search/history/vector-store 参考与领域映射。"}

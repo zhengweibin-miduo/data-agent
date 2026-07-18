@@ -90,7 +90,7 @@ status and a safe envelope:
 Configured mappings include:
 
 - unknown jobs/memories: `404`;
-- stale answers, source leases, immutable/archive conflicts: `409`;
+- stale answers, source leases, immutable/deleted conflicts: `409`;
 - expired answers: `410`;
 - request/Pydantic validation, unknown/duplicate answer IDs, and business input
   rejection: `422`;
@@ -136,10 +136,11 @@ metric answers, browser memory management, CORS, or safe error projection.
 POST /api/v1/metadata/ddl-jobs
 GET /api/v1/metadata/ddl-jobs/{job_id}
 POST /api/v1/metadata/ddl-jobs/{job_id}/answers
-GET /api/v1/metadata/memories
+GET /api/v1/metadata/memories/search
 GET /api/v1/metadata/memories/{memory_uid}
+GET /api/v1/metadata/memories/{memory_uid}/history
 PATCH /api/v1/metadata/memories/{memory_uid}
-POST /api/v1/metadata/memories/{memory_uid}/corrections
+DELETE /api/v1/metadata/memories/{memory_uid}
 ```
 
 ### 3. Contracts
@@ -150,11 +151,11 @@ POST /api/v1/metadata/memories/{memory_uid}/corrections
   bounded questions, revision, and expiry.
 - Answer requires the current revision and question-set ID; its question IDs
   must exactly match the current set.
-- Memory list requires a source, defaults to active records, caps page size,
-  and uses an opaque cursor. Detail caps relation projection at 500.
-- Pin/archive affect future retrieval only. Correction creates a
-  user-confirmed replacement and reports `requires_reprocess=true`; it does not
-  patch current Meta.
+- Memory search requires source and a bounded query, caps result size, and
+  returns only MySQL-rechecked authoritative content.
+- PATCH appends a user-confirmed update event and reports
+  `requires_reprocess=true`; DELETE is an audited soft delete. Neither silently
+  patches current Meta.
 - Default host is `127.0.0.1`; configured CORS origins must resolve to local
   browser origins. Authentication and non-loopback deployment are unsupported.
 
@@ -164,11 +165,11 @@ POST /api/v1/metadata/memories/{memory_uid}/corrections
 |---|---|
 | Accepted submit | `202 pending` with opaque job ID |
 | Unknown job or memory | `404` |
-| Stale answer, active source lease, immutable/archive conflict | `409` |
+| Stale answer, active source lease, immutable/deleted conflict | `409` |
 | Answer deadline expired | `410 rejected` and checkpoint cleanup scheduled |
 | Invalid DDL, payload, filter, or answer IDs | `422` with safe error code |
 | Redis unavailable during submit/resume | `503`; never claim acceptance |
-| Valid memory correction | `201`, new UID, superseded UID, `requires_reprocess=true` |
+| Valid memory update | `200`, event ID, `requires_reprocess=true` |
 
 ### 5. Good / Base / Bad Cases
 
@@ -188,7 +189,7 @@ uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```
 
 Tests must assert `202/404/409/410/422/503`, answer compare-and-set, timeout
-cleanup, bounded memory projection, correction reprocessing, loopback defaults,
+cleanup, bounded memory projection, update reprocessing, loopback defaults,
 and rejection of non-local CORS origins.
 
 ### 7. Wrong vs Correct

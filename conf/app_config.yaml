@@ -15,12 +15,20 @@ logging:
 
 qdrant:
   url: http://localhost:6333
+  memory_collection: data_agent_memory_v2
+  vector_size: 1024
+  distance: Cosine
+  top_k: 20
 
 elasticsearch:
   url: http://localhost:9200
+  memory_index: data_agent_memory_v2
+  analyzer: ik_max_word
+  top_k: 20
 
 tei:
   url: http://localhost:8080
+  vector_size: 1024
 
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
@@ -58,6 +66,11 @@ llm:
 memory:
   database: data_agent
   content_version: v1
-  payload_version: v1
+  projection_version: v1
   source_lease_seconds: 3600
   rebuild_batch_size: 100
+  outbox_batch_size: 100
+  outbox_max_backoff_seconds: 3600
+  retrieval_timeout_seconds: 2
+  rrf_constant: 60
+  search_limit: 20

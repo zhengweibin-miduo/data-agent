@@ -1,19 +1,30 @@
-"""长期记忆派生载荷的构建与批量重建。"""
+"""权威内容到有界检索投影的确定性转换。"""
 
+import hashlib
 import json
 
-from loguru import logger
-
 from data_agent.ddl_metadata.models import (
-    MEMORY_CONTENT_ADAPTER,
     MemoryContent,
     MemoryKind,
-    MemoryPayload,
-    PayloadRebuildResult,
+    MemoryProjection,
 )
-from data_agent.ddl_metadata.persistence.memory_repository import MemoryRepository
-from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.settings import app_config
+
+_MAX_MEMORY_TEXT_LENGTH = 2048
+
+
+def canonical_content_json(content: MemoryContent) -> str:
+    """生成稳定且不含空白差异的权威内容 JSON。"""
+    return json.dumps(
+        content.model_dump(mode="json", exclude_none=True),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def memory_content_hash(content: MemoryContent) -> str:
+    """计算权威类型化内容的 SHA-256。"""
+    return hashlib.sha256(canonical_content_json(content).encode()).hexdigest()
 
 
 def content_object_ids(content: MemoryContent) -> list[str]:
@@ -24,10 +35,7 @@ def content_object_ids(content: MemoryContent) -> list[str]:
         if content.column is not None:
             return [content.column.column_id]
     elif content.kind == MemoryKind.METRIC_QUESTION:
-        return [
-            content.question.fact_table_id,
-            *content.question.column_ids,
-        ]
+        return [content.question.fact_table_id, *content.question.column_ids]
     elif content.kind == MemoryKind.METRIC_DEFINITION:
         return [
             content.metric.id,
@@ -37,78 +45,51 @@ def content_object_ids(content: MemoryContent) -> list[str]:
     return []
 
 
-def build_memory_payload(content: MemoryContent) -> MemoryPayload:
-    """从规范内容确定性重建有界检索载荷。"""
-    tags: set[str] = {content.kind.value}
+def build_memory_text(content: MemoryContent) -> str:
+    """从已验证内容生成自包含、有界且稳定的检索文本。"""
     if content.kind == MemoryKind.SEMANTIC_DECISION:
         decision = content.table or content.column
         if decision is None:
             raise ValueError("语义决策缺少对象")
-        tags.update(decision.aliases)
-        tags.add(decision.role.value)
-    elif content.kind == MemoryKind.METRIC_DEFINITION:
-        tags.add(content.metric.name)
-        tags.update(content.metric.aliases)
-    elif content.kind == MemoryKind.METRIC_QUESTION:
-        tags.add(content.question.question_id)
-    else:
-        tags.add(content.answer.question_id)
-    return MemoryPayload(
-        version=app_config.memory.payload_version,
-        trust=content.trust,
-        object_ids=sorted(set(content_object_ids(content))),
-        tags=sorted(tag[:128] for tag in tags if tag)[:100],
-        model=(app_config.llm.model if content.trust == "model_validated" else None),
-        prompt_version=app_config.llm.prompt_version,
-        graph_version=app_config.llm.graph_version,
-    )
-
-
-class MemoryPayloadRebuilder:
-    """从规范内容重建一个有界批次的派生载荷。"""
-
-    async def rebuild(
-        self,
-        source: str | None = None,
-        after_id: int = 0,
-    ) -> PayloadRebuildResult:
-        """逐行隔离失败，保留规范内容并报告计数。"""
-        processed = succeeded = failed = 0
-        async with MySQLDatabase.session() as session:
-            repository = MemoryRepository(session)
-            rows = await repository.rebuild_rows(
-                app_config.memory.rebuild_batch_size,
-                source,
-                after_id,
+        if content.table is not None:
+            object_id = content.table.table_id
+        elif content.column is not None:
+            object_id = content.column.column_id
+        else:
+            raise ValueError("语义决策缺少对象")
+        text = "；".join(
+            (
+                f"类型：{content.kind.value}",
+                f"对象：{object_id}",
+                f"角色：{decision.role.value}",
+                f"描述：{decision.description}",
+                f"别名：{'、'.join(sorted(decision.aliases))}",
             )
-            for row in rows:
-                processed += 1
-                try:
-                    content = MEMORY_CONTENT_ADAPTER.validate_python(
-                        json.loads(row["content"])
-                        if isinstance(row["content"], str)
-                        else row["content"]
-                    )
-                    async with session.begin_nested():
-                        await repository.update_payload(
-                            int(row["id"]),
-                            build_memory_payload(content),
-                        )
-                    succeeded += 1
-                except Exception as error:
-                    failed += 1
-                    logger.bind(trace_id="-").warning(
-                        "记忆载荷重建失败 uid={} error_type={}",
-                        row["uid"],
-                        type(error).__name__,
-                    )
-        return PayloadRebuildResult(
-            processed=processed,
-            succeeded=succeeded,
-            failed=failed,
-            next_after_id=(
-                int(rows[-1]["id"])
-                if len(rows) == app_config.memory.rebuild_batch_size
-                else None
-            ),
         )
+    elif content.kind == MemoryKind.METRIC_QUESTION:
+        question = content.question
+        text = (
+            f"类型：{content.kind.value}；问题标识：{question.question_id}；"
+            f"问题：{question.prompt}；事实表：{question.fact_table_id}；"
+            f"相关列：{'、'.join(sorted(question.column_ids))}"
+        )
+    elif content.kind == MemoryKind.USER_ANSWER:
+        answer = content.answer
+        text = (
+            f"类型：{content.kind.value}；问题标识：{answer.question_id}；"
+            f"用户确认回答：{answer.answer}"
+        )
+    else:
+        metric = content.metric
+        text = (
+            f"类型：{content.kind.value}；指标：{metric.name}；"
+            f"定义：{metric.definition}；事实表：{metric.fact_table_id}；"
+            f"相关列：{'、'.join(sorted(metric.relevant_column_ids))}；"
+            f"别名：{'、'.join(sorted(metric.aliases))}"
+        )
+    return text[:_MAX_MEMORY_TEXT_LENGTH]
+
+
+def projection_object_ids(projection: MemoryProjection) -> list[str]:
+    """返回已去重排序的投影对象标识。"""
+    return sorted(set(projection.object_ids))

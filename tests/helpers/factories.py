@@ -15,10 +15,12 @@ from data_agent.ddl_metadata.models import (
     TableRole,
 )
 from data_agent.ddl_metadata.persistence.tables import (
+    agent_memory,
+    agent_memory_event,
+    agent_memory_link,
     column_info,
     column_metric,
-    llm_memory,
-    llm_memory_relation,
+    memory_index_outbox,
     metadata,
     metric_info,
     table_info,
@@ -108,21 +110,37 @@ async def cleanup_schema(schema: PhysicalSchema) -> None:
         memory_ids = set(
             (
                 await session.scalars(
-                    select(llm_memory.c.id).where(llm_memory.c.source == schema.source)
+                    select(agent_memory.c.id).where(
+                        agent_memory.c.source == schema.source
+                    )
                 )
             ).all()
         )
         if memory_ids:
             await session.execute(
-                delete(llm_memory_relation).where(
+                delete(agent_memory_link).where(
                     or_(
-                        llm_memory_relation.c.memory_id.in_(memory_ids),
-                        llm_memory_relation.c.related_memory_id.in_(memory_ids),
+                        agent_memory_link.c.memory_id.in_(memory_ids),
+                        agent_memory_link.c.linked_memory_id.in_(memory_ids),
                     )
                 )
             )
             await session.execute(
-                delete(llm_memory).where(llm_memory.c.id.in_(memory_ids))
+                delete(agent_memory_event).where(
+                    agent_memory_event.c.memory_id.in_(memory_ids)
+                )
+            )
+            await session.execute(
+                delete(memory_index_outbox).where(
+                    memory_index_outbox.c.memory_uid.in_(
+                        select(agent_memory.c.uid).where(
+                            agent_memory.c.id.in_(memory_ids)
+                        )
+                    )
+                )
+            )
+            await session.execute(
+                delete(agent_memory).where(agent_memory.c.id.in_(memory_ids))
             )
         metric_ids = set()
         if column_ids:

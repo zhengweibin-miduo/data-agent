@@ -517,6 +517,7 @@ def build_ddl_metadata_graph(
                 MEMORY_CONTENT_ADAPTER.validate_python(content)
                 for content in state.get("reused_memory", [])
             ],
+            job_id=_state_string(state, "job_id"),
         )
         return {
             "memory_candidates": [

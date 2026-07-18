@@ -66,6 +66,10 @@ class QdrantSettings(SettingsModel):
     url: str
     # 启用身份认证时使用的可选 API 密钥。
     api_key: str | None = None
+    memory_collection: str = Field(min_length=1)
+    vector_size: int = Field(gt=0)
+    distance: Literal["Cosine", "Dot", "Euclid"]
+    top_k: int = Field(gt=0, le=100)
 
 
 class ElasticsearchSettings(SettingsModel):
@@ -75,6 +79,9 @@ class ElasticsearchSettings(SettingsModel):
     url: str
     # 启用身份认证时使用的可选 API 密钥。
     api_key: str | None = None
+    memory_index: str = Field(min_length=1)
+    analyzer: str = Field(min_length=1)
+    top_k: int = Field(gt=0, le=100)
 
 
 class TEISettings(SettingsModel):
@@ -82,6 +89,7 @@ class TEISettings(SettingsModel):
 
     # TEI HTTP 地址。
     url: str
+    vector_size: int = Field(gt=0)
 
 
 class MySQLSettings(SettingsModel):
@@ -148,7 +156,7 @@ class LLMSettings(SettingsModel):
 
 
 class MemorySettings(SettingsModel):
-    """长期 LLM 记忆配置。"""
+    """长期语义记忆配置。"""
 
     database: str = Field(
         default="data_agent",
@@ -157,9 +165,14 @@ class MemorySettings(SettingsModel):
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
     content_version: str = Field(min_length=1)
-    payload_version: str = Field(min_length=1)
+    projection_version: str = Field(min_length=1)
     source_lease_seconds: int = Field(gt=0)
     rebuild_batch_size: int = Field(gt=0, le=1000)
+    outbox_batch_size: int = Field(gt=0, le=1000)
+    outbox_max_backoff_seconds: int = Field(gt=0)
+    retrieval_timeout_seconds: float = Field(gt=0)
+    rrf_constant: int = Field(gt=0)
+    search_limit: int = Field(gt=0, le=100)
 
 
 class AppSettings(SettingsModel):
@@ -189,6 +202,8 @@ class AppSettings(SettingsModel):
             raise ValueError("mysql.url 必须包含默认 Meta 数据库")
         if mysql_database.casefold() == self.memory.database.casefold():
             raise ValueError("memory.database 不能与 mysql.url 的默认数据库相同")
+        if self.qdrant.vector_size != self.tei.vector_size:
+            raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")
         return self
 
     @classmethod

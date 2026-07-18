@@ -12,9 +12,9 @@ The DDL metadata feature uses SQLAlchemy Core table definitions in
 `src/data_agent/ddl_metadata/persistence/tables.py` plus Session-scoped
 repositories. It deliberately does not add ORM entities or a migration
 framework. `MetadataRepository` owns the four Meta snapshot tables;
-`MemoryRepository` owns canonical long-term memory, typed relations, filters,
-cursors, and lifecycle updates. The Meta tables use the default database in
-`mysql.url`; both memory tables are schema-qualified to `memory.database`
+`MemoryRepository` owns authoritative long-term memory, append-only events,
+typed links, index outbox, and lifecycle updates. The Meta tables use the
+default database in `mysql.url`; all four memory tables are schema-qualified to `memory.database`
 (`data_agent` by default). They still share one engine and Session so MySQL can
 commit the two InnoDB databases atomically.
 
@@ -98,20 +98,19 @@ Contracts:
 - Read-only service calls still use the managed Session context; its normal
   exit commits an otherwise empty transaction.
 
-## Scenario: Atomic Meta Snapshot and LLM Memory
+## Scenario: Atomic Meta Snapshot and Agent Memory
 
 ### 1. Scope / Trigger
 
-Use this contract when changing the four Meta tables, canonical memory,
-memory relations, correction, payload rebuilding, or accepted-snapshot
-persistence.
+Use this contract when changing the four Meta tables, authoritative memory,
+history, links, index outbox, user updates, deletion, or accepted-snapshot persistence.
 
 ### 2. Signatures
 
 ```python
 await MetadataSnapshotService.persist(snapshot, memory_candidates) -> SnapshotResult
-await MemoryService.correct(memory_uid, content) -> CorrectionResult
-await MemoryPayloadRebuilder.rebuild(after_id=None) -> PayloadRebuildResult
+await MemoryService.update(memory_uid, content) -> MemoryUpdateResponse
+await MemoryIndexRebuilder.enqueue_batch(after_id=0) -> MemoryRebuildResult
 ```
 
 ### 3. Contracts
@@ -124,28 +123,27 @@ configured application memory database it:
 1. upserts submitted table, column, metric, and column/metric rows;
 2. removes stale links and columns only for submitted table IDs;
 3. removes metrics that became orphaned through that scoped cleanup;
-4. upserts accepted canonical memories and typed relations; and
-5. archives older active decisions superseded by accepted replacements.
+4. upserts accepted authoritative memories, ADD history, and typed links; and
+5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`.
 
-Stable SHA-256 IDs and the unique memory-relation triple make re-execution safe
-after a worker crash. Tables absent from the submitted DDL are outside cleanup
-scope. No repository write is permitted while a graph waits for user input or
-before deterministic validation succeeds.
+Stable SHA-256 IDs and the unique memory-link triple make re-execution safe
+after a worker crash. Replaying an accepted snapshot must not reactivate a UID
+that a user already soft-deleted; its DELETE projection remains the desired
+outbox state. Tables absent from the submitted DDL are outside cleanup scope.
+No repository write is permitted while a graph waits for user input or before
+deterministic validation succeeds.
 
-Memory corrections use a separate managed transaction: validate current Meta
-references, append the user-confirmed replacement, add `SUPERSEDES`, and
-archive the replaced active memory atomically. They do not patch the accepted
-Meta snapshot; the source must pass through the DDL workflow again.
+Memory updates use a separate managed transaction: validate kind, scope, and
+current Meta references, then append a user-confirmed UPDATE event. They do not
+patch active authoritative content or Meta; the source must pass through the
+DDL workflow again. DELETE is an audited soft delete plus two DELETE outbox rows.
 
-Derived payload rebuilding reads at most `memory.rebuild_batch_size` rows after
-an explicit numeric cursor. `PayloadRebuildResult.next_after_id` lets the
-caller advance through every batch; per-row savepoints isolate corrupt
-canonical content without rolling back successful rows in the same batch.
-Callers restart from an earlier cursor when they intentionally want to retry a
-failed row. Trust provenance lives in canonical content, so a missing or
-corrupt old payload can be rebuilt without consulting that payload.
+Derived-index rebuilding reads at most `memory.rebuild_batch_size` ACTIVE rows
+after an explicit numeric cursor and writes two UPSERT outbox rows per UID.
+Rebuild explicitly recreates only the configured project ES index and Qdrant
+collection; MySQL content is never reconstructed from an index payload.
 
-Exact metric-memory reuse batch-loads outgoing `REFERENCE` targets from active
+Exact metric-memory reuse batch-loads outgoing `DERIVED_FROM` targets from active
 metric definitions and includes only the referenced question/answer audit
 records. Immutable historical answers may remain `NORMAL`, but an unrelated
 audit record must not become current graph context merely because its schema
@@ -156,21 +154,21 @@ fingerprint matches.
 | Condition | Required behavior |
 |---|---|
 | Graph is waiting or validation is incomplete | Write no Meta or trusted memory rows |
-| Snapshot statement fails | Roll back all Meta, memory, relation, and archive changes |
+| Snapshot statement fails | Roll back all Meta, memory, event, link, and outbox changes |
 | Schema-qualified memory statement fails after Meta writes | Roll back the earlier Meta writes in the same transaction |
 | Same accepted snapshot is replayed | Stable IDs and unique relations produce the same state |
+| A soft-deleted UID appears in a replayed snapshot | Keep it DELETED and retain DELETE outbox desired states |
 | Submitted table drops a column | Remove stale rows only inside submitted table IDs |
-| Correction repeats identical user-confirmed content | Return `unchanged_correction`; do not self-supersede |
-| Payload is missing, stale, or corrupt | Rebuild from canonical content; never infer trust from payload |
-| One rebuild row is corrupt | Roll back that row to its savepoint and continue the bounded batch |
+| Update repeats identical user-confirmed content | Return `unchanged_update`; append no event |
+| Derived index is missing, stale, or corrupt | Rebuild from MySQL; never infer trust from index payload |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: accepted Meta, canonical memories, typed relations, and supersession
+- Good: accepted Meta, authoritative memories, events, links, and outbox
   commit together after deterministic validation.
-- Base: browser correction appends trusted memory and requires a later DDL run
+- Base: browser update appends a trusted event and requires a later DDL run
   before Meta changes.
-- Bad: repository methods commit independently, or correction edits current
+- Bad: repository methods commit independently, or update edits current
   Meta rows without full DDL validation.
 
 ### 6. Tests Required
@@ -182,8 +180,8 @@ uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```
 
 Tests must assert full rollback, unrelated-table preservation, repeat
-idempotency, correction supersession/no-op behavior, canonical trust rebuild,
-relation-aware reuse, and post-commit replay safety.
+idempotency, update no-op behavior, outbox replay, link-aware reuse, soft
+deletion, and post-commit replay safety.
 
 ### 7. Wrong vs Correct
 
@@ -204,7 +202,8 @@ No migration tool or migration directory exists. Local MySQL bootstrap
 initializes the `dw`, `meta`, and application `data_agent` databases from
 `docs/docker/mysql/`. `meta.sql` contains only `table_info`, `column_info`,
 `metric_info`, and `column_metric`; `data_agent.sql` idempotently owns
-`llm_memory` and `llm_memory_relation`. SQLAlchemy Core definitions must remain
+`agent_memory`, `agent_memory_event`, `agent_memory_link`, and
+`memory_index_outbox`. SQLAlchemy Core definitions must remain
 compatible with those bootstrap schemas. Integration fixtures may call
 `metadata.create_all()` using the default `meta` connection because the memory
 tables are schema-qualified, but they are not a production migration
@@ -244,11 +243,11 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Databases: the bootstrap scripts create `data_agent`, `dw`, and `meta`;
   Compose does not set `MYSQL_DATABASE`.
 - Ownership: `meta.sql` owns exactly the four Meta tables.
-  `data_agent.sql` is idempotent, uses InnoDB, and owns exactly the two
-  application memory tables.
+  `data_agent.sql` uses InnoDB and owns exactly the four application memory
+  tables. It drops only the never-used legacy `llm_memory*` contract.
 - Existing volume: entrypoint scripts do not rerun. Apply `data_agent.sql`
-  explicitly through the local root account; never drop or migrate legacy
-  `meta.llm_memory*` objects without approval.
+  explicitly through the local root account after confirming the legacy
+  application-memory tables were never used; never touch Meta tables.
 
 ### 4. Validation & Error Matrix
 

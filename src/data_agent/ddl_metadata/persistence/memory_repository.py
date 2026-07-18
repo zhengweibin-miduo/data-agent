@@ -1,586 +1,794 @@
-"""长期 LLM 记忆及关系仓储。"""
+"""Mem0 风格权威记忆、历史、关联与索引 outbox 仓储。"""
 
 from __future__ import annotations
 
-import base64
-import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, or_, select, tuple_, update
+from sqlalchemy import RowMapping, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.mysql import insert
-from sqlalchemy.engine import RowMapping
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
+from data_agent.ddl_metadata.memory.payloads import content_object_ids
 from data_agent.ddl_metadata.models import (
     MEMORY_CONTENT_ADAPTER,
+    MemoryActorType,
     MemoryCandidate,
     MemoryContent,
     MemoryDetail,
+    MemoryEvent,
+    MemoryEventType,
+    MemoryHistoryPage,
+    MemoryIndexOperation,
+    MemoryIndexTarget,
     MemoryKind,
-    MemoryListItem,
-    MemoryPage,
-    MemoryPayload,
-    MemoryRelation,
-    MemoryRelationType,
-    MemoryRowStatus,
+    MemoryLink,
+    MemoryLinkType,
+    MemoryOutboxItem,
+    MemoryProjection,
+    MemoryStatus,
+    MemoryTrust,
 )
-from data_agent.ddl_metadata.persistence.tables import llm_memory, llm_memory_relation
-
-_DETAIL_RELATION_LIMIT = 500
+from data_agent.ddl_metadata.persistence.tables import (
+    agent_memory,
+    agent_memory_event,
+    agent_memory_link,
+    memory_index_outbox,
+)
+from data_agent.settings import app_config
 
 
 @dataclass(frozen=True)
 class StoredMemory:
-    """仓储内部使用的已解析记忆。"""
+    """带内部主键的权威记忆。"""
 
     id: int
-    item: MemoryListItem
-    content: MemoryContent
-    payload: MemoryPayload
+    detail: MemoryDetail
+
+    @property
+    def content(self) -> MemoryContent:
+        """返回类型化权威内容。"""
+        return self.detail.content
 
 
-def _decode_json(value: object) -> object:
-    """兼容驱动返回 JSON 对象或 JSON 字符串。"""
-    return json.loads(value) if isinstance(value, str) else value
+def _decode_content(value: object) -> MemoryContent:
+    """解析数据库 JSON 为严格领域内容。"""
+    return MEMORY_CONTENT_ADAPTER.validate_python(value)
 
 
-def _summary(content: MemoryContent) -> str:
-    """生成不暴露提示词或回答正文的有界摘要。"""
-    if content.kind == MemoryKind.SEMANTIC_DECISION:
-        decision = content.table or content.column
-        if decision is None:
-            raise ValueError("语义决策缺少对象")
-        return f"{content.kind.value}: {decision.description[:160]}"
-    if content.kind == MemoryKind.METRIC_DEFINITION:
-        return f"{content.kind.value}: {content.metric.name}"
-    if content.kind == MemoryKind.METRIC_QUESTION:
-        return f"{content.kind.value}: {content.question.question_id}"
-    return f"{content.kind.value}: {content.answer.question_id}"
-
-
-def parse_stored_memory(row: RowMapping) -> StoredMemory:
-    """将数据库行解析回当前版本的严格契约。"""
-    content = MEMORY_CONTENT_ADAPTER.validate_python(_decode_json(row["content"]))
-    payload = MemoryPayload.model_validate(_decode_json(row["payload"]))
-    item = MemoryListItem(
+def _parse_detail(
+    row: RowMapping, links: list[MemoryLink] | None = None
+) -> MemoryDetail:
+    """把权威数据库行转换为公开详情。"""
+    return MemoryDetail(
         uid=str(row["uid"]),
         source=str(row["source"]),
         kind=MemoryKind(str(row["kind"])),
         scope_key=str(row["scope_key"]),
         schema_fingerprint=str(row["schema_fingerprint"]),
-        row_status=MemoryRowStatus(str(row["row_status"])),
-        pinned=bool(row["pinned"]),
-        summary=_summary(content),
+        memory_text=str(row["memory_text"]),
+        content=_decode_content(row["content"]),
+        content_hash=str(row["content_hash"]),
+        trust=MemoryTrust(str(row["trust"])),
+        status=MemoryStatus(str(row["status"])),
+        content_version=str(row["content_version"]),
+        projection_version=str(row["projection_version"]),
+        created_job_id=str(row["created_job_id"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        deleted_at=row["deleted_at"],
+        links=links or [],
     )
-    return StoredMemory(
-        id=int(row["id"]),
-        item=item,
-        content=content,
-        payload=payload,
-    )
-
-
-def _encode_cursor(updated_at: datetime, identifier: int) -> str:
-    """编码无状态分页游标。"""
-    payload = json.dumps(
-        [updated_at.isoformat(), identifier],
-        separators=(",", ":"),
-    )
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
-
-
-def _decode_cursor(cursor: str) -> tuple[datetime, int]:
-    """校验并解码分页游标。"""
-    try:
-        padding = "=" * (-len(cursor) % 4)
-        updated_at, identifier = json.loads(base64.urlsafe_b64decode(cursor + padding))
-        return datetime.fromisoformat(updated_at), int(identifier)
-    except (ValueError, TypeError, json.JSONDecodeError) as error:
-        raise DDLMetadataError(
-            "invalid_cursor",
-            "memory_list",
-            "记忆分页游标无效",
-        ) from error
 
 
 class MemoryRepository:
-    """在调用方事务中管理规范内容、载荷和类型化关系。"""
+    """在调用方事务中管理唯一权威记忆及可重建投影期望。"""
 
     def __init__(self, session: AsyncSession) -> None:
         """绑定由调用方管理事务边界的 Session。"""
         self._session = session
 
-    async def upsert_candidates(
-        self,
-        candidates: list[MemoryCandidate],
-    ) -> None:
-        """幂等写入候选、关系，并归档被替代的旧记忆。"""
+    async def upsert_candidates(self, candidates: list[MemoryCandidate]) -> None:
+        """幂等写入已接受事实、历史、关联和双目标 outbox。"""
         if not candidates:
             return
-        for candidate in candidates:
+        candidate_uids = {candidate.uid for candidate in candidates}
+        existing_rows = (
+            await self._session.execute(
+                select(agent_memory.c.uid, agent_memory.c.status).where(
+                    agent_memory.c.uid.in_(candidate_uids)
+                )
+            )
+        ).all()
+        existing_status = {
+            str(uid): MemoryStatus(str(status)) for uid, status in existing_rows
+        }
+        deleted_uids = {
+            uid
+            for uid, status in existing_status.items()
+            if status == MemoryStatus.DELETED
+        }
+        accepted_candidates = [
+            candidate for candidate in candidates if candidate.uid not in deleted_uids
+        ]
+        for candidate in accepted_candidates:
             if candidate.kind not in {
                 MemoryKind.SEMANTIC_DECISION,
                 MemoryKind.METRIC_DEFINITION,
             }:
                 continue
-            older_uids = (
+            older = (
                 await self._session.scalars(
-                    select(llm_memory.c.uid).where(
-                        llm_memory.c.source == candidate.source,
-                        llm_memory.c.kind == candidate.kind.value,
-                        llm_memory.c.scope_key == candidate.scope_key,
-                        llm_memory.c.row_status == MemoryRowStatus.NORMAL.value,
-                        llm_memory.c.uid != candidate.uid,
+                    select(agent_memory.c.uid).where(
+                        agent_memory.c.source == candidate.source,
+                        agent_memory.c.kind == candidate.kind.value,
+                        agent_memory.c.scope_key == candidate.scope_key,
+                        agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                        agent_memory.c.uid != candidate.uid,
                     )
                 )
             ).all()
             candidate.supersedes_uids = sorted(
-                {*candidate.supersedes_uids, *older_uids}
+                {*candidate.supersedes_uids, *(str(uid) for uid in older)}
             )
-        statement = insert(llm_memory).values(
-            [
-                {
-                    "uid": candidate.uid,
-                    "source": candidate.source,
-                    "kind": candidate.kind.value,
-                    "scope_key": candidate.scope_key,
-                    "schema_fingerprint": candidate.schema_fingerprint,
-                    "row_status": MemoryRowStatus.NORMAL.value,
-                    "pinned": candidate.pinned,
-                    "content": candidate.content.model_dump(mode="json"),
-                    "payload": candidate.payload.model_dump(mode="json"),
-                    "content_version": candidate.content_version,
-                }
-                for candidate in candidates
-            ]
-        )
-        await self._session.execute(
-            statement.on_duplicate_key_update(
-                content=statement.inserted.content,
-                payload=statement.inserted.payload,
-                content_version=statement.inserted.content_version,
-                row_status=MemoryRowStatus.NORMAL.value,
+
+        if accepted_candidates:
+            statement = insert(agent_memory).values(
+                [
+                    {
+                        "uid": candidate.uid,
+                        "source": candidate.source,
+                        "kind": candidate.kind.value,
+                        "scope_key": candidate.scope_key,
+                        "schema_fingerprint": candidate.schema_fingerprint,
+                        "memory_text": candidate.memory_text,
+                        "content": candidate.content.model_dump(mode="json"),
+                        "content_hash": candidate.content_hash,
+                        "trust": candidate.trust.value,
+                        "status": MemoryStatus.ACTIVE.value,
+                        "content_version": candidate.content_version,
+                        "projection_version": candidate.projection_version,
+                        "created_job_id": candidate.created_job_id,
+                        "deleted_at": None,
+                    }
+                    for candidate in accepted_candidates
+                ]
             )
-        )
+            await self._session.execute(
+                statement.on_duplicate_key_update(
+                    memory_text=statement.inserted.memory_text,
+                    content=statement.inserted.content,
+                    content_hash=statement.inserted.content_hash,
+                    trust=statement.inserted.trust,
+                    content_version=statement.inserted.content_version,
+                    projection_version=statement.inserted.projection_version,
+                )
+            )
         all_uids = {
             uid
-            for candidate in candidates
+            for candidate in accepted_candidates
             for uid in (
                 candidate.uid,
-                *candidate.reference_uids,
-                *candidate.comment_uids,
+                *candidate.derived_from_uids,
+                *candidate.related_uids,
                 *candidate.supersedes_uids,
             )
         }
         uid_rows = (
             await self._session.execute(
-                select(llm_memory.c.uid, llm_memory.c.id).where(
-                    llm_memory.c.uid.in_(all_uids)
+                select(agent_memory.c.uid, agent_memory.c.id).where(
+                    agent_memory.c.uid.in_(all_uids)
                 )
             )
         ).all()
-        uid_to_id = {str(row[0]): int(row[1]) for row in uid_rows}
+        uid_to_id = {str(uid): int(identifier) for uid, identifier in uid_rows}
         missing = all_uids - set(uid_to_id)
         if missing:
-            raise DDLMetadataError(
-                "memory_relation_target_missing",
-                "persist_snapshot",
-                "记忆关系引用不存在的目标",
-                details={"uids": ",".join(sorted(missing))},
+            raise ValueError(f"记忆关联目标不存在: {','.join(sorted(missing))}")
+
+        new_candidates = [
+            candidate
+            for candidate in accepted_candidates
+            if candidate.uid not in existing_status
+        ]
+        if new_candidates:
+            await self._session.execute(
+                insert(agent_memory_event).values(
+                    [
+                        {
+                            "memory_id": uid_to_id[candidate.uid],
+                            "event_type": MemoryEventType.ADD.value,
+                            "old_content": None,
+                            "new_content": candidate.content.model_dump(mode="json"),
+                            "job_id": candidate.created_job_id,
+                            "actor_type": MemoryActorType.WORKFLOW.value,
+                        }
+                        for candidate in new_candidates
+                    ]
+                )
             )
 
-        relations: list[dict[str, object]] = []
-        for candidate in candidates:
-            memory_id = uid_to_id[candidate.uid]
-            relations.extend(
-                {
-                    "memory_id": memory_id,
-                    "related_memory_id": uid_to_id[uid],
-                    "relation_type": relation_type.value,
-                }
-                for relation_type, uids in (
-                    (
-                        MemoryRelationType.REFERENCE,
-                        candidate.reference_uids,
-                    ),
-                    (MemoryRelationType.COMMENT, candidate.comment_uids),
-                    (
-                        MemoryRelationType.SUPERSEDES,
-                        candidate.supersedes_uids,
-                    ),
-                )
-                for uid in uids
+        links = [
+            {
+                "memory_id": uid_to_id[candidate.uid],
+                "linked_memory_id": uid_to_id[linked_uid],
+                "link_type": link_type.value,
+            }
+            for candidate in accepted_candidates
+            for link_type, linked_uids in (
+                (MemoryLinkType.DERIVED_FROM, candidate.derived_from_uids),
+                (MemoryLinkType.RELATED, candidate.related_uids),
+                (MemoryLinkType.SUPERSEDES, candidate.supersedes_uids),
             )
-        if relations:
-            relation_statement = insert(llm_memory_relation).values(relations)
+            for linked_uid in linked_uids
+        ]
+        if links:
+            link_statement = insert(agent_memory_link).values(links)
             await self._session.execute(
-                relation_statement.on_duplicate_key_update(
-                    relation_type=relation_statement.inserted.relation_type
+                link_statement.on_duplicate_key_update(
+                    link_type=link_statement.inserted.link_type
                 )
             )
+
         superseded = {
-            uid for candidate in candidates for uid in candidate.supersedes_uids
+            uid
+            for candidate in accepted_candidates
+            for uid in candidate.supersedes_uids
         }
         if superseded:
-            await self._session.execute(
-                update(llm_memory)
-                .where(llm_memory.c.uid.in_(superseded))
-                .values(
-                    row_status=MemoryRowStatus.ARCHIVED.value,
-                    pinned=False,
+            replacement_by_uid = {
+                old_uid: candidate
+                for candidate in accepted_candidates
+                for old_uid in candidate.supersedes_uids
+            }
+            superseded_rows = (
+                await self._session.execute(
+                    select(
+                        agent_memory.c.id,
+                        agent_memory.c.uid,
+                        agent_memory.c.content,
+                    ).where(
+                        agent_memory.c.uid.in_(superseded),
+                        agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                    )
                 )
-            )
-
-    async def find_compatible(
-        self,
-        source: str,
-        scope_key: str,
-        schema_fingerprint: str,
-        kind: MemoryKind,
-        payload_version: str,
-        content_version: str,
-        *,
-        limit: int = 20,
-    ) -> list[StoredMemory]:
-        """精确检索当前版本的 NORMAL 记忆。"""
-        rows = (
+            ).mappings()
+            history_values = [
+                {
+                    "memory_id": int(row["id"]),
+                    "event_type": MemoryEventType.UPDATE.value,
+                    "old_content": row["content"],
+                    "new_content": replacement_by_uid[
+                        str(row["uid"])
+                    ].content.model_dump(mode="json"),
+                    "job_id": replacement_by_uid[str(row["uid"])].created_job_id,
+                    "actor_type": MemoryActorType.WORKFLOW.value,
+                }
+                for row in superseded_rows
+            ]
+            if history_values:
+                await self._session.execute(
+                    insert(agent_memory_event).values(history_values)
+                )
             await self._session.execute(
-                select(llm_memory)
+                update(agent_memory)
                 .where(
-                    llm_memory.c.source == source,
-                    llm_memory.c.scope_key == scope_key,
-                    llm_memory.c.schema_fingerprint == schema_fingerprint,
-                    llm_memory.c.kind == kind.value,
-                    llm_memory.c.row_status == MemoryRowStatus.NORMAL.value,
-                    llm_memory.c.content_version == content_version,
+                    agent_memory.c.uid.in_(superseded),
+                    agent_memory.c.status == MemoryStatus.ACTIVE.value,
                 )
-                .order_by(
-                    llm_memory.c.pinned.desc(),
-                    llm_memory.c.updated_at.desc(),
-                    llm_memory.c.id.desc(),
-                )
-                .limit(limit)
+                .values(status=MemoryStatus.DELETED.value, deleted_at=func.now())
             )
-        ).mappings()
-        compatible: list[StoredMemory] = []
-        for row in rows:
-            try:
-                memory = parse_stored_memory(row)
-            except (ValueError, TypeError):
-                continue
-            if memory.payload.version == payload_version:
-                compatible.append(memory)
-        return compatible
+            await self._set_outbox(
+                superseded,
+                MemoryIndexOperation.DELETE,
+            )
+        await self._set_outbox(
+            {candidate.uid for candidate in accepted_candidates},
+            MemoryIndexOperation.UPSERT,
+        )
+        await self._set_outbox(deleted_uids, MemoryIndexOperation.DELETE)
+
+    async def _set_outbox(
+        self,
+        memory_uids: set[str],
+        operation: MemoryIndexOperation,
+    ) -> None:
+        """覆盖每个索引目标的期望状态。"""
+        if not memory_uids:
+            return
+        values = [
+            {
+                "memory_uid": uid,
+                "target": target.value,
+                "operation": operation.value,
+                "projection_version": app_config.memory.projection_version,
+                "attempts": 0,
+                "available_at": func.now(),
+                "last_error_type": None,
+            }
+            for uid in memory_uids
+            for target in MemoryIndexTarget
+        ]
+        statement = insert(memory_index_outbox).values(values)
+        await self._session.execute(
+            statement.on_duplicate_key_update(
+                operation=statement.inserted.operation,
+                projection_version=statement.inserted.projection_version,
+                attempts=0,
+                available_at=func.now(),
+                last_error_type=None,
+            )
+        )
 
     async def find_compatible_scopes(
         self,
         source: str,
         scope_fingerprints: dict[str, str],
         kind: MemoryKind,
-        payload_version: str,
         content_version: str,
         *,
         per_scope_limit: int = 20,
     ) -> dict[str, list[StoredMemory]]:
-        """单次查询一组精确作用域，避免逐对象读取。"""
+        """批量读取一组精确作用域的活动权威记忆。"""
         if not scope_fingerprints:
             return {}
-        pairs = list(scope_fingerprints.items())
+        conditions = [
+            and_(
+                agent_memory.c.scope_key == scope,
+                agent_memory.c.schema_fingerprint == fingerprint,
+            )
+            for scope, fingerprint in scope_fingerprints.items()
+        ]
         rows = (
             await self._session.execute(
-                select(llm_memory)
+                select(agent_memory)
                 .where(
-                    llm_memory.c.source == source,
-                    llm_memory.c.kind == kind.value,
-                    llm_memory.c.row_status == MemoryRowStatus.NORMAL.value,
-                    llm_memory.c.content_version == content_version,
-                    tuple_(
-                        llm_memory.c.scope_key,
-                        llm_memory.c.schema_fingerprint,
-                    ).in_(pairs),
+                    agent_memory.c.source == source,
+                    agent_memory.c.kind == kind.value,
+                    agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                    agent_memory.c.content_version == content_version,
+                    or_(*conditions),
                 )
-                .order_by(
-                    llm_memory.c.pinned.desc(),
-                    llm_memory.c.updated_at.desc(),
-                    llm_memory.c.id.desc(),
-                )
-                .limit(len(pairs) * per_scope_limit)
+                .order_by(agent_memory.c.updated_at.desc(), agent_memory.c.id.desc())
+                .limit(len(conditions) * per_scope_limit)
             )
         ).mappings()
-        result: dict[str, list[StoredMemory]] = {
-            scope: [] for scope in scope_fingerprints
-        }
+        result = {scope: [] for scope in scope_fingerprints}
         for row in rows:
             scope = str(row["scope_key"])
-            if len(result[scope]) >= per_scope_limit:
-                continue
-            try:
-                memory = parse_stored_memory(row)
-            except (ValueError, TypeError):
-                continue
-            if memory.payload.version == payload_version:
-                result[scope].append(memory)
+            if len(result[scope]) < per_scope_limit:
+                result[scope].append(StoredMemory(int(row["id"]), _parse_detail(row)))
         return result
+
+    async def pending_user_updates(
+        self,
+        source: str,
+        scope_keys: set[str],
+        *,
+        limit: int = 500,
+    ) -> dict[str, MemoryContent]:
+        """读取每个活动作用域最新的待重处理用户 UPDATE 内容。"""
+        if not scope_keys:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(
+                    agent_memory.c.scope_key,
+                    agent_memory_event.c.new_content,
+                )
+                .select_from(
+                    agent_memory_event.join(
+                        agent_memory,
+                        agent_memory.c.id == agent_memory_event.c.memory_id,
+                    )
+                )
+                .where(
+                    agent_memory.c.source == source,
+                    agent_memory.c.scope_key.in_(scope_keys),
+                    agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                    agent_memory_event.c.event_type == MemoryEventType.UPDATE.value,
+                    agent_memory_event.c.actor_type == MemoryActorType.USER.value,
+                )
+                .order_by(agent_memory_event.c.id.desc())
+                .limit(limit)
+            )
+        ).mappings()
+        result: dict[str, MemoryContent] = {}
+        for row in rows:
+            scope = str(row["scope_key"])
+            if scope not in result and row["new_content"] is not None:
+                result[scope] = _decode_content(row["new_content"])
+        return result
+
+    async def latest_user_update(
+        self,
+        memory_id: int,
+    ) -> MemoryContent | None:
+        """读取指定权威记忆最新的待重处理用户修正。"""
+        value = await self._session.scalar(
+            select(agent_memory_event.c.new_content)
+            .where(
+                agent_memory_event.c.memory_id == memory_id,
+                agent_memory_event.c.event_type == MemoryEventType.UPDATE.value,
+                agent_memory_event.c.actor_type == MemoryActorType.USER.value,
+            )
+            .order_by(agent_memory_event.c.id.desc())
+            .limit(1)
+        )
+        return _decode_content(value) if value is not None else None
 
     async def find_active_by_fingerprint(
         self,
         source: str,
         schema_fingerprint: str,
         kinds: set[MemoryKind],
-        payload_version: str,
         content_version: str,
         *,
         limit: int = 500,
     ) -> list[StoredMemory]:
-        """批量读取完整模式指纹下的兼容活动记忆。"""
+        """读取完整模式指纹下的兼容活动记忆。"""
         rows = (
             await self._session.execute(
-                select(llm_memory)
+                select(agent_memory)
                 .where(
-                    llm_memory.c.source == source,
-                    llm_memory.c.schema_fingerprint == schema_fingerprint,
-                    llm_memory.c.kind.in_([kind.value for kind in kinds]),
-                    llm_memory.c.row_status == MemoryRowStatus.NORMAL.value,
-                    llm_memory.c.content_version == content_version,
+                    agent_memory.c.source == source,
+                    agent_memory.c.schema_fingerprint == schema_fingerprint,
+                    agent_memory.c.kind.in_([kind.value for kind in kinds]),
+                    agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                    agent_memory.c.content_version == content_version,
                 )
-                .order_by(
-                    llm_memory.c.pinned.desc(),
-                    llm_memory.c.updated_at.desc(),
-                    llm_memory.c.id.desc(),
-                )
+                .order_by(agent_memory.c.updated_at.desc(), agent_memory.c.id.desc())
                 .limit(limit)
             )
         ).mappings()
-        result: list[StoredMemory] = []
-        for row in rows:
-            try:
-                memory = parse_stored_memory(row)
-            except (ValueError, TypeError):
-                continue
-            if memory.payload.version == payload_version:
-                result.append(memory)
-        return result
+        return [StoredMemory(int(row["id"]), _parse_detail(row)) for row in rows]
 
-    async def related_uids(
+    async def linked_uids(
         self,
         memory_ids: set[int],
-        relation_type: MemoryRelationType,
+        link_type: MemoryLinkType,
     ) -> dict[int, set[str]]:
-        """批量读取一组记忆的指定出向关系目标 UID。"""
+        """批量读取一组记忆的指定出向关联目标 UID。"""
         if not memory_ids:
             return {}
-        related_memory = llm_memory.alias("related_memory")
+        linked = agent_memory.alias("linked")
         rows = (
             await self._session.execute(
-                select(
-                    llm_memory_relation.c.memory_id,
-                    related_memory.c.uid,
-                )
+                select(agent_memory_link.c.memory_id, linked.c.uid)
                 .select_from(
-                    llm_memory_relation.join(
-                        related_memory,
-                        related_memory.c.id == llm_memory_relation.c.related_memory_id,
+                    agent_memory_link.join(
+                        linked,
+                        linked.c.id == agent_memory_link.c.linked_memory_id,
                     )
                 )
                 .where(
-                    llm_memory_relation.c.memory_id.in_(memory_ids),
-                    llm_memory_relation.c.relation_type == relation_type.value,
+                    agent_memory_link.c.memory_id.in_(memory_ids),
+                    agent_memory_link.c.link_type == link_type.value,
                 )
             )
         ).all()
-        result: dict[int, set[str]] = {memory_id: set() for memory_id in memory_ids}
+        result = {memory_id: set() for memory_id in memory_ids}
         for memory_id, uid in rows:
             result[int(memory_id)].add(str(uid))
         return result
 
-    async def list_page(
-        self,
-        source: str,
-        *,
-        kind: MemoryKind | None = None,
-        row_status: MemoryRowStatus = MemoryRowStatus.NORMAL,
-        pinned: bool | None = None,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> MemoryPage:
-        """返回按更新时间和主键稳定排序的有界列表。"""
-        filters = [
-            llm_memory.c.source == source,
-            llm_memory.c.row_status == row_status.value,
-        ]
-        if kind is not None:
-            filters.append(llm_memory.c.kind == kind.value)
-        if pinned is not None:
-            filters.append(llm_memory.c.pinned == pinned)
-        if cursor is not None:
-            updated_at, identifier = _decode_cursor(cursor)
-            filters.append(
-                or_(
-                    llm_memory.c.updated_at < updated_at,
-                    and_(
-                        llm_memory.c.updated_at == updated_at,
-                        llm_memory.c.id < identifier,
-                    ),
-                )
-            )
-        rows = list(
-            (
-                await self._session.execute(
-                    select(llm_memory)
-                    .where(*filters)
-                    .order_by(
-                        llm_memory.c.updated_at.desc(),
-                        llm_memory.c.id.desc(),
-                    )
-                    .limit(limit + 1)
-                )
-            ).mappings()
-        )
-        parsed = [parse_stored_memory(row) for row in rows[:limit]]
-        next_cursor = None
-        if len(rows) > limit and parsed:
-            last = parsed[-1]
-            next_cursor = _encode_cursor(last.item.updated_at, last.id)
-        return MemoryPage(
-            items=[memory.item for memory in parsed],
-            next_cursor=next_cursor,
-        )
-
     async def get_by_uid(self, uid: str) -> StoredMemory | None:
-        """读取并解析一条记忆。"""
+        """读取一条权威记忆及有界关联。"""
         row = (
             (
                 await self._session.execute(
-                    select(llm_memory).where(llm_memory.c.uid == uid)
+                    select(agent_memory).where(agent_memory.c.uid == uid)
                 )
             )
             .mappings()
             .one_or_none()
         )
-        return parse_stored_memory(row) if row is not None else None
-
-    async def get_detail(self, uid: str) -> MemoryDetail | None:
-        """读取记忆详情及双向关系。"""
-        memory = await self.get_by_uid(uid)
-        if memory is None:
+        if row is None:
             return None
-        source_memory = llm_memory.alias("source_memory")
-        target_memory = llm_memory.alias("target_memory")
-        rows = (
+        identifier = int(row["id"])
+        source_memory = agent_memory.alias("source_memory")
+        linked_memory = agent_memory.alias("linked_memory")
+        link_rows = (
             await self._session.execute(
                 select(
                     source_memory.c.uid.label("source_uid"),
-                    target_memory.c.uid.label("target_uid"),
-                    llm_memory_relation.c.relation_type,
+                    linked_memory.c.uid.label("linked_uid"),
+                    agent_memory_link.c.link_type,
                 )
                 .select_from(
-                    llm_memory_relation.join(
+                    agent_memory_link.join(
                         source_memory,
-                        source_memory.c.id == llm_memory_relation.c.memory_id,
+                        source_memory.c.id == agent_memory_link.c.memory_id,
                     ).join(
-                        target_memory,
-                        target_memory.c.id == llm_memory_relation.c.related_memory_id,
+                        linked_memory,
+                        linked_memory.c.id == agent_memory_link.c.linked_memory_id,
                     )
                 )
                 .where(
                     or_(
-                        llm_memory_relation.c.memory_id == memory.id,
-                        llm_memory_relation.c.related_memory_id == memory.id,
+                        agent_memory_link.c.memory_id == identifier,
+                        agent_memory_link.c.linked_memory_id == identifier,
                     )
                 )
-                .order_by(
-                    llm_memory_relation.c.relation_type,
-                    llm_memory_relation.c.memory_id,
-                    llm_memory_relation.c.related_memory_id,
-                )
-                .limit(_DETAIL_RELATION_LIMIT)
+                .limit(500)
             )
         ).mappings()
-        relations = [
-            MemoryRelation(
-                relation_type=MemoryRelationType(str(row["relation_type"])),
-                memory_uid=str(row["source_uid"]),
-                related_memory_uid=str(row["target_uid"]),
+        links = [
+            MemoryLink(
+                link_type=MemoryLinkType(str(link["link_type"])),
+                memory_uid=str(link["source_uid"]),
+                linked_memory_uid=str(link["linked_uid"]),
             )
-            for row in rows
+            for link in link_rows
         ]
-        return MemoryDetail(
-            **memory.item.model_dump(),
-            content=memory.content,
-            payload=memory.payload,
-            relations=relations,
-        )
+        return StoredMemory(identifier, _parse_detail(row, links))
 
-    async def patch(
+    async def get_many_active(self, uids: list[str]) -> list[StoredMemory]:
+        """批量回查活动权威内容，保持输入 UID 的稳定顺序。"""
+        if not uids:
+            return []
+        rows = (
+            await self._session.execute(
+                select(agent_memory).where(
+                    agent_memory.c.uid.in_(uids),
+                    agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                )
+            )
+        ).mappings()
+        by_uid = {
+            str(row["uid"]): StoredMemory(int(row["id"]), _parse_detail(row))
+            for row in rows
+        }
+        return [by_uid[uid] for uid in uids if uid in by_uid]
+
+    async def pending_outbox_targets(
+        self,
+        uids: set[str],
+    ) -> dict[str, set[MemoryIndexTarget]]:
+        """批量读取尚未确认的派生索引目标。"""
+        if not uids:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(
+                    memory_index_outbox.c.memory_uid,
+                    memory_index_outbox.c.target,
+                ).where(memory_index_outbox.c.memory_uid.in_(uids))
+            )
+        ).all()
+        result: dict[str, set[MemoryIndexTarget]] = {}
+        for uid, target in rows:
+            result.setdefault(str(uid), set()).add(
+                MemoryIndexTarget(str(target))
+            )
+        return result
+
+    async def find_exact_query(
+        self,
+        source: str,
+        query: str,
+        kinds: set[MemoryKind] | None,
+        *,
+        limit: int,
+    ) -> list[str]:
+        """以 scope key 或完整投影文本执行安全的 MySQL 精确基线检索。"""
+        filters = [
+            agent_memory.c.source == source,
+            agent_memory.c.status == MemoryStatus.ACTIVE.value,
+            agent_memory.c.content_version == app_config.memory.content_version,
+            or_(
+                agent_memory.c.scope_key == query,
+                agent_memory.c.memory_text == query,
+            ),
+        ]
+        if kinds:
+            filters.append(agent_memory.c.kind.in_([kind.value for kind in kinds]))
+        return [
+            str(uid)
+            for uid in (
+                await self._session.scalars(
+                    select(agent_memory.c.uid)
+                    .where(*filters)
+                    .order_by(agent_memory.c.updated_at.desc())
+                    .limit(limit)
+                )
+            ).all()
+        ]
+
+    async def history(
         self,
         uid: str,
         *,
-        pinned: bool | None = None,
-        archive: bool = False,
-    ) -> MemoryDetail:
-        """幂等 pin/unpin 或归档记忆。"""
+        offset: int,
+        limit: int,
+    ) -> MemoryHistoryPage | None:
+        """读取有界只追加历史。"""
         memory = await self.get_by_uid(uid)
         if memory is None:
-            raise DDLMetadataError(
-                "memory_not_found",
-                "memory_patch",
-                "记忆不存在",
-                http_status=404,
+            return None
+        rows = list(
+            (
+                await self._session.execute(
+                    select(agent_memory_event)
+                    .where(agent_memory_event.c.memory_id == memory.id)
+                    .order_by(agent_memory_event.c.id)
+                    .offset(offset)
+                    .limit(limit + 1)
+                )
+            ).mappings()
+        )
+        events = [
+            MemoryEvent(
+                id=int(row["id"]),
+                memory_uid=uid,
+                event_type=MemoryEventType(str(row["event_type"])),
+                old_content=(
+                    _decode_content(row["old_content"])
+                    if row["old_content"] is not None
+                    else None
+                ),
+                new_content=(
+                    _decode_content(row["new_content"])
+                    if row["new_content"] is not None
+                    else None
+                ),
+                job_id=(str(row["job_id"]) if row["job_id"] is not None else None),
+                actor_type=MemoryActorType(str(row["actor_type"])),
+                created_at=row["created_at"],
             )
-        if pinned is not None and memory.item.row_status == MemoryRowStatus.ARCHIVED:
-            raise DDLMetadataError(
-                "archived_memory",
-                "memory_patch",
-                "归档记忆不能修改 pin 状态",
-                http_status=409,
-            )
-        values: dict[str, object] = {}
-        if pinned is not None:
-            values["pinned"] = pinned
-        if archive:
-            values.update(
-                row_status=MemoryRowStatus.ARCHIVED.value,
-                pinned=False,
-            )
-        if values:
-            await self._session.execute(
-                update(llm_memory).where(llm_memory.c.id == memory.id).values(**values)
-            )
-            await self._session.flush()
-        detail = await self.get_detail(uid)
-        if detail is None:
-            raise AssertionError("更新后的记忆必须存在")
-        return detail
+            for row in rows[:limit]
+        ]
+        return MemoryHistoryPage(
+            items=events,
+            offset=offset,
+            limit=limit,
+            has_more=len(rows) > limit,
+        )
 
-    async def rebuild_rows(
+    async def append_user_update(
         self,
-        limit: int,
-        source: str | None = None,
-        after_id: int = 0,
-    ) -> list[RowMapping]:
-        """读取一个有界载荷重建批次。"""
-        statement = select(llm_memory).where(llm_memory.c.id > after_id)
-        if source is not None:
-            statement = statement.where(llm_memory.c.source == source)
+        memory: StoredMemory,
+        content: MemoryContent,
+    ) -> int:
+        """只追加待重新处理的用户修正，不改写活动权威事实。"""
+        result = await self._session.execute(
+            insert(agent_memory_event).values(
+                memory_id=memory.id,
+                event_type=MemoryEventType.UPDATE.value,
+                old_content=memory.content.model_dump(mode="json"),
+                new_content=content.model_dump(mode="json"),
+                job_id=None,
+                actor_type=MemoryActorType.USER.value,
+            )
+        )
+        cursor = result if isinstance(result, CursorResult) else None
+        primary_key = cursor.inserted_primary_key if cursor is not None else None
+        if primary_key is None or primary_key[0] is None:
+            raise RuntimeError("记忆更新事件未返回主键")
+        return int(primary_key[0])
+
+    async def soft_delete(self, memory: StoredMemory) -> None:
+        """软删除权威记忆并写历史及双目标 DELETE outbox。"""
+        if memory.detail.status == MemoryStatus.DELETED:
+            return
+        await self._session.execute(
+            update(agent_memory)
+            .where(agent_memory.c.id == memory.id)
+            .values(status=MemoryStatus.DELETED.value, deleted_at=func.now())
+        )
+        await self._session.execute(
+            insert(agent_memory_event).values(
+                memory_id=memory.id,
+                event_type=MemoryEventType.DELETE.value,
+                old_content=memory.content.model_dump(mode="json"),
+                new_content=None,
+                job_id=None,
+                actor_type=MemoryActorType.USER.value,
+            )
+        )
+        await self._set_outbox({memory.detail.uid}, MemoryIndexOperation.DELETE)
+
+    async def claim_outbox(self, limit: int) -> list[MemoryOutboxItem]:
+        """通过行锁有界领取可执行索引期望状态。"""
         rows = (
             await self._session.execute(
-                statement.order_by(llm_memory.c.id).limit(limit)
+                select(memory_index_outbox)
+                .where(memory_index_outbox.c.available_at <= func.now())
+                .order_by(memory_index_outbox.c.updated_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
             )
         ).mappings()
-        return list(rows)
+        return [
+            MemoryOutboxItem(
+                memory_uid=str(row["memory_uid"]),
+                target=MemoryIndexTarget(str(row["target"])),
+                operation=MemoryIndexOperation(str(row["operation"])),
+                projection_version=str(row["projection_version"]),
+                attempts=int(row["attempts"]),
+            )
+            for row in rows
+        ]
 
-    async def update_payload(
-        self,
-        identifier: int,
-        payload: MemoryPayload,
-    ) -> None:
-        """仅更新可重建载荷。"""
+    async def acknowledge_outbox(self, item: MemoryOutboxItem) -> None:
+        """仅确认仍与已处理期望状态相同的 outbox 行。"""
         await self._session.execute(
-            update(llm_memory)
-            .where(llm_memory.c.id == identifier)
-            .values(payload=payload.model_dump(mode="json"))
+            delete(memory_index_outbox).where(
+                memory_index_outbox.c.memory_uid == item.memory_uid,
+                memory_index_outbox.c.target == item.target.value,
+                memory_index_outbox.c.operation == item.operation.value,
+                memory_index_outbox.c.projection_version == item.projection_version,
+            )
         )
+
+    async def retry_outbox(
+        self,
+        item: MemoryOutboxItem,
+        error_type: str,
+        max_backoff_seconds: int,
+    ) -> None:
+        """记录安全异常类型并指数退避。"""
+        attempts = item.attempts + 1
+        delay = min(2 ** min(attempts, 20), max_backoff_seconds)
+        available_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=delay)
+        await self._session.execute(
+            update(memory_index_outbox)
+            .where(
+                memory_index_outbox.c.memory_uid == item.memory_uid,
+                memory_index_outbox.c.target == item.target.value,
+            )
+            .values(
+                attempts=attempts,
+                available_at=available_at,
+                last_error_type=error_type[:128],
+            )
+        )
+
+    async def projection(self, uid: str) -> MemoryProjection | None:
+        """从权威内容构造共享索引投影。"""
+        memory = await self.get_by_uid(uid)
+        if memory is None:
+            return None
+        detail = memory.detail
+        return MemoryProjection(
+            memory_uid=detail.uid,
+            source=detail.source,
+            kind=detail.kind,
+            scope_key=detail.scope_key,
+            schema_fingerprint=detail.schema_fingerprint,
+            memory_text=detail.memory_text,
+            content_hash=detail.content_hash,
+            object_ids=content_object_ids(detail.content),
+            trust=detail.trust,
+            status=detail.status,
+            content_version=detail.content_version,
+            projection_version=detail.projection_version,
+            created_at=detail.created_at,
+            updated_at=detail.updated_at,
+        )
+
+    async def scan_active(
+        self,
+        *,
+        after_id: int,
+        limit: int,
+    ) -> list[RowMapping]:
+        """按 MySQL 主键游标扫描活动记忆。"""
+        return list(
+            (
+                await self._session.execute(
+                    select(agent_memory.c.id, agent_memory.c.uid)
+                    .where(
+                        agent_memory.c.id > after_id,
+                        agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                    )
+                    .order_by(agent_memory.c.id)
+                    .limit(limit)
+                )
+            ).mappings()
+        )
+
+    async def enqueue_rebuild(self, uids: set[str]) -> None:
+        """为活动 UID 重新生成双目标 UPSERT 期望状态。"""
+        await self._set_outbox(uids, MemoryIndexOperation.UPSERT)

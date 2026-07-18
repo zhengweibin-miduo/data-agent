@@ -9,7 +9,13 @@ from redis.exceptions import RedisError
 
 from data_agent.application import create_app
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models import DDLJobRequest
+from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
+from data_agent.ddl_metadata.models import (
+    DDLJobRequest,
+    MemoryKind,
+    SemanticDecisionContent,
+)
+from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.settings import APISettings, AppSettings, app_config
 from tests.helpers.checks import (
     check_condition,
@@ -17,6 +23,7 @@ from tests.helpers.checks import (
     check_exception,
     fail_check,
 )
+from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 
 
 class _UnavailableJobs:
@@ -234,3 +241,99 @@ async def _test_api() -> None:
 async def test_ddl_metadata_api() -> None:
     """运行 API 检查。"""
     await _test_api()
+
+
+@pytest.mark.integration
+async def test_memory_api() -> None:
+    """验证受约束的记忆读取、修正、删除与 MySQL 降级检索。"""
+    await ensure_schema()
+    source = f"memory_api_{uuid4().hex}"
+    schema = parse_ddl(
+        source,
+        "CREATE TABLE dim_api (id BIGINT PRIMARY KEY, name VARCHAR(64))",
+    )
+    metadata = semantic_for(schema, fact=False)
+    await MetadataSnapshotService().persist(schema, metadata, [], [], [])
+    target = SemanticDecisionContent(
+        kind=MemoryKind.SEMANTIC_DECISION,
+        table=metadata.tables[0],
+    )
+    app = create_app()
+    try:
+        async with app.router.lifespan_context(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://test",
+            ) as client:
+                search = await client.get(
+                    "/api/v1/metadata/memories/search",
+                    params={
+                        "query": schema.tables[0].id,
+                        "source": source,
+                        "kind": MemoryKind.SEMANTIC_DECISION.value,
+                    },
+                )
+                check_equal("test_memory_api 检查点 1", search.status_code, 200)
+                items = search.json()["items"]
+                check_equal("test_memory_api 检查点 2", len(items), 1)
+                memory_uid = items[0]["memory"]["uid"]
+
+                detail = await client.get(
+                    f"/api/v1/metadata/memories/{memory_uid}"
+                )
+                check_equal("test_memory_api 检查点 3", detail.status_code, 200)
+                history = await client.get(
+                    f"/api/v1/metadata/memories/{memory_uid}/history"
+                )
+                check_equal(
+                    "test_memory_api 检查点 4",
+                    [event["event_type"] for event in history.json()["items"]],
+                    ["ADD"],
+                )
+
+                corrected = target.model_copy(
+                    update={
+                        "table": target.table.model_copy(
+                            update={"description": "用户确认的维表说明"}
+                        )
+                        if target.table is not None
+                        else None
+                    }
+                )
+                patch_body = {
+                    "content": corrected.model_dump(mode="json"),
+                }
+                updated = await client.patch(
+                    f"/api/v1/metadata/memories/{memory_uid}",
+                    json=patch_body,
+                )
+                check_equal("test_memory_api 检查点 5", updated.status_code, 200)
+                repeated = await client.patch(
+                    f"/api/v1/metadata/memories/{memory_uid}",
+                    json=patch_body,
+                )
+                check_equal("test_memory_api 检查点 6", repeated.status_code, 409)
+                check_equal(
+                    "test_memory_api 检查点 7",
+                    repeated.json()["error"]["code"],
+                    "unchanged_update",
+                )
+
+                deleted = await client.delete(
+                    f"/api/v1/metadata/memories/{memory_uid}"
+                )
+                check_equal("test_memory_api 检查点 8", deleted.status_code, 200)
+                absent = await client.get(
+                    "/api/v1/metadata/memories/search",
+                    params={"query": schema.tables[0].id, "source": source},
+                )
+                check_equal("test_memory_api 检查点 9", absent.json()["items"], [])
+                add = await client.post(
+                    "/api/v1/metadata/memories",
+                    json=patch_body,
+                )
+                check_equal("test_memory_api 检查点 10", add.status_code, 404)
+    finally:
+        await ensure_schema()
+        await cleanup_schema(schema)

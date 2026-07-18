@@ -19,7 +19,7 @@ from data_agent.ddl_metadata.models import (
     MetricAnswer,
     MetricQuestion,
 )
-from data_agent.ddl_metadata.persistence.tables import llm_memory, table_info
+from data_agent.ddl_metadata.persistence.tables import agent_memory, table_info
 from data_agent.ddl_metadata.workflow.graph import (
     DDLGraphDependencies,
     build_ddl_metadata_graph,
@@ -67,7 +67,7 @@ async def _test_flow() -> None:
     await ensure_schema()
     check_equal(
         "_test_flow 检查点 1",
-        llm_memory.schema,
+        agent_memory.schema,
         app_config.memory.database,
     )
     check_condition(
@@ -194,8 +194,8 @@ async def _test_flow() -> None:
                 (
                     await session.scalar(
                         select(func.count())
-                        .select_from(llm_memory)
-                        .where(llm_memory.c.source == source)
+                        .select_from(agent_memory)
+                        .where(agent_memory.c.source == source)
                     )
                     or 0
                 )

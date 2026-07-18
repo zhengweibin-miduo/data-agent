@@ -111,7 +111,7 @@ support, and the installed `data_agent` package is the runtime import target.
 - For graph/worker work, prove interrupt/resume revision safety and that a
   persistence retry does not repeat completed model calls.
 - For persistence/memory work, prove scoped cleanup, rollback, exact compatible
-  reuse, archive exclusion, and correction supersession.
+  reuse, soft-delete exclusion, update events, and outbox replay.
 - Verify pytest collection uses `tests/` and the installed `data_agent`
   package, not a repository-root fallback import.
 - Verify every public runtime and test object has a meaningful Docstring; do
