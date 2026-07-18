@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "遵守 tests/helpers、unit、integration 的目录边界与测试命名约定。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "保持 pytest 自动回归、异步测试、marker、资源清理和质量门禁。"}
