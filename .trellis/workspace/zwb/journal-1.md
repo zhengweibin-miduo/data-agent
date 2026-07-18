@@ -406,3 +406,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 基于 Mem0 重构项目记忆架构
+
+**Date**: 2026-07-19
+**Task**: 基于 Mem0 重构项目记忆架构
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+参考 mem0ai/mem0 重构三层记忆：LangGraph 工作记忆、Redis checkpoint 情景记忆、MySQL 权威长期记忆；接入 Elasticsearch BM25、Qdrant/TEI 向量投影、双目标 outbox、混合召回、权威回查及领域安全 API，并完成测试与规范同步。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fa7afff` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
