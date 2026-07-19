@@ -606,3 +606,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: 增加 DDL 任务 SSE 流式输出
+
+**Date**: 2026-07-19
+**Task**: 增加 DDL 任务 SSE 流式输出
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+新增可重连 DDL 任务 SSE 事件流、Redis Stream 有界事件存储、Worker 稳定业务阶段、断线与安全错误处理，并完成单元集成及质量验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `caab5d9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
