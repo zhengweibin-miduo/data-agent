@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "检查文档是否覆盖当前后端实际边界且未引入无关范围。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "核对模块职责、目录名称和依赖方向。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对数据库、事务、元数据和长期记忆描述。"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "核对外部服务生命周期、检查点和结构化 LLM 契约。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对错误投影、重试、状态转换和清理描述。"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对可观测性与敏感信息边界。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "提供最终质量门禁和测试证据要求。"}

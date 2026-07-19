@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/prd.md", "reason": "Repository-wide scope, compatibility constraints, and acceptance criteria."}
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/design.md", "reason": "Target package tree, dependency direction, migration strategy, and rollback boundaries."}
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/research/responsibility-audit.md", "reason": "Evidence-backed keep, move, and split decisions for every production area."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Current package ownership and dependency-direction contract."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Shared MySQL session, schema-qualified memory tables, and atomic persistence invariants."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Redis, checkpoint, model, TEI, Elasticsearch, and Qdrant runtime contracts."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "API, worker, retry, and terminal-cleanup error behavior."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer import and serialized-contract migration checklist."}

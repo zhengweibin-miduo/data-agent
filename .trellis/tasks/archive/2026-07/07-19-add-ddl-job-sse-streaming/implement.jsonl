@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/07-19-add-ddl-job-sse-streaming/prd.md", "reason": "Approved product scope, stable business stages, reconnect semantics, and acceptance criteria."}
+{"file": ".trellis/tasks/07-19-add-ddl-job-sse-streaming/design.md", "reason": "SSE contract, Redis Stream boundary, LangGraph task-event mapping, recovery behavior, and rollback design."}
+{"file": ".trellis/tasks/07-19-add-ddl-job-sse-streaming/implement.md", "reason": "Ordered implementation checklist, validation commands, and rollback points."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Feature-first ownership, DDLJobStore facade, and dependency-direction rules."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Redis and LangGraph executable integration contracts."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "API status mapping, worker retry, and safe terminal-error requirements."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required lint, type, compile, configuration, and test gates."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer serialized-contract and consumer tracing checklist."}

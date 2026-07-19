@@ -237,3 +237,405 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: LangGraph DDL 元数据异步转换
+
+**Date**: 2026-07-17
+**Task**: LangGraph DDL 元数据异步转换
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+实现本地异步 FastAPI、LangGraph DDL 解析与人工指标确认、Redis 队列及恢复、Meta 跨库原子同步，以及独立 data_agent 长期记忆库和浏览器记忆管理。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dfe7326` | (see git log) |
+| `27cb590` | (see git log) |
+| `c7229c3` | (see git log) |
+| `9ae3d09` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 9: 重构 Python 项目结构与命名注释规范
+
+**Date**: 2026-07-18
+**Task**: 重构 Python 项目结构与命名注释规范
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+迁移到 src/data_agent Feature-first 结构，统一公开类名与中文 Google Style Docstring，启用 Ruff Docstring 门禁并将测试迁移到 pytest。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e19692b` | (see git log) |
+| `bbb2eac` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 10: 将适合的 for 循环改为推导式
+
+**Date**: 2026-07-18
+**Task**: 将适合的 for 循环改为推导式
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+将指标列表构造改为列表推导式，并用生成器表达式保持 Redis 参数扁平化顺序；Ruff、Pyright、compileall、非集成测试和等价性检查均通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cdf46b4` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 11: 测试结果可观察化与自动回归检查
+
+**Date**: 2026-07-18
+**Task**: 测试结果可观察化与自动回归检查
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+将 tests 下 228 处裸 assert 统一改为带 PASS/FAIL 输出的检查辅助调用，并通过 pytest.fail 保留自动回归阻断；单元测试和 MySQL/Redis 集成测试通过，TEI 因服务不可达未执行。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7f1f420` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 12: 规范化应用结构化日志
+
+**Date**: 2026-07-19
+**Task**: 规范化应用结构化日志
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+实现 Loguru 文本与扁平 JSON 双格式、稳定事件字段、DDL 任务与 Worker 生命周期日志，迁移现有调用点并补齐安全与并发测试；独立检查修复异常消息泄露和非有限浮点 JSON 问题。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a688be1` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 13: 基于 Mem0 重构项目记忆架构
+
+**Date**: 2026-07-19
+**Task**: 基于 Mem0 重构项目记忆架构
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+参考 mem0ai/mem0 重构三层记忆：LangGraph 工作记忆、Redis checkpoint 情景记忆、MySQL 权威长期记忆；接入 Elasticsearch BM25、Qdrant/TEI 向量投影、双目标 outbox、混合召回、权威回查及领域安全 API，并完成测试与规范同步。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fa7afff` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 14: 完成个人软件架构设计手册
+
+**Date**: 2026-07-19
+**Task**: 完成个人软件架构设计手册
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+清理旧记忆方案兼容遗留，交付并验证中文 HTML 架构手册及 12 张 SVG 架构图。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6fec91e` | (see git log) |
+| `fcd71f2` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 15: 补齐 MySQL 建表备注
+
+**Date**: 2026-07-19
+**Task**: 补齐 MySQL 建表备注
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+为 meta、data_agent 与 dw 三份 MySQL 初始化脚本的 13 张表和 79 个业务字段补齐中文备注，并在数据库规范中固化备注与等价性检查要求；静态检查、Compose、Ruff、Pyright、非集成测试均通过，Docker daemon 未运行故未执行真实 MySQL 初始化。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9d2ba13` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 16: 拆分 DDL 任务存储职责
+
+**Date**: 2026-07-19
+**Task**: 拆分 DDL 任务存储职责
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+将 DDLJobStore 拆分为键、编解码、Lua、状态、租约和 outbox 专职 Store，保留门面兼容并完成静态与 live 集成验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9ff9053` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 17: 完成 DDL 元数据包职责重组
+
+**Date**: 2026-07-19
+**Task**: 完成 DDL 元数据包职责重组
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+完成仓库级职责与包结构重组；全量检查无 P0/P1，Ruff、Pyright、30 个非 TEI 测试与 TEI 专项测试均通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b4adbeb` | (see git log) |
+| `c86ce9c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 18: 异步化运行时阻塞边界
+
+**Date**: 2026-07-19
+**Task**: 异步化运行时阻塞边界
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+完成全仓同步边界审计；将 DDL 解析迁移为线程承载的异步公共契约，队列化并排空 Loguru sink，增加有界 DDL 大小检查，删除旧同步公共调用并通过全量质量门禁。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `93842e0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 19: 增加 DDL 任务 SSE 流式输出
+
+**Date**: 2026-07-19
+**Task**: 增加 DDL 任务 SSE 流式输出
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+新增可重连 DDL 任务 SSE 事件流、Redis Stream 有界事件存储、Worker 稳定业务阶段、断线与安全错误处理，并完成单元集成及质量验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `caab5d9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

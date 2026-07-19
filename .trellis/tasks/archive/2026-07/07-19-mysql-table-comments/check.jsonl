@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "核对后端范围边界和所需质量检查。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查三份 MySQL 初始化脚本的表归属、结构兼容性与非破坏性要求。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行适用于 SQL 和 Docker 配置变更的仓库质量门禁并如实报告环境限制。"}
+{"file": "code_review.md", "reason": "按仓库唯一审查规范，以简体中文和可验证证据报告阻塞问题。"}

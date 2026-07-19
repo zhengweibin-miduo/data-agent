@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "提供当前后端范围、模块边界和质量检查入口。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "定义当前 Python 包结构、模块职责和依赖方向，是 As-Is 组件章节的主要规范证据。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "定义 MySQL、SQLAlchemy Core、事务、元数据快照和长期记忆的数据边界。"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "定义 Redis、LangGraph 检查点、LLM、TEI 等外部服务的生命周期与可靠性契约。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "定义 API 安全错误、worker 重试、终态与清理行为。"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "定义进程日志、trace_id 和敏感信息边界。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "定义测试层次和项目质量验证命令。"}

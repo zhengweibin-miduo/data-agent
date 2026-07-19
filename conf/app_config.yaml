@@ -1,22 +1,78 @@
 logging:
+  service_name: data-agent
+  deployment_environment: local
   file:
     enable: true
     level: INFO
+    format: json
     path: logs
     rotation: "10 MB"
     retention: "7 days"
   console:
     enable: true
     level: INFO
+    format: text
 
 qdrant:
   url: http://localhost:6333
+  memory_collection: data_agent_memory
+  vector_size: 1024
+  distance: Cosine
+  top_k: 20
 
 elasticsearch:
   url: http://localhost:9200
+  memory_index: data_agent_memory
+  analyzer: ik_max_word
+  top_k: 20
 
 tei:
   url: http://localhost:8080
+  vector_size: 1024
 
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
+
+api:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins:
+    - http://127.0.0.1:3000
+    - http://localhost:3000
+  max_ddl_bytes: 262144
+  max_tables: 50
+  max_columns: 500
+  sse_heartbeat_seconds: 15
+
+redis:
+  url: redis://localhost:6379/0
+  key_prefix: ddl
+  checkpoint_retention_seconds: 86400
+  result_retention_seconds: 86400
+  event_stream_max_events: 256
+  waiting_timeout_seconds: 1800
+  worker_concurrency: 4
+  worker_job_timeout_seconds: 600
+
+llm:
+  base_url: http://127.0.0.1:11434/v1
+  model: local-model
+  request_timeout_seconds: 60
+  semantic_confidence_threshold: 0.75
+  structured_output_method: json_schema
+  max_concurrency: 4
+  max_retries: 2
+  prompt_version: v1
+  graph_version: v1
+
+memory:
+  database: data_agent
+  content_version: v1
+  projection_version: v1
+  source_lease_seconds: 3600
+  rebuild_batch_size: 100
+  outbox_batch_size: 100
+  outbox_max_backoff_seconds: 3600
+  retrieval_timeout_seconds: 2
+  rrf_constant: 60
+  search_limit: 20

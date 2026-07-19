@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "检查 backend 规范覆盖和跨层契约是否完整。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "检查新模块命名、职责、依赖方向和 package 副作用。"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "核验 Redis key、Lua 原子性、租约、outbox 和 checkpoint cleanup 行为。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核验错误码、状态转换、过期回答和敏感字段清理。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行 Ruff、Pyright、pytest、compileall 与测试质量审查。"}

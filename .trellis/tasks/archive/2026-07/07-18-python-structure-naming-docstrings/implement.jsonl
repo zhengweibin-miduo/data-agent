@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend scope, pre-development checklist, and current-spec update requirements."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Existing package boundaries and naming rules that this task intentionally replaces."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required CI, typing, test, async-resource, and integration validation contracts."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Preserve SQLAlchemy Core schemas, transaction ownership, and non-destructive integration behavior."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Preserve lifecycle and configuration contracts for MySQL, Redis, checkpoints, LLM, TEI, Elasticsearch, and Qdrant."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Preserve API/worker error mapping, propagation, retries, and cleanup while moving modules."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Preserve Loguru setup, context, and safety while relocating logging code."}
+{"file": ".trellis/tasks/07-18-python-structure-naming-docstrings/research/python-layout-and-docstrings.md", "reason": "Selected src layout, feature-first, pytest, naming, and Google Docstring evidence."}

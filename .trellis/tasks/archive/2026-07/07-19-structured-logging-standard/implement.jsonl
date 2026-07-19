@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Defines backend ownership boundaries and routes logging changes to the central logging module."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Authoritative current Loguru sink, context, level, safety, and validation contract to migrate."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Defines module ownership, configuration placement, naming, and Chinese Docstring conventions."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Constrains lifecycle errors, stable business error fields, retries, and safe failure behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Defines test helper usage, type/docstring requirements, and required validation commands."}

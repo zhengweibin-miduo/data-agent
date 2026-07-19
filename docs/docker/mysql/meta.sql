@@ -11,7 +11,7 @@ CREATE TABLE table_info
     name        VARCHAR(128) COMMENT '表名称',
     role        VARCHAR(32) COMMENT '表类型(fact/dim)',
     description TEXT COMMENT '表描述'
-);
+) COMMENT = '存储物理表的结构与业务语义元数据';
 
 
 
@@ -26,7 +26,7 @@ CREATE TABLE column_info
     description TEXT COMMENT '列描述',
     alias       JSON COMMENT '列别名',
     table_id    VARCHAR(64) COMMENT '所属表编号'
-);
+) COMMENT = '存储物理字段的结构与业务语义元数据';
 
 DROP TABLE IF EXISTS metric_info;
 CREATE TABLE metric_info
@@ -36,7 +36,7 @@ CREATE TABLE metric_info
     description      TEXT COMMENT '指标描述',
     relevant_columns JSON COMMENT '关联的列',
     alias            JSON COMMENT '指标别名'
-);
+) COMMENT = '存储基于数据结构定义的业务指标元数据';
 
 
 DROP TABLE IF EXISTS column_metric;
@@ -45,4 +45,4 @@ CREATE TABLE column_metric
     column_id VARCHAR(64) COMMENT '列编号',
     metric_id VARCHAR(64) COMMENT '指标编号',
     PRIMARY KEY (column_id, metric_id)
-);
+) COMMENT = '维护字段与业务指标之间的多对多关联关系';

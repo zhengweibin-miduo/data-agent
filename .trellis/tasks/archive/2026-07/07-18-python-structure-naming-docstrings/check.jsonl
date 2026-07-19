@@ -1,0 +1,9 @@
+{"file": "code_review.md", "reason": "Mandatory repository format and verification rules for AI code review findings."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend review scope and cross-layer trace requirements."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify the new feature-first ownership and naming source of truth."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Full Ruff, Pyright, pytest, integration, lock, compile, and diff quality gate."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check persistence compatibility, transaction boundaries, and safe cleanup."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Check async client lifecycle and third-party integration compatibility."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check API/worker errors, retries, and cleanup behavior after import migration."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Check logging behavior and safety after relocation."}
+{"file": ".trellis/tasks/07-18-python-structure-naming-docstrings/research/python-layout-and-docstrings.md", "reason": "Review the implementation against selected layout, naming, test, and Docstring conventions."}

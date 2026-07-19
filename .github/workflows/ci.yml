@@ -38,6 +38,15 @@ jobs:
           --health-timeout=5s
           --health-retries=12
           --health-start-period=30s
+      redis:
+        image: redis:8.8.0
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
 
     steps:
       - name: Checkout repository
@@ -56,20 +65,28 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Initialize application memory database
+        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_agent.sql
+
+      - name: Configure Redis durability
+        run: |
+          docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET appendonly yes
+          docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET appendfsync everysec
+
       - name: Check lock file
         run: uv lock --check
 
       - name: Run Ruff lint
-        run: uv run --with ruff ruff check app app_test
+        run: uv run ruff check src tests
 
       - name: Run Pyright
-        run: uv run --with pyright pyright app app_test
+        run: uv run pyright src tests
 
       - name: Compile Python modules
-        run: uv run python -m compileall -q app app_test main.py
+        run: uv run python -m compileall -q src tests
 
       - name: Validate application configuration
-        run: uv run python -m app.conf.app_config
+        run: uv run python -m data_agent.settings
 
-      - name: Run MySQL integration test
-        run: uv run python -m app_test.client.test_mysql_client_manager
+      - name: Run pytest suite
+        run: uv run pytest -m "not tei"

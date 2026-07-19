@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend ownership and pre-development routing for all affected runtime layers."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Package ownership, dependency direction, and hard internal migration rules."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Native async test patterns, lint/type checks, and full validation commands."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Existing Loguru sink, field, redaction, lifecycle, and test contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Preserve parser business errors, cleanup order, and original exception propagation."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Confirm external I/O already uses async clients and preserve lifecycle contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace parser and logging lifecycle signature changes across every consumer."}
+{"file":".trellis/tasks/07-19-asyncify-runtime-blocking-boundaries/research/async-runtime-boundary-audit.md","reason":"Repository-wide convert/retain evidence, benchmarks, caveats, and deterministic test design."}

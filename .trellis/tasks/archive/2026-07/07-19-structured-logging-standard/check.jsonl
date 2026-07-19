@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Provides the backend review scope and package boundary checklist."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Primary compliance contract for structured fields, sinks, context, safety, and logging tests."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Required to verify severity, retry, terminal failure, and exception logging semantics."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Defines full quality gates, test patterns, type checks, and review requirements."}

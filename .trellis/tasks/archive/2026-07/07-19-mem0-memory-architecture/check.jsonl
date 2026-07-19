@@ -1,0 +1,7 @@
+{"file": "code_review.md", "reason": "项目 AI 代码审查意见与修复回复的唯一格式规范。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查 Meta、权威记忆和 outbox 原子事务、硬切换和仓储边界。"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "检查 ES、Qdrant、TEI、Redis checkpoint 生命周期与故障行为。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查安全 API 错误、索引降级与 worker 重试分类。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查 Ruff、Pyright、pytest、Docstring 和 live-service 声明。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查共享 DTO、outbox 事件、索引 payload 和召回结果没有跨层契约漂移。"}
+{"file": ".trellis/tasks/07-19-mem0-memory-architecture/research/mem0-open-source-architecture.md", "reason": "检查实现确实参考 mem0ai/mem0 而非 usememos/memos。"}

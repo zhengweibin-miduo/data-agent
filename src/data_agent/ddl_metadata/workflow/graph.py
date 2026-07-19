@@ -1,0 +1,49 @@
+"""可恢复的 LangGraph DDL 元数据工作流装配。"""
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
+from data_agent.ddl_metadata.workflow.nodes import DDLWorkflowNodes
+from data_agent.ddl_metadata.workflow.routing import (
+    after_classification,
+    after_generation,
+    after_memory,
+    after_metadata_validation,
+    after_metric_validation,
+    after_questions,
+    after_terminal_guard,
+)
+from data_agent.ddl_metadata.workflow.state import DDLGraphState
+
+
+def build_ddl_metadata_graph(
+    dependencies: DDLGraphDependencies,
+    checkpointer: BaseCheckpointSaver | None = None,
+) -> CompiledStateGraph:
+    """构建串行、修订安全且可同步持久化的工作流。"""
+    nodes = DDLWorkflowNodes(dependencies)
+    graph = StateGraph(DDLGraphState)
+    graph.add_node("parse_ddl", nodes.parse_node)
+    graph.add_node("load_and_validate_memory", nodes.load_memory_node)
+    graph.add_node("classify_metadata", nodes.classify_node)
+    graph.add_node("validate_metadata", nodes.validate_metadata_node)
+    graph.add_node("plan_metric_questions", nodes.plan_questions_node)
+    graph.add_node("await_metric_answers", nodes.await_answers_node)
+    graph.add_node("generate_metrics", nodes.generate_metrics_node)
+    graph.add_node("validate_metrics", nodes.validate_metrics_node)
+    graph.add_node("build_memory_candidates", nodes.build_memories_node)
+    graph.add_node("persist_snapshot", nodes.persist_node)
+    graph.add_edge(START, "parse_ddl")
+    graph.add_conditional_edges("parse_ddl", after_terminal_guard)
+    graph.add_conditional_edges("load_and_validate_memory", after_memory)
+    graph.add_conditional_edges("classify_metadata", after_classification)
+    graph.add_conditional_edges("validate_metadata", after_metadata_validation)
+    graph.add_conditional_edges("plan_metric_questions", after_questions)
+    graph.add_edge("await_metric_answers", "generate_metrics")
+    graph.add_conditional_edges("generate_metrics", after_generation)
+    graph.add_conditional_edges("validate_metrics", after_metric_validation)
+    graph.add_edge("build_memory_candidates", "persist_snapshot")
+    graph.add_edge("persist_snapshot", END)
+    return graph.compile(checkpointer=checkpointer)
