@@ -7,10 +7,6 @@ GRANT ALL PRIVILEGES ON data_agent.* TO 'data_agent'@'%';
 
 USE data_agent;
 
--- 尚未投入使用的旧 Memos 风格契约不迁移。
-DROP TABLE IF EXISTS llm_memory_relation;
-DROP TABLE IF EXISTS llm_memory;
-
 CREATE TABLE IF NOT EXISTS agent_memory
 (
     id                 BIGINT AUTO_INCREMENT PRIMARY KEY,

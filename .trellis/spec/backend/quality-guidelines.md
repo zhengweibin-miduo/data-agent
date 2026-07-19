@@ -85,8 +85,8 @@ Before persistence integration tests, CI applies
 `docs/docker/mysql/data_agent.sql` through the root account. Developers reusing
 an initialized Compose volume must do the same once because MySQL entrypoint
 bootstrap scripts run only for an empty volume. This command creates/grants the
-application database idempotently and must not be replaced with destructive
-cleanup of legacy Meta memory tables.
+application database and its current memory tables idempotently; it must not be
+replaced with destructive cleanup of Meta tables.
 
 No CI test contacts a live LLM. The LLM infrastructure test mocks the
 capability probe; the real worker startup probe is a separate deployment check.

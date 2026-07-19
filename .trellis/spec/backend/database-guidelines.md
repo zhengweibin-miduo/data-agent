@@ -244,10 +244,10 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
   Compose does not set `MYSQL_DATABASE`.
 - Ownership: `meta.sql` owns exactly the four Meta tables.
   `data_agent.sql` uses InnoDB and owns exactly the four application memory
-  tables. It drops only the never-used legacy `llm_memory*` contract.
+  tables and does not manage retired memory contracts.
 - Existing volume: entrypoint scripts do not rerun. Apply `data_agent.sql`
-  explicitly through the local root account after confirming the legacy
-  application-memory tables were never used; never touch Meta tables.
+  explicitly through the local root account when the current application
+  memory tables are missing; never touch Meta tables.
 
 ### 4. Validation & Error Matrix
 
