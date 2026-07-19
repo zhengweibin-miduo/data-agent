@@ -11,9 +11,9 @@ from tests.helpers.checks import check_condition, check_equal
 from tests.helpers.factories import semantic_for
 
 
-def test_memory_projection_and_rrf() -> None:
+async def test_memory_projection_and_rrf() -> None:
     """验证确定性文本、哈希及稳定 RRF。"""
-    schema = parse_ddl(
+    schema = await parse_ddl(
         "unit_memory",
         "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )

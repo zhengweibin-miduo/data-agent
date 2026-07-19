@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from typing import Literal
@@ -160,12 +161,12 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     )
 
 
-def parse_ddl(
+def _parse_ddl_sync(
     source: str,
     ddl: str,
     limits: APISettings = app_config.api,
 ) -> PhysicalSchema:
-    """解析并规范化有界 MySQL CREATE TABLE DDL。"""
+    """在线程中解析并规范化有界 MySQL CREATE TABLE DDL。"""
     encoded_size = len(ddl.encode("utf-8"))
     if encoded_size > limits.max_ddl_bytes:
         raise DDLMetadataError(
@@ -264,3 +265,12 @@ def parse_ddl(
         schema_fingerprint=schema_fingerprint,
         tables=tables,
     )
+
+
+async def parse_ddl(
+    source: str,
+    ddl: str,
+    limits: APISettings = app_config.api,
+) -> PhysicalSchema:
+    """在线程边界外解析并规范化有界 MySQL CREATE TABLE DDL。"""
+    return await asyncio.to_thread(_parse_ddl_sync, source, ddl, limits)

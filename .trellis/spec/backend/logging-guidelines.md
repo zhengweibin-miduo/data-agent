@@ -13,6 +13,10 @@ Call `setup_logging()` once from the owning process lifecycle before the first
 application event. The FastAPI lifespan and arq worker startup own this call.
 Service, repository, graph, and route modules never add sinks.
 
+Every enabled console or file sink uses `enqueue=True`, so formatting,
+serialization, terminal/file writes, rotation, and retention execute on
+Loguru's queue consumer instead of an async caller's event-loop thread.
+
 ### 2. Configuration
 
 Configuration comes from `app_config.logging`:
@@ -162,11 +166,16 @@ logger.bind(event_name=f"ddl_metadata.job.{job_id}.failed").error("失败")
 | Invalid level, rotation, or retention | Let Loguru fail startup |
 | File directory cannot be created | Let the filesystem error fail startup |
 | Exception record | Remain one physical JSON line with bounded stack text |
+| API or worker shutdown succeeds | Emit the final stopped event, then await `logger.complete()` |
+| A resource close fails during shutdown | Await `logger.complete()` in `finally`, then propagate the original close error |
 
 The logging unit tests must cover strict configuration, idempotent sink setup,
 text rendering, per-line JSON parsing, canonical fields, typed application
-fields, UTF-8, concurrent context isolation, and structured exceptions without
-diagnose local-variable leakage.
+fields, UTF-8, concurrent context isolation, queued sink registration,
+deterministic completion before file reads/removal, lifecycle drain ordering,
+close-failure propagation, and structured exceptions without diagnose
+local-variable leakage. Logging tests must not use fixed sleeps to wait for
+queued records.
 
 When entry-point wiring changes, run `python -m data_agent.main` and inspect the
 console and file outputs. When graph or worker logging changes, exercise an

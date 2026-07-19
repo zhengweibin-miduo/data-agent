@@ -20,7 +20,7 @@ from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 async def test_memory_rebuild_enqueue() -> None:
     """验证全量重建仅从活动 MySQL 权威记忆生成 outbox。"""
     await ensure_schema()
-    schema = parse_ddl(
+    schema = await parse_ddl(
         f"rebuild_{uuid4().hex}",
         "CREATE TABLE dim_region (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )

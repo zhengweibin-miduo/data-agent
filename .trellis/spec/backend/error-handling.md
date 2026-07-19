@@ -148,6 +148,11 @@ DELETE /api/v1/metadata/memories/{memory_uid}
 
 - Submit returns `202` only after the Redis job record, source lease, and
   dispatch outbox are durable.
+- Before submission encodes DDL as UTF-8, reject `len(ddl) >
+  api.max_ddl_bytes`; every Unicode code point occupies at least one UTF-8
+  byte. Encode only the bounded remainder and apply the exact byte comparison
+  so multibyte input near the limit retains the same
+  `DDLMetadataError(code="ddl_too_large", stage="submit")` business response.
 - Status exposes only the stable public state, safe result/error, current
   bounded questions, revision, and expiry.
 - Answer requires the current revision and question-set ID; its question IDs

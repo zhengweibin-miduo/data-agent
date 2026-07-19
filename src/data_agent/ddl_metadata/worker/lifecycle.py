@@ -83,17 +83,20 @@ async def startup(ctx: dict[Any, Any]) -> None:
 async def shutdown(ctx: dict[Any, Any]) -> None:
     """按依赖逆序关闭 worker 资源。"""
     del ctx
-    await CheckpointStore.close()
-    await LLMClient.close()
-    await TEIEmbeddingClient.close()
-    await QdrantClient.close()
-    await ElasticsearchClient.close()
-    await MySQLDatabase.close()
-    await RedisClient.close()
-    logger.bind(
-        component="application.worker",
-        event_name="application.lifecycle.stopped",
-        operation="run_worker",
-        outcome="stopped",
-        worker_role="ddl_metadata",
-    ).info("DDL 元数据 worker 已停止")
+    try:
+        await CheckpointStore.close()
+        await LLMClient.close()
+        await TEIEmbeddingClient.close()
+        await QdrantClient.close()
+        await ElasticsearchClient.close()
+        await MySQLDatabase.close()
+        await RedisClient.close()
+        logger.bind(
+            component="application.worker",
+            event_name="application.lifecycle.stopped",
+            operation="run_worker",
+            outcome="stopped",
+            worker_role="ddl_metadata",
+        ).info("DDL 元数据 worker 已停止")
+    finally:
+        await logger.complete()

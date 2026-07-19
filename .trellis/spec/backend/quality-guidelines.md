@@ -40,6 +40,12 @@
   cleanup. Tests never reset or delete the shared developer Docker volume.
 - Async tests are native pytest async tests. Do not add `asyncio.run()`
   wrappers or test-module `if __name__ == "__main__"` entry points.
+- Material synchronous parsing reached from an async runtime must expose only
+  an async public boundary. `ddl_metadata.parsing.parse_ddl()` awaits
+  `asyncio.to_thread(_parse_ddl_sync, ...)`, and the private callable owns the
+  complete SQLGlot parse, AST projection, canonicalization, hashing, and model
+  construction pipeline. Do not add a public synchronous alias or move only
+  part of that pipeline off the event loop.
 - Test result checks use `tests.helpers.checks.check_equal()` or
   `check_condition()` so every check emits a labeled `PASS` / `FAIL` record
   with actual and expected values before `pytest.fail()` blocks a regression.
@@ -115,6 +121,9 @@ support, and the installed `data_agent` package is the runtime import target.
 - For parser/LLM work, prove unsupported SQL rejects before a model call and
   physical objects cannot be added, removed, renamed, or retyped by model
   output.
+- Parser concurrency tests use thread synchronization events to prove SQLGlot
+  runs off the event-loop thread and the loop progresses while parsing is in
+  flight. Fixed sleeps and polling are not acceptable evidence.
 - For graph/worker work, prove interrupt/resume revision safety and that a
   persistence retry does not repeat completed model calls.
 - For persistence/memory work, prove scoped cleanup, rollback, exact compatible

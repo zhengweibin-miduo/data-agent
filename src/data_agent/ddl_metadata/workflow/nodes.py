@@ -76,7 +76,7 @@ class DDLWorkflowNodes:
             node_name="parse_ddl",
         ).info("开始解析 DDL")
         try:
-            schema = parse_ddl(
+            schema = await parse_ddl(
                 _state_string(state, "source"),
                 _state_string(state, "ddl"),
             )

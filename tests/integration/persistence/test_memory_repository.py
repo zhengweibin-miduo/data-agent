@@ -24,7 +24,7 @@ from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 async def test_memory_repository() -> None:
     """验证 ADD 幂等、历史、软删除和双目标 outbox。"""
     await ensure_schema()
-    schema = parse_ddl(
+    schema = await parse_ddl(
         f"memory_{uuid4().hex}",
         "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )

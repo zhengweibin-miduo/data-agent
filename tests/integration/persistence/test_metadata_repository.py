@@ -81,11 +81,11 @@ async def test_meta_memory_outbox_atomicity() -> None:
     )
     source = f"atomic_{uuid4().hex}"
     rollback_source = f"rollback_{uuid4().hex}"
-    schema = parse_ddl(
+    schema = await parse_ddl(
         source,
         "CREATE TABLE dim_product (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
-    rollback_schema = parse_ddl(
+    rollback_schema = await parse_ddl(
         rollback_source,
         "CREATE TABLE dim_rollback (id BIGINT PRIMARY KEY)",
     )

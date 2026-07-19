@@ -30,9 +30,9 @@ CREATE TABLE fact_order (
 """
 
 
-def _valid_metadata() -> tuple[PhysicalSchema, SemanticMetadata]:
+async def _valid_metadata() -> tuple[PhysicalSchema, SemanticMetadata]:
     """构造与解析模式严格对齐的语义结果。"""
-    schema = parse_ddl("validator", DDL)
+    schema = await parse_ddl("validator", DDL)
     semantic_tables = []
     semantic_columns = []
     for table in schema.tables:
@@ -70,9 +70,9 @@ def _valid_metadata() -> tuple[PhysicalSchema, SemanticMetadata]:
     )
 
 
-def test_metadata_validator() -> None:
+async def test_metadata_validator() -> None:
     """覆盖成功、幻觉、结构角色、置信度和指标引用。"""
-    schema, metadata = _valid_metadata()
+    schema, metadata = await _valid_metadata()
     check_equal(
         "test_metadata_validator 检查点 1",
         validate_metadata(schema, metadata),

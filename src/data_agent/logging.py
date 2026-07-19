@@ -135,6 +135,7 @@ def setup_logging(config: LoggingSettings = app_config.logging) -> None:
             format=_sink_format(config.console.format),
             colorize=config.console.format == "text",
             diagnose=False,
+            enqueue=True,
         )
 
     if config.file.enable:
@@ -148,4 +149,5 @@ def setup_logging(config: LoggingSettings = app_config.logging) -> None:
             retention=config.file.retention,
             encoding="utf-8",
             diagnose=False,
+            enqueue=True,
         )

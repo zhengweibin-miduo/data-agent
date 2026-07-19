@@ -68,7 +68,11 @@ class DDLJobStore:
 
     async def submit(self, request: DDLJobRequest) -> JobRecord:
         """原子写入任务和 outbox 后才报告受理。"""
-        if len(request.ddl.encode()) > app_config.api.max_ddl_bytes:
+        max_ddl_bytes = app_config.api.max_ddl_bytes
+        if (
+            len(request.ddl) > max_ddl_bytes
+            or len(request.ddl.encode()) > max_ddl_bytes
+        ):
             raise DDLMetadataError(
                 "ddl_too_large",
                 "submit",

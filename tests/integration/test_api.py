@@ -250,7 +250,7 @@ async def test_memory_api() -> None:
     """验证受约束的记忆读取、修正、删除与 MySQL 降级检索。"""
     await ensure_schema()
     source = f"memory_api_{uuid4().hex}"
-    schema = parse_ddl(
+    schema = await parse_ddl(
         source,
         "CREATE TABLE dim_api (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )

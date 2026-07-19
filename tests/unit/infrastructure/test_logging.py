@@ -8,6 +8,7 @@ from typing import Literal
 
 from loguru import logger
 from pydantic import ValidationError
+from pytest import MonkeyPatch
 
 from data_agent.logging import setup_logging
 from data_agent.settings import (
@@ -58,7 +59,7 @@ def _read_json_records(log_dir: Path) -> list[dict[str, object]]:
     ]
 
 
-def test_setup_logging_json() -> None:
+async def test_setup_logging_json() -> None:
     """验证重复配置、默认上下文及扁平 JSON 字段。"""
     with TemporaryDirectory() as directory:
         log_dir = Path(directory) / "logs"
@@ -78,6 +79,7 @@ def test_setup_logging_json() -> None:
                 table_count=3,
             ).info("结构化操作完成")
 
+            await logger.complete()
             records = _read_json_records(log_dir)
             check_equal(
                 "test_setup_logging_json 检查点 1",
@@ -125,10 +127,11 @@ def test_setup_logging_json() -> None:
                 expected=sorted(required),
             )
         finally:
+            await logger.complete()
             logger.remove()
 
 
-def test_setup_logging_text() -> None:
+async def test_setup_logging_text() -> None:
     """验证显式文本格式保留事件、组件和追踪上下文。"""
     with TemporaryDirectory() as directory:
         log_dir = Path(directory) / "logs"
@@ -139,6 +142,7 @@ def test_setup_logging_text() -> None:
                 component="test.component",
                 event_name="test.text.rendered",
             ).info("中文文本日志")
+            await logger.complete()
             output = (log_dir / "data-agent.log").read_text(encoding="utf-8")
             check_condition(
                 "test_setup_logging_text 检查点 1",
@@ -159,6 +163,7 @@ def test_setup_logging_text() -> None:
                 expected="UTF-8 中文可读",
             )
         finally:
+            await logger.complete()
             logger.remove()
 
 
@@ -169,16 +174,19 @@ async def test_bound_loggers_keep_isolated_trace_context() -> None:
         try:
             setup_logging(_logging_config(log_dir))
 
-            async def emit(trace_id: str) -> None:
+            def emit(trace_id: str) -> None:
                 """在独立异步任务中写入绑定上下文。"""
-                await asyncio.sleep(0)
                 logger.bind(
                     trace_id=trace_id,
                     component="test.concurrent",
                     event_name="test.concurrent.emitted",
                 ).info("并发日志")
 
-            await asyncio.gather(emit("trace-a"), emit("trace-b"))
+            await asyncio.gather(
+                asyncio.to_thread(emit, "trace-a"),
+                asyncio.to_thread(emit, "trace-b"),
+            )
+            await logger.complete()
             records = _read_json_records(log_dir)
             check_equal(
                 "test_bound_loggers_keep_isolated_trace_context 检查点 1",
@@ -186,10 +194,11 @@ async def test_bound_loggers_keep_isolated_trace_context() -> None:
                 {"trace-a", "trace-b"},
             )
         finally:
+            await logger.complete()
             logger.remove()
 
 
-def test_structured_exception_record() -> None:
+async def test_structured_exception_record() -> None:
     """验证异常记录保持单行且不包含 diagnose 局部变量。"""
     with TemporaryDirectory() as directory:
         log_dir = Path(directory) / "logs"
@@ -208,6 +217,7 @@ def test_structured_exception_record() -> None:
                     error_code="test_failed",
                     retryable=False,
                 ).opt(exception=error).error("测试操作失败")
+            await logger.complete()
             records = _read_json_records(log_dir)
             check_equal(
                 "test_structured_exception_record 检查点 1",
@@ -230,10 +240,11 @@ def test_structured_exception_record() -> None:
                 expected="不包含局部变量值或异常消息",
             )
         finally:
+            await logger.complete()
             logger.remove()
 
 
-def test_json_formatter_rejects_non_finite_numbers() -> None:
+async def test_json_formatter_rejects_non_finite_numbers() -> None:
     """验证非有限浮点值不会生成无效 JSON。"""
     with TemporaryDirectory() as directory:
         log_dir = Path(directory) / "logs"
@@ -244,6 +255,7 @@ def test_json_formatter_rejects_non_finite_numbers() -> None:
                 event_name="test.operation.completed",
                 duration_ms=float("nan"),
             ).info("包含非有限字段的日志")
+            await logger.complete()
             records = _read_json_records(log_dir)
             check_equal(
                 "test_json_formatter_rejects_non_finite_numbers 检查点 1",
@@ -251,6 +263,7 @@ def test_json_formatter_rejects_non_finite_numbers() -> None:
                 None,
             )
         finally:
+            await logger.complete()
             logger.remove()
 
 
@@ -281,3 +294,47 @@ def test_logging_settings_require_structured_fields() -> None:
             actual="配置被接受",
             expected="缺少新增字段时抛出 ValidationError",
         )
+
+
+def test_setup_logging_queues_every_enabled_sink(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证所有启用 sink 都显式使用队列且禁用时不注册。"""
+    registrations: list[dict[str, object]] = []
+
+    def add_spy(sink: object, **options: object) -> int:
+        """记录 sink 注册选项。"""
+        del sink
+        registrations.append(options)
+        return len(registrations)
+
+    monkeypatch.setattr(logger, "remove", lambda: None)
+    monkeypatch.setattr(logger, "configure", lambda **options: None)
+    monkeypatch.setattr(logger, "add", add_spy)
+    enabled = _logging_config(tmp_path).model_copy(
+        update={
+            "console": ConsoleLoggingSettings(
+                enable=True,
+                level="INFO",
+                format="text",
+            )
+        }
+    )
+    setup_logging(enabled)
+    check_equal("启用 sink 数量", len(registrations), 2)
+    check_equal(
+        "所有启用 sink 使用队列",
+        [options.get("enqueue") for options in registrations],
+        [True, True],
+    )
+
+    registrations.clear()
+    disabled = enabled.model_copy(
+        update={
+            "console": enabled.console.model_copy(update={"enable": False}),
+            "file": enabled.file.model_copy(update={"enable": False}),
+        }
+    )
+    setup_logging(disabled)
+    check_equal("全部禁用时不注册 sink", registrations, [])

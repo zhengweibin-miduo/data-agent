@@ -4,15 +4,17 @@ from typing import cast
 
 from redis.asyncio import Redis
 
+from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import JobStatus
+from data_agent.ddl_metadata.models.jobs import DDLJobRequest, JobStatus
 from data_agent.ddl_metadata.models.semantic import (
     MetricAnswer,
     MetricQuestion,
 )
+from data_agent.settings import app_config
 from tests.helpers.checks import check_equal, check_exception, fail_check
 
 
@@ -150,3 +152,32 @@ async def test_ddl_job_store_rejects_illegal_transition_without_redis() -> None:
             actual="未抛出异常",
             expected="访问 Redis 前抛出 ValueError",
         )
+
+
+async def test_ddl_job_store_bounds_size_before_redis() -> None:
+    """字符快拒绝与有界 UTF-8 精确检查保持同一业务错误。"""
+    store = DDLJobStore(cast(Redis, object()))
+    limit = app_config.api.max_ddl_bytes
+    cases = (
+        ("ASCII 字符数越界", "a" * (limit + 1)),
+        ("多字节精确字节数越界", "界" * (limit // 3 + 1)),
+    )
+    for label, ddl in cases:
+        try:
+            await store.submit(
+                DDLJobRequest(
+                    source="bounded_size",
+                    ddl=ddl,
+                )
+            )
+        except DDLMetadataError as error:
+            check_exception(f"{label} 捕获预期异常", error, DDLMetadataError)
+            check_equal(f"{label} 错误码", error.code, "ddl_too_large")
+            check_equal(f"{label} 阶段", error.stage, "submit")
+            check_equal(f"{label} HTTP 状态", error.http_status, 422)
+        else:
+            fail_check(
+                label,
+                actual="未抛出预期异常",
+                expected="Redis 访问前拒绝为 ddl_too_large",
+            )

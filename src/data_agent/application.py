@@ -44,18 +44,21 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await TEIEmbeddingClient.close()
-        await QdrantClient.close()
-        await ElasticsearchClient.close()
-        await MySQLDatabase.close()
-        await RedisClient.close()
-        logger.bind(
-            component="application.api",
-            event_name="application.lifecycle.stopped",
-            operation="serve_api",
-            outcome="stopped",
-            worker_role="api",
-        ).info("API 服务已停止")
+        try:
+            await TEIEmbeddingClient.close()
+            await QdrantClient.close()
+            await ElasticsearchClient.close()
+            await MySQLDatabase.close()
+            await RedisClient.close()
+            logger.bind(
+                component="application.api",
+                event_name="application.lifecycle.stopped",
+                operation="serve_api",
+                outcome="stopped",
+                worker_role="api",
+            ).info("API 服务已停止")
+        finally:
+            await logger.complete()
 
 
 async def _handle_business_error(
