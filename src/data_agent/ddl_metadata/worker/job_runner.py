@@ -432,4 +432,3 @@ async def run_ddl_job(
             error=error,
         )
         await cleanup_checkpoints(ctx)
-
