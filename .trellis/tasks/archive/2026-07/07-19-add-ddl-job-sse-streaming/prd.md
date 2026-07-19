@@ -26,14 +26,14 @@
 
 ## Acceptance Criteria
 
-- [ ] `POST /api/v1/metadata/ddl-jobs` 的既有响应保持兼容，并提供可发现的事件流 URL。
-- [ ] `GET /api/v1/metadata/ddl-jobs/{job_id}/events` 返回标准 SSE，事件包含单调事件 ID、事件类型、任务 ID、修订、时间和公开负载。
-- [ ] 新连接先收到权威任务快照；后续状态变化无需轮询即可送达。
-- [ ] 客户端断线重连后先收到 Redis 权威任务快照，随后继续接收新事件，不依赖单个 API 进程的内存状态。
-- [ ] `waiting_input` 事件包含当前公开问题；提交回答后，同一连接可继续收到新修订事件。
-- [ ] `succeeded`、`rejected` 或 `failed` 事件包含与 `JobRecord` 一致的公开结果/错误并关闭连接。
-- [ ] 心跳可穿过空闲代理时段，且客户端断开后服务端及时释放 Redis 读取与生成器资源。
-- [ ] 现有接口测试与新增 SSE 测试通过；Ruff、Pyright、`compileall` 和配置加载通过。
+- [x] `POST /api/v1/metadata/ddl-jobs` 的既有响应保持兼容，并提供可发现的事件流 URL。
+- [x] `GET /api/v1/metadata/ddl-jobs/{job_id}/events` 返回标准 SSE，事件包含单调事件 ID、事件类型、任务 ID、修订、时间和公开负载。
+- [x] 新连接先收到权威任务快照；后续状态变化无需轮询即可送达。
+- [x] 客户端断线重连后先收到 Redis 权威任务快照，随后继续接收新事件，不依赖单个 API 进程的内存状态。
+- [x] `waiting_input` 事件包含当前公开问题；提交回答后，同一连接可继续收到新修订事件。
+- [x] `succeeded`、`rejected` 或 `failed` 事件包含与 `JobRecord` 一致的公开结果/错误并关闭连接。
+- [x] 心跳可穿过空闲代理时段，且客户端断开后服务端及时释放 Redis 读取与生成器资源。
+- [x] 现有接口测试与新增 SSE 测试通过；Ruff、Pyright、`compileall` 和配置加载通过。
 
 ## Out of Scope
 
