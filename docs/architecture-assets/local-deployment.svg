@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+<title id="title">当前本地部署拓扑</title><desc id="desc">本机 FastAPI 和 Worker 使用 Redis、MySQL、Elasticsearch、Qdrant、TEI 及 OpenAI 兼容端点，派生检索服务通过 Docker Compose 运行。</desc>
+<defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 0 6 9 3z" fill="#315b73"/></marker><style>text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}.t{font-size:26px;font-weight:700}.n{font-size:17px;font-weight:700}.s{font-size:13px;fill:#587083}.e{font-size:12px;fill:#315b73}.c{fill:#e7f2ff;stroke:#2f6f9f;stroke-width:2}.d{fill:#eaf8f4;stroke:#2d8872;stroke-width:2}.x{fill:#fff4e8;stroke:#c97d2b;stroke-width:2}.z{fill:#f8fbfc;stroke:#9db4c1;stroke-width:2;stroke-dasharray:8 6}.l{fill:none;stroke:#315b73;stroke-width:2.2;marker-end:url(#a)}.b{fill:none;stroke:#315b73;stroke-width:2.2}</style></defs>
+<rect width="1200" height="760" rx="24" fill="#f6f9fc"/><text x="50" y="55" class="t">As-Is · 本地部署拓扑</text>
+<rect x="50" y="85" width="1100" height="330" rx="22" fill="#fff" stroke="#c7d6df"/><text x="78" y="120" class="s">本机 Python 进程</text>
+<rect x="85" y="180" width="180" height="76" rx="15" class="c"/><text x="175" y="225" text-anchor="middle" class="n">浏览器 / API 客户端</text>
+<rect x="350" y="170" width="210" height="96" rx="15" class="c"/><text x="455" y="205" text-anchor="middle" class="n">FastAPI :8000</text><text x="455" y="230" text-anchor="middle" class="s">127.0.0.1</text><text x="455" y="251" text-anchor="middle" class="s">任务 + 记忆搜索/管理</text>
+<rect x="650" y="170" width="210" height="96" rx="15" class="c"/><text x="755" y="205" text-anchor="middle" class="n">arq Worker</text><text x="755" y="230" text-anchor="middle" class="s">DDL 图 + 索引 dispatcher</text><text x="755" y="251" text-anchor="middle" class="s">结构化日志</text>
+<rect x="925" y="180" width="190" height="76" rx="15" class="x"/><text x="1020" y="213" text-anchor="middle" class="n">OpenAI :11434</text><text x="1020" y="237" text-anchor="middle" class="s">兼容结构化输出</text>
+<rect x="500" y="315" width="210" height="72" rx="15" class="d"/><text x="605" y="347" text-anchor="middle" class="n">logs/data-agent.log</text><text x="605" y="370" text-anchor="middle" class="s">JSON · 10 MB · 7 days</text>
+<path d="M265 218H350M560 218H650M860 218H925" class="l"/>
+<path d="M455 266V292M755 266V292M455 292H755M605 292V315" class="l"/>
+<text x="605" y="285" text-anchor="middle" class="e">统一结构化日志</text>
+<rect x="50" y="455" width="1100" height="235" rx="22" class="z"/><text x="78" y="490" class="s">Docker Compose 基础设施 · 当前 API/Worker 均有连接</text>
+<rect x="80" y="540" width="185" height="70" rx="14" class="d"/><text x="173" y="570" text-anchor="middle" class="n">Redis :6379</text><text x="173" y="592" text-anchor="middle" class="s">AOF everysec</text>
+<rect x="295" y="540" width="185" height="70" rx="14" class="d"/><text x="388" y="570" text-anchor="middle" class="n">MySQL :3306</text><text x="388" y="592" text-anchor="middle" class="s">meta + data_agent</text>
+<rect x="510" y="540" width="190" height="70" rx="14" class="x"/><text x="605" y="570" text-anchor="middle" class="n">Elasticsearch :9200</text><text x="605" y="592" text-anchor="middle" class="s">memory v2 / IK</text>
+<rect x="730" y="540" width="185" height="70" rx="14" class="x"/><text x="823" y="570" text-anchor="middle" class="n">Qdrant :6333</text><text x="823" y="592" text-anchor="middle" class="s">memory v2 / 1024</text>
+<rect x="945" y="540" width="175" height="70" rx="14" class="x"/><text x="1033" y="570" text-anchor="middle" class="n">TEI :8080</text><text x="1033" y="592" text-anchor="middle" class="s">bge-large-zh-v1.5</text>
+<path d="M455 387V450M755 387V450M173 450H1033" class="b"/>
+<circle cx="455" cy="450" r="4" fill="#315b73"/><circle cx="755" cy="450" r="4" fill="#315b73"/>
+<text x="605" y="440" text-anchor="middle" class="e">API / Worker 共享基础设施访问总线</text>
+<path d="M173 450V540M388 450V540M605 450V540M823 450V540M1033 450V540" class="l"/>
+<text x="600" y="724" text-anchor="middle" class="s">默认拓扑服务于本地开发，不代表公网安全部署；派生索引可由 MySQL outbox 全量重建。</text>
+</svg>

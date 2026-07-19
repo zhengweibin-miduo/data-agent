@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 920" role="img" aria-labelledby="title desc">
+  <title id="title">当前 Python 模块与主要依赖方向</title>
+  <desc id="desc">模块按进程入口、协议与编排、共享能力、领域基础四层排列。main 进入 application，application 组合 API、任务、记忆和基础设施；worker 协调工作流、任务、记忆和基础设施。API 使用任务与记忆模块，工作流使用记忆模块，记忆模块使用持久化仓储。基础设施卡片列出其调用方，领域基础卡片列出共同依赖它的模块。箭头从调用方指向被依赖模块，API 与 worker 不互相依赖。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0 0 0 6 9 3z" fill="#3b6178"/>
+    </marker>
+    <style>
+      text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}
+      .title{font-size:26px;font-weight:700}
+      .node-title{font-size:17px;font-weight:700}
+      .small{font-size:13px;fill:#526b7c}
+      .detail{font-size:12px;fill:#526b7c}
+      .layer-label{font-size:12px;font-weight:700;letter-spacing:1.5px;fill:#6b8292}
+      .entry{fill:#e7f2ff;stroke:#2f6f9f;stroke-width:2}
+      .feature{fill:#eaf8f4;stroke:#2d8872;stroke-width:2}
+      .adapter{fill:#fff;stroke:#80a1b3;stroke-width:2}
+      .domain{fill:#fff4e8;stroke:#c97d2b;stroke-width:2}
+      .layer{fill:#ffffff;fill-opacity:.52;stroke:#dce7ee;stroke-width:1}
+      .line{fill:none;stroke:#3b6178;stroke-width:2;stroke-linejoin:round;stroke-linecap:round;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <rect width="1200" height="920" rx="24" fill="#f6f9fc"/>
+  <text x="55" y="55" class="title">As-Is · Python 模块与主要依赖方向</text>
+  <text x="55" y="82" class="small">从上到下阅读主路径；卡片内直接列出组合依赖与共享依赖，避免交叉连线。</text>
+
+  <rect x="40" y="110" width="1120" height="140" rx="18" class="layer"/>
+  <text x="58" y="134" class="layer-label">01 进程入口</text>
+  <rect x="40" y="285" width="1120" height="145" rx="18" class="layer"/>
+  <text x="58" y="309" class="layer-label">02 HTTP 协议、工作流与外部资源</text>
+  <rect x="40" y="465" width="1120" height="145" rx="18" class="layer"/>
+  <text x="58" y="489" class="layer-label">03 状态、记忆与仓储</text>
+  <rect x="40" y="645" width="1120" height="205" rx="18" class="layer"/>
+  <text x="58" y="669" class="layer-label">04 领域契约与确定性逻辑</text>
+
+  <!-- Short connectors keep the primary reading paths visible. -->
+  <path d="M185 180 H245" class="line"/>
+  <path d="M395 222 V270 H330 V330" class="line"/>
+  <path d="M825 222 V270 H600 V330" class="line"/>
+  <path d="M225 410 V510" class="line"/>
+  <path d="M350 370 H415 V550 H475" class="line"/>
+  <path d="M600 410 V510" class="line"/>
+  <path d="M725 550 H850" class="line"/>
+
+  <!-- Process entry points -->
+  <rect x="55" y="148" width="130" height="64" rx="14" class="entry"/>
+  <text x="120" y="175" text-anchor="middle" class="node-title">main</text>
+  <text x="120" y="197" text-anchor="middle" class="small">ASGI 入口</text>
+
+  <rect x="245" y="138" width="300" height="84" rx="14" class="entry"/>
+  <text x="395" y="169" text-anchor="middle" class="node-title">application</text>
+  <text x="395" y="191" text-anchor="middle" class="small">FastAPI 组合与 lifespan</text>
+  <text x="395" y="209" text-anchor="middle" class="detail">组合 api · jobs · memory · infrastructure</text>
+
+  <rect x="650" y="138" width="350" height="84" rx="14" class="entry"/>
+  <text x="825" y="169" text-anchor="middle" class="node-title">ddl_metadata.worker</text>
+  <text x="825" y="191" text-anchor="middle" class="small">arq 进程入口与执行协调</text>
+  <text x="825" y="209" text-anchor="middle" class="detail">协调 workflow · jobs · memory · infrastructure</text>
+
+  <!-- Protocol, orchestration and shared adapters -->
+  <rect x="100" y="330" width="250" height="80" rx="14" class="feature"/>
+  <text x="225" y="362" text-anchor="middle" class="node-title">ddl_metadata.api</text>
+  <text x="225" y="386" text-anchor="middle" class="small">HTTP 映射；调用 jobs 与 memory</text>
+
+  <rect x="475" y="330" width="250" height="80" rx="14" class="feature"/>
+  <text x="600" y="362" text-anchor="middle" class="node-title">workflow</text>
+  <text x="600" y="386" text-anchor="middle" class="small">图编排；依赖 jobs、memory 与领域逻辑</text>
+
+  <rect x="850" y="315" width="250" height="100" rx="14" class="adapter"/>
+  <text x="975" y="350" text-anchor="middle" class="node-title">infrastructure</text>
+  <text x="975" y="374" text-anchor="middle" class="small">外部资源生命周期</text>
+  <text x="975" y="394" text-anchor="middle" class="detail">API 进程：application</text>
+  <text x="975" y="406" text-anchor="middle" class="detail">Worker：worker · workflow · memory</text>
+
+  <!-- Shared feature capabilities -->
+  <rect x="100" y="510" width="250" height="80" rx="14" class="feature"/>
+  <text x="225" y="542" text-anchor="middle" class="node-title">jobs</text>
+  <text x="225" y="566" text-anchor="middle" class="small">状态、租约、dispatch 与 cleanup</text>
+
+  <rect x="475" y="510" width="250" height="80" rx="14" class="feature"/>
+  <text x="600" y="542" text-anchor="middle" class="node-title">memory</text>
+  <text x="600" y="566" text-anchor="middle" class="small">记忆编排；调用 jobs 与 persistence</text>
+
+  <rect x="850" y="510" width="250" height="80" rx="14" class="adapter"/>
+  <text x="975" y="542" text-anchor="middle" class="node-title">persistence</text>
+  <text x="975" y="566" text-anchor="middle" class="small">SQLAlchemy Core 表与仓储</text>
+
+  <!-- Shared domain foundation -->
+  <rect x="90" y="700" width="1020" height="120" rx="18" class="domain"/>
+  <text x="600" y="733" text-anchor="middle" class="node-title">领域契约与确定性逻辑</text>
+  <text x="185" y="776" text-anchor="middle" class="node-title">models</text>
+  <text x="390" y="776" text-anchor="middle" class="node-title">parsing</text>
+  <text x="595" y="776" text-anchor="middle" class="node-title">validation</text>
+  <text x="800" y="776" text-anchor="middle" class="node-title">identifiers</text>
+  <text x="1005" y="776" text-anchor="middle" class="node-title">errors</text>
+  <text x="600" y="803" text-anchor="middle" class="detail">由 api · worker · workflow · jobs · memory · persistence 按职责引用；不反向依赖进程或活动连接</text>
+</svg>

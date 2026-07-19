@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 940" role="img" aria-labelledby="title desc">
+<title id="title">To-Be 推荐技术架构</title><desc id="desc">保持 API 与 Worker 两进程，通过应用服务、工作流运行时、恢复协调器、记忆检索与索引同步端口分离职责。</desc>
+<defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 0 6 9 3z" fill="#315b73"/></marker><style>text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}.t{font-size:26px;font-weight:700}.n{font-size:16px;font-weight:700}.s{font-size:12px;fill:#587083}.api{fill:#e7f2ff;stroke:#2f6f9f;stroke-width:2}.core{fill:#eaf8f4;stroke:#2d8872;stroke-width:2}.port{fill:#fff;stroke:#7899aa;stroke-width:2}.adapter{fill:#fff4e8;stroke:#c97d2b;stroke-width:2}.zone{fill:#f8fbfc;stroke:#b5c8d2;stroke-width:2;stroke-dasharray:8 6}.l{fill:none;stroke:#315b73;stroke-width:2;marker-end:url(#a)}.b{fill:none;stroke:#315b73;stroke-width:2}</style></defs>
+<rect width="1200" height="940" rx="24" fill="#f6f9fc"/><text x="50" y="55" class="t">To-Be · 推荐技术架构（边界演进）</text>
+<rect x="50" y="85" width="1100" height="225" rx="22" class="zone"/><text x="78" y="120" class="s">FastAPI 进程 · 用例层</text>
+<rect x="430" y="140" width="340" height="56" rx="14" class="api"/><text x="600" y="175" text-anchor="middle" class="n">FastAPI Routes</text>
+<rect x="170" y="225" width="350" height="60" rx="14" class="core"/><text x="345" y="262" text-anchor="middle" class="n">JobApplicationService</text>
+<rect x="680" y="225" width="350" height="60" rx="14" class="core"/><text x="855" y="262" text-anchor="middle" class="n">MemoryApplicationService</text>
+<path d="M600 196V210M345 210H855" class="b"/>
+<path d="M345 210V225" class="l"/><path d="M855 210V225" class="l"/>
+<rect x="50" y="335" width="1100" height="235" rx="22" class="zone"/><text x="78" y="370" class="s">arq Worker 进程 · 执行、恢复与派生索引同步</text>
+<rect x="430" y="390" width="340" height="56" rx="14" class="api"/><text x="600" y="425" text-anchor="middle" class="n">arq Activation Adapter</text>
+<rect x="95" y="485" width="300" height="60" rx="14" class="core"/><text x="245" y="522" text-anchor="middle" class="n">WorkflowRuntime</text>
+<rect x="450" y="485" width="300" height="60" rx="14" class="core"/><text x="600" y="522" text-anchor="middle" class="n">RecoveryCoordinator</text>
+<rect x="805" y="485" width="300" height="60" rx="14" class="core"/><text x="955" y="522" text-anchor="middle" class="n">MemoryIndexCoordinator</text>
+<path d="M600 446V465M245 465H955" class="b"/>
+<path d="M245 465V485" class="l"/><path d="M600 465V485" class="l"/><path d="M955 465V485" class="l"/>
+<text x="50" y="615" class="s">端口与适配器 · 保持基础设施，显式分离权威事实、控制状态和派生投影</text>
+<rect x="50" y="650" width="160" height="58" rx="13" class="port"/><text x="130" y="685" text-anchor="middle" class="n">JobStatePort</text>
+<rect x="225" y="650" width="160" height="58" rx="13" class="port"/><text x="305" y="685" text-anchor="middle" class="n">JobSchedulePort</text>
+<rect x="400" y="650" width="160" height="58" rx="13" class="port"/><text x="480" y="685" text-anchor="middle" class="n">CheckpointPort</text>
+<rect x="585" y="650" width="170" height="58" rx="13" class="port"/><text x="670" y="685" text-anchor="middle" class="n">Snapshot / Memory</text>
+<rect x="780" y="650" width="160" height="58" rx="13" class="port"/><text x="860" y="685" text-anchor="middle" class="n">RetrievalPort</text>
+<rect x="965" y="650" width="185" height="58" rx="13" class="port"/><text x="1058" y="675" text-anchor="middle" class="n">Telemetry</text><text x="1058" y="695" text-anchor="middle" class="s">metrics / tracing</text>
+<rect x="80" y="805" width="320" height="70" rx="14" class="adapter"/><text x="240" y="846" text-anchor="middle" class="n">Redis Adapter</text>
+<rect x="450" y="805" width="200" height="70" rx="14" class="adapter"/><text x="550" y="835" text-anchor="middle" class="n">MySQL Adapter</text><text x="550" y="856" text-anchor="middle" class="s">事实 + 索引 outbox</text>
+<rect x="690" y="805" width="220" height="70" rx="14" class="adapter"/><text x="800" y="835" text-anchor="middle" class="n">ES / Qdrant / TEI</text><text x="800" y="856" text-anchor="middle" class="s">可重建派生检索</text>
+<rect x="950" y="805" width="200" height="70" rx="14" class="adapter"/><text x="1050" y="835" text-anchor="middle" class="n">LLM / Observability</text><text x="1050" y="856" text-anchor="middle" class="s">结构化调用与遥测</text>
+<path d="M130 708V755M305 708V755M480 708V755M130 755H480" class="b"/>
+<path d="M240 755V805M670 708V775H550V805M860 708V775H800V805M1058 708V775H1050V805" class="l"/>
+<text x="600" y="915" text-anchor="middle" class="s">To-Be 重点是收敛端口、版本和可观测性，不重复实施已经落地的混合记忆能力。</text>
+</svg>

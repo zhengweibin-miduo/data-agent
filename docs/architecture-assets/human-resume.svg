@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" role="img" aria-labelledby="title desc">
+  <title id="title">人工介入与检查点恢复</title><desc id="desc">LangGraph 中断后，用户读取问题、提交带修订和问题集 ID 的答案，经 Redis Lua CAS 判定为恢复、重复、冲突或过期。</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 0 6 9 3z" fill="#315b73"/></marker><style>text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}.t{font-size:26px;font-weight:700}.n{font-size:17px;font-weight:700}.cmd{font-size:15px;font-weight:700}.s{font-size:13px;fill:#587083}.c{fill:#fff;stroke:#7f9eaf;stroke-width:2}.d{fill:#eaf8f4;stroke:#2d8872}.w{fill:#fff4e8;stroke:#c97d2b}.b{fill:#fff0ef;stroke:#b34e4e}.l{fill:none;stroke:#315b73;stroke-width:2.2;marker-end:url(#a)}</style></defs>
+  <rect width="1200" height="820" rx="24" fill="#f6f9fc"/><text x="55" y="58" class="t">As-Is · 人工介入、修订与恢复</text>
+  <g text-anchor="middle">
+    <rect x="380" y="92" width="440" height="66" rx="15" class="w"/><text x="600" y="121" class="n">await_metric_answers 到达等待点</text><text x="600" y="144" class="s">interrupt 保存问题集与 checkpoint</text>
+    <rect x="380" y="205" width="440" height="66" rx="15" class="c"/><text x="600" y="234" class="n">Redis 投影：running → waiting_input</text><text x="600" y="257" class="s">用户读取问题与截止时间</text>
+    <rect x="380" y="318" width="440" height="70" rx="15" class="c"/><text x="600" y="348" class="n">POST answers</text><text x="600" y="373" class="s">revision + question_set_id + 完整 question_id 集</text>
+    <rect x="380" y="438" width="440" height="72" rx="15" class="d"/><text x="600" y="469" class="n">Redis Lua compare-and-set</text><text x="600" y="494" class="s">原子校验状态、修订、问题集、期限与答案 hash</text>
+  </g>
+  <path d="M600 158V205M600 271V318M600 388V438" class="l"/>
+  <path d="M600 510V555H150V590M600 510V590M600 510V555H900V590M600 510V540H1080V590" class="l"/>
+  <g text-anchor="middle">
+    <rect x="45" y="590" width="240" height="112" rx="15" class="d"/><text x="165" y="623" class="n">新答案且有效</text><text x="165" y="650" class="s">revision + 1</text><text x="165" y="674" class="s">dispatch outbox</text>
+    <rect x="465" y="590" width="270" height="112" rx="15" class="c"/><text x="600" y="623" class="n">相同答案重复</text><text x="600" y="650" class="s">返回已有下一修订</text><text x="600" y="674" class="s">不重复 dispatch</text>
+    <rect x="790" y="590" width="220" height="112" rx="15" class="b"/><text x="900" y="623" class="n">修订 / 问题集冲突</text><text x="900" y="654" class="s">HTTP 409</text>
+    <rect x="1030" y="590" width="140" height="112" rx="15" class="b"/><text x="1100" y="623" class="n">已过期</text><text x="1100" y="650" class="s">HTTP 410</text><text x="1100" y="674" class="s">拒绝并清理</text>
+    <rect x="45" y="748" width="240" height="52" rx="14" class="d"/><text x="165" y="781" class="cmd">Command(resume=answers)</text>
+    <rect x="360" y="748" width="330" height="52" rx="14" class="d"/><text x="525" y="781" class="n">从 checkpoint 继续执行</text>
+  </g>
+  <path d="M165 702V748M285 774H360" class="l"/>
+</svg>

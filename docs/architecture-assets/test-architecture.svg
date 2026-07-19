@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 690" role="img" aria-labelledby="title desc">
+  <title id="title">当前测试架构层次</title><desc id="desc">从单元测试、基础设施集成、持久化集成、边界集成到组合流程的五层验证结构。</desc>
+  <style>text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}.t{font-size:26px;font-weight:700}.n{font-size:18px;font-weight:700}.s{font-size:14px;fill:#587083}.a{fill:#e7f2ff;stroke:#2f6f9f;stroke-width:2}.b{fill:#eaf8f4;stroke:#2d8872;stroke-width:2}.c{fill:#fff4e8;stroke:#c97d2b;stroke-width:2}</style>
+  <rect width="1200" height="690" rx="24" fill="#f6f9fc"/><text x="55" y="58" class="t">As-Is · 测试架构与当前质量边界</text>
+  <polygon points="500,105 700,105 775,195 425,195" class="c"/><text x="600" y="143" text-anchor="middle" class="n">组合流程</text><text x="600" y="169" text-anchor="middle" class="s">提交、恢复、快照与记忆复用</text>
+  <polygon points="425,220 775,220 850,310 350,310" class="a"/><text x="600" y="258" text-anchor="middle" class="n">边界集成</text><text x="600" y="284" text-anchor="middle" class="s">API · Worker · MemoryService</text>
+  <polygon points="350,335 850,335 925,425 275,425" class="b"/><text x="600" y="373" text-anchor="middle" class="n">持久化集成</text><text x="600" y="399" text-anchor="middle" class="s">元数据仓储 · 记忆仓储 · 事务回滚</text>
+  <polygon points="275,450 925,450 1000,540 200,540" class="a"/><text x="600" y="488" text-anchor="middle" class="n">基础设施集成</text><text x="600" y="514" text-anchor="middle" class="s">MySQL · Redis · ES · Qdrant · TEI</text>
+  <polygon points="200,565 1000,565 1070,655 130,655" class="b"/><text x="600" y="603" text-anchor="middle" class="n">单元测试</text><text x="600" y="629" text-anchor="middle" class="s">解析 · 校验 · 图路由 · LLM 客户端 · 日志</text>
+  <text x="1050" y="150" class="s">更少、更宽的跨边界场景</text><text x="1050" y="615" class="s" text-anchor="end">更多、确定性的快速反馈</text>
+</svg>

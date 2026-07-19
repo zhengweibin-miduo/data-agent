@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" role="img" aria-labelledby="title desc">
+<title id="title">分阶段演进路线</title><desc id="desc">从已包含混合记忆检索和结构化日志的当前基线，依次演进端口与状态契约、版本恢复治理、检索质量治理以及按负载拆分执行边界。</desc>
+<defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 0 6 9 3z" fill="#315b73"/></marker><style>text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}.t{font-size:26px;font-weight:700}.k{font-size:14px;font-weight:700;fill:#16776f}.n{font-size:16px;font-weight:700}.s{font-size:12px;fill:#587083}.now{fill:#e7f2ff;stroke:#2f6f9f;stroke-width:2}.next{fill:#eaf8f4;stroke:#2d8872;stroke-width:2}.later{fill:#fff4e8;stroke:#c97d2b;stroke-width:2}.l{fill:none;stroke:#315b73;stroke-width:2.4;marker-end:url(#a)}</style></defs>
+<rect width="1200" height="480" rx="24" fill="#f6f9fc"/><text x="50" y="55" class="t">To-Be · 从当前基线到目标边界</text>
+<line x1="130" y1="245" x2="1070" y2="245" stroke="#b5c7d1" stroke-width="6" stroke-linecap="round"/>
+<circle cx="130" cy="245" r="17" fill="#2f6f9f"/><circle cx="365" cy="245" r="17" fill="#2d8872"/><circle cx="600" cy="245" r="17" fill="#2d8872"/><circle cx="835" cy="245" r="17" fill="#c97d2b"/><circle cx="1070" cy="245" r="17" fill="#c97d2b"/>
+<rect x="35" y="105" width="190" height="105" rx="16" class="now"/><text x="130" y="135" text-anchor="middle" class="k">阶段 0 · 当前</text><text x="130" y="162" text-anchor="middle" class="n">权威记忆与混合检索</text><text x="130" y="185" text-anchor="middle" class="s">双索引 outbox</text><text x="130" y="202" text-anchor="middle" class="s">结构化日志基线</text>
+<rect x="265" y="295" width="200" height="108" rx="16" class="next"/><text x="365" y="326" text-anchor="middle" class="k">阶段 1 · 优先</text><text x="365" y="353" text-anchor="middle" class="n">端口与状态契约</text><text x="365" y="377" text-anchor="middle" class="s">应用服务 · 恢复协调</text>
+<rect x="500" y="105" width="200" height="108" rx="16" class="next"/><text x="600" y="136" text-anchor="middle" class="k">阶段 2</text><text x="600" y="163" text-anchor="middle" class="n">版本与恢复治理</text><text x="600" y="187" text-anchor="middle" class="s">迁移 · 兼容矩阵 · 演练</text>
+<rect x="735" y="295" width="200" height="108" rx="16" class="later"/><text x="835" y="326" text-anchor="middle" class="k">阶段 3 · 质量</text><text x="835" y="353" text-anchor="middle" class="n">混合检索治理</text><text x="835" y="377" text-anchor="middle" class="s">评测 · 降级 · 重建</text>
+<rect x="970" y="105" width="190" height="108" rx="16" class="later"/><text x="1065" y="136" text-anchor="middle" class="k">阶段 4 · 有条件</text><text x="1065" y="163" text-anchor="middle" class="n">拆执行边界</text><text x="1065" y="187" text-anchor="middle" class="s">仅由真实负载触发</text>
+<path d="M130 210V225M365 295V265M600 213V225M835 295V265M1070 213V225" class="l"/>
+<text x="600" y="450" text-anchor="middle" class="s">每阶段都以现有任务、恢复、权威记忆和混合检索契约不回退为验证基线。</text>
+</svg>
