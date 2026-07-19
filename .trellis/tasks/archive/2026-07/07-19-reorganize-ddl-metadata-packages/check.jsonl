@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/prd.md", "reason": "Check every acceptance criterion and behavior-preservation constraint."}
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/design.md", "reason": "Verify final package tree and dependency direction match the approved design."}
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/implement.md", "reason": "Verify every phase, validation command, stale-path search, and rollback gate."}
+{"file": ".trellis/tasks/07-19-reorganize-ddl-metadata-packages/research/responsibility-audit.md", "reason": "Confirm every audited module was either corrected or retained with evidence."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Check current structure documentation and package initialization rules."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check transaction, table, schema, and repository invariants."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Check external-client, Redis, LangGraph checkpoint, and index behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run the repository's required lint, type, compile, configuration, and test gates."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check API mappings, retries, cleanup, and terminal error behavior."}
+{"file": "code_review.md", "reason": "Apply the repository's mandatory AI review finding and response format."}
