@@ -168,4 +168,3 @@ Additional checks:
 - [ ] Update `.trellis/spec/` through the Trellis spec-update workflow.
 - [ ] Follow project Git rules for intentional staging and commit.
 - [ ] Archive the task only after the quality gate and required commit succeed.
-
