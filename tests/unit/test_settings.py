@@ -2,8 +2,15 @@
 
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from data_agent.settings import AppSettings, SettingsModel, app_config
-from tests.helpers.checks import check_condition, check_equal
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 
 def _collect_settings_descriptions(
@@ -70,11 +77,21 @@ def test_default_app_config_loads_expected_values() -> None:
         app_config.api.host,
         "127.0.0.1",
     )
+    check_equal(
+        "test_default_app_config_loads_expected_values SSE 心跳",
+        app_config.api.sse_heartbeat_seconds,
+        15,
+    )
     check_condition(
         "test_default_app_config_loads_expected_values Redis 协议",
         app_config.redis.url.startswith("redis://"),
         actual=app_config.redis.url,
         expected="以 redis:// 开头",
+    )
+    check_equal(
+        "test_default_app_config_loads_expected_values 事件上限",
+        app_config.redis.event_stream_max_events,
+        256,
     )
     check_condition(
         "test_default_app_config_loads_expected_values 结构化输出方式",
@@ -113,3 +130,33 @@ def test_all_settings_fields_have_chinese_descriptions() -> None:
         actual=descriptions,
         expected="每条字段说明至少包含一个中文字符",
     )
+
+
+def test_sse_settings_reject_out_of_bounds_values() -> None:
+    """验证 SSE 心跳与事件保留上限执行严格边界校验。"""
+    cases = (
+        ("心跳必须为正数", ("api", "sse_heartbeat_seconds"), 0),
+        ("心跳不得超过五分钟", ("api", "sse_heartbeat_seconds"), 301),
+        ("事件上限必须为正数", ("redis", "event_stream_max_events"), 0),
+        ("事件上限不得过大", ("redis", "event_stream_max_events"), 10001),
+    )
+    for label, (section, field), value in cases:
+        payload = app_config.model_dump(mode="json")
+        payload[section][field] = value
+        try:
+            AppSettings.model_validate(payload)
+        except ValidationError as error:
+            check_exception(f"{label} 捕获校验错误", error, ValidationError)
+            locations = [item["loc"] for item in error.errors()]
+            check_condition(
+                f"{label} 定位配置字段",
+                (section, field) in locations,
+                actual=locations,
+                expected=f"包含 {(section, field)}",
+            )
+        else:
+            fail_check(
+                label,
+                actual=value,
+                expected=f"{section}.{field} 拒绝越界值",
+            )

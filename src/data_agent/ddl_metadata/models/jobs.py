@@ -21,6 +21,39 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class JobEventType(StrEnum):
+    """公开任务事件类型。"""
+
+    SNAPSHOT = "snapshot"
+    PROGRESS = "progress"
+    WAITING_INPUT = "waiting_input"
+    SUCCEEDED = "succeeded"
+    REJECTED = "rejected"
+    FAILED = "failed"
+    STREAM_ERROR = "stream_error"
+
+
+class JobEventStage(StrEnum):
+    """不泄漏 LangGraph 节点名的稳定业务阶段。"""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    PARSING = "parsing"
+    MEMORY_LOADING = "memory_loading"
+    METADATA_GENERATING = "metadata_generating"
+    METADATA_VALIDATING = "metadata_validating"
+    QUESTION_PLANNING = "question_planning"
+    WAITING_INPUT = "waiting_input"
+    METRIC_GENERATING = "metric_generating"
+    METRIC_VALIDATING = "metric_validating"
+    MEMORY_BUILDING = "memory_building"
+    PERSISTING = "persisting"
+    SUCCEEDED = "succeeded"
+    REJECTED = "rejected"
+    FAILED = "failed"
+    STREAM_ERROR = "stream_error"
+
+
 class JobError(ContractModel):
     """公开安全错误。"""
 
@@ -59,6 +92,28 @@ class JobRecord(ContractModel):
     graph_version: str
 
 
+class JobEventData(ContractModel):
+    """SSE 中只包含公开任务投影的类型化数据。"""
+
+    job_id: str
+    revision: int = Field(ge=0)
+    attempt: int = Field(ge=0)
+    status: JobStatus
+    stage: JobEventStage
+    emitted_at: datetime
+    questions: list[MetricQuestion] | None = None
+    result: JobResult | None = None
+    error: JobError | None = None
+
+
+class JobEvent(ContractModel):
+    """带 Redis Stream 游标的公开任务事件。"""
+
+    event_id: str
+    event_type: JobEventType
+    data: JobEventData
+
+
 class DDLJobRequest(ContractModel):
     """DDL 任务提交请求。"""
 
@@ -73,6 +128,7 @@ class DDLJobAccepted(ContractModel):
     job_id: str
     status: Literal[JobStatus.PENDING] = JobStatus.PENDING
     status_url: str
+    events_url: str | None = None
 
 
 class AnswerRequest(ContractModel):

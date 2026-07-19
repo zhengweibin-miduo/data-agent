@@ -126,6 +126,11 @@ support, and the installed `data_agent` package is the runtime import target.
   flight. Fixed sleeps and polling are not acceptable evidence.
 - For graph/worker work, prove interrupt/resume revision safety and that a
   persistence retry does not repeat completed model calls.
+- For SSE/Redis Stream work, prove framing, initial authoritative snapshots,
+  reconnect cursor behavior, waiting-input continuation, terminal closure,
+  safe post-response errors, disconnect cleanup, TTL, and approximate
+  over-threshold trimming. Merely asserting that a short Stream is below its
+  configured maximum is not evidence that trimming works.
 - For persistence/memory work, prove scoped cleanup, rollback, exact compatible
   reuse, soft-delete exclusion, update events, and outbox replay.
 - Verify pytest collection uses `tests/` and the installed `data_agent`

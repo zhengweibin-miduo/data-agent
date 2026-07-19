@@ -31,6 +31,7 @@ from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.models.jobs import (
     JobError,
+    JobEventStage,
     JobRecord,
     JobResult,
     JobStatus,
@@ -51,6 +52,29 @@ _RETRYABLE = (
     ConnectionError,
     TimeoutError,
 )
+
+_NODE_STAGES = {
+    "parse_ddl": JobEventStage.PARSING,
+    "load_and_validate_memory": JobEventStage.MEMORY_LOADING,
+    "classify_metadata": JobEventStage.METADATA_GENERATING,
+    "validate_metadata": JobEventStage.METADATA_VALIDATING,
+    "plan_metric_questions": JobEventStage.QUESTION_PLANNING,
+    "generate_metrics": JobEventStage.METRIC_GENERATING,
+    "validate_metrics": JobEventStage.METRIC_VALIDATING,
+    "build_memory_candidates": JobEventStage.MEMORY_BUILDING,
+    "persist_snapshot": JobEventStage.PERSISTING,
+}
+
+
+def _task_start_stage(event: object) -> JobEventStage | None:
+    """只从 LangGraph v2 task-start 事件读取节点名并映射公开阶段。"""
+    if not isinstance(event, dict) or event.get("type") != "tasks":
+        return None
+    data = event.get("data")
+    if not isinstance(data, dict) or "input" not in data:
+        return None
+    name = data.get("name")
+    return _NODE_STAGES.get(name) if isinstance(name, str) else None
 
 
 def _log_execution_outcome(
@@ -361,11 +385,16 @@ async def run_ddl_job(
             graph_input = None
         else:
             graph_input = None
-        await graph.ainvoke(
+        async for event in graph.astream(
             graph_input,
             config,
+            stream_mode="tasks",
             durability="sync",
-        )
+            version="v2",
+        ):
+            stage = _task_start_stage(event)
+            if stage is not None:
+                await jobs.publish_progress(job_id, stage)
         projected = await _project_snapshot(
             jobs,
             graph,

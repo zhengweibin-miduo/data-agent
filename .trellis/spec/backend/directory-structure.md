@@ -27,6 +27,7 @@ src/data_agent/
 │   └── tei_embeddings.py
 └── ddl_metadata/
     ├── api/
+    │   ├── job_events.py
     │   ├── jobs.py
     │   ├── memories.py
     │   └── router.py
@@ -36,6 +37,7 @@ src/data_agent/
     │   └── redis/
     │       ├── base.py
     │       ├── codec.py
+    │       ├── event_store.py
     │       ├── keys.py
     │       ├── lease_store.py
     │       ├── outbox_store.py
@@ -94,10 +96,11 @@ under `docs/docker/`.
 - `data_agent.infrastructure` owns one explicit external-resource lifecycle per
   module. It does not own feature orchestration.
 - `ddl_metadata.api` owns HTTP request/response mapping. Job and memory routes
-  are separate owners and `api.router` aggregates them.
+  are separate owners, `api.job_events` owns SSE framing/generation, and
+  `api.router` aggregates the routes.
 - `ddl_metadata.jobs.store.DDLJobStore` is the application-facing job facade.
-  Redis keys, codecs, Lua scripts, state, outboxes, and leases are private
-  technology-specific collaborators under `jobs.redis`.
+  Redis keys, codecs, Lua scripts, state, events, outboxes, and leases are
+  private technology-specific collaborators under `jobs.redis`.
 - `ddl_metadata.memory.domain` contains deterministic transformations only. It
   must not import FastAPI, arq, initialized clients, SQLAlchemy sessions, Redis,
   Elasticsearch, Qdrant, or TEI.

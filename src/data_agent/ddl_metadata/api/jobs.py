@@ -1,8 +1,10 @@
 """DDL 元数据任务 HTTP 路由。"""
 
 from fastapi import APIRouter, Request, status
+from fastapi.responses import StreamingResponse
 from loguru import logger
 
+from data_agent.ddl_metadata.api.job_events import stream_job_events
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.models.jobs import (
     AnswerRequest,
@@ -39,6 +41,7 @@ async def submit_job(body: DDLJobRequest, request: Request) -> DDLJobAccepted:
     return DDLJobAccepted(
         job_id=record.job_id,
         status_url=f"/api/v1/metadata/ddl-jobs/{record.job_id}",
+        events_url=f"/api/v1/metadata/ddl-jobs/{record.job_id}/events",
     )
 
 
@@ -49,6 +52,26 @@ async def submit_job(body: DDLJobRequest, request: Request) -> DDLJobAccepted:
 async def get_job(job_id: str, request: Request) -> JobRecord:
     """读取安全的公开任务投影。"""
     return await _jobs(request).get(job_id)
+
+
+@router.get("/api/v1/metadata/ddl-jobs/{job_id}/events")
+async def get_job_events(
+    job_id: str,
+    request: Request,
+) -> StreamingResponse:
+    """订阅只读、可重连的 DDL 任务公开事件流。"""
+    jobs = _jobs(request)
+    await jobs.get(job_id)
+    cursor = await jobs.event_tail_id(job_id)
+    record = await jobs.get(job_id)
+    return StreamingResponse(
+        stream_job_events(request, jobs, record, cursor),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

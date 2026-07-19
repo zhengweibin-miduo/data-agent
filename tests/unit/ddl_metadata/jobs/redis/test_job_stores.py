@@ -32,6 +32,11 @@ def test_job_keys_store_preserves_keyspace() -> None:
     """锁定任务键、成员和 arq 任务 ID 格式。"""
     keys = JobKeys("ddl")
     check_equal("任务 Hash 键", keys.job("job-1"), "ddl:job:job-1")
+    check_equal(
+        "任务事件 Stream 键",
+        keys.events("job-1"),
+        "ddl:job:job-1:events",
+    )
     check_equal("来源租约键", keys.source("source-1"), "ddl:source:source-1")
     check_equal("dispatch 键", keys.dispatch, "ddl:dispatch")
     check_equal("waiting 键", keys.waiting, "ddl:waiting")

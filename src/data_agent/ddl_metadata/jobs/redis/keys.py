@@ -13,6 +13,10 @@ class JobKeys:
         """返回任务 Hash 键。"""
         return f"{self.prefix}:job:{job_id}"
 
+    def events(self, job_id: str) -> str:
+        """返回任务公开事件 Stream 键。"""
+        return f"{self.prefix}:job:{job_id}:events"
+
     def source(self, source: str) -> str:
         """返回逻辑数据源租约键。"""
         return f"{self.prefix}:source:{source}"

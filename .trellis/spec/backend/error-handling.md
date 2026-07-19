@@ -136,6 +136,7 @@ metric answers, browser memory management, CORS, or safe error projection.
 ```http
 POST /api/v1/metadata/ddl-jobs
 GET /api/v1/metadata/ddl-jobs/{job_id}
+GET /api/v1/metadata/ddl-jobs/{job_id}/events
 POST /api/v1/metadata/ddl-jobs/{job_id}/answers
 GET /api/v1/metadata/memories/search
 GET /api/v1/metadata/memories/{memory_uid}
@@ -155,6 +156,16 @@ DELETE /api/v1/metadata/memories/{memory_uid}
   `DDLMetadataError(code="ddl_too_large", stage="submit")` business response.
 - Status exposes only the stable public state, safe result/error, current
   bounded questions, revision, and expiry.
+- The SSE route resolves the job and current Stream tail before starting the
+  response. Unknown jobs retain the existing `404` projection and Redis
+  failures retain the existing safe `503` projection.
+- After an SSE response starts, Redis/read/contract failures emit one fixed
+  `stream_error` event containing only a stable code, stage, retryability, and
+  the last public job coordinates, then close so the client can reconnect.
+- Every SSE connection starts with an authoritative `snapshot`. Terminal
+  snapshots and terminal events close the connection; `waiting_input` remains
+  open across answer-driven revisions. Idle periods use SSE comment
+  heartbeats, not business events.
 - Answer requires the current revision and question-set ID; its question IDs
   must exactly match the current set.
 - Memory search requires source and a bounded query, caps result size, and
@@ -175,6 +186,8 @@ DELETE /api/v1/metadata/memories/{memory_uid}
 | Answer deadline expired | `410 rejected` and checkpoint cleanup scheduled |
 | Invalid DDL, payload, filter, or answer IDs | `422` with safe error code |
 | Redis unavailable during submit/resume | `503`; never claim acceptance |
+| Redis unavailable before SSE starts | `503` with fixed `redis_unavailable` envelope |
+| Redis unavailable after SSE starts | Safe `stream_error` event, then close |
 | Valid memory update | `200`, event ID, `requires_reprocess=true` |
 
 ### 5. Good / Base / Bad Cases
@@ -190,6 +203,8 @@ DELETE /api/v1/metadata/memories/{memory_uid}
 
 ```powershell
 uv run pytest tests/integration/test_api.py
+uv run pytest tests/unit/ddl_metadata/test_job_events.py
+uv run pytest tests/unit/ddl_metadata/test_job_events_api.py
 uv run pytest tests/integration/test_worker.py
 uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```

@@ -8,12 +8,15 @@ from typing import ClassVar, cast
 from uuid import uuid4
 
 from arq.connections import ArqRedis
+from loguru import logger
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
+from data_agent.ddl_metadata.jobs.redis.event_store import JobEventStore
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.redis.lease_store import SourceLeaseStore
 from data_agent.ddl_metadata.jobs.redis.outbox_store import JobOutboxStore
@@ -22,6 +25,10 @@ from data_agent.ddl_metadata.models.jobs import (
     AnswerRequest,
     DDLJobRequest,
     JobError,
+    JobEvent,
+    JobEventData,
+    JobEventStage,
+    JobEventType,
     JobRecord,
     JobResult,
     JobStatus,
@@ -42,6 +49,7 @@ class DDLJobStore:
         self._state = RedisJobStateStore(redis, self._keys)
         self._leases = SourceLeaseStore(redis, self._keys)
         self._outbox = JobOutboxStore(redis, self._keys)
+        self._events = JobEventStore(redis, self._keys)
 
     @property
     def dispatch_key(self) -> str:
@@ -88,11 +96,57 @@ class DDLJobStore:
                 "该逻辑数据源已有活动任务",
                 http_status=409,
             )
-        return await self.get(job_id)
+        record = await self.get(job_id)
+        await self._publish_safely(
+            record,
+            JobEventType.PROGRESS,
+            JobEventStage.QUEUED,
+        )
+        return record
 
     async def get(self, job_id: str) -> JobRecord:
         """读取公开安全任务投影。"""
         return await self._state.get(job_id)
+
+    @staticmethod
+    def snapshot_event(record: JobRecord, event_id: str) -> JobEvent:
+        """从权威任务记录构造当前连接的初始快照。"""
+        return JobEvent(
+            event_id=event_id,
+            event_type=JobEventType.SNAPSHOT,
+            data=_event_data(record, _stage_for_status(record.status)),
+        )
+
+    async def event_tail_id(self, job_id: str) -> str:
+        """读取任务公开事件流的当前尾游标。"""
+        return await self._events.tail_id(job_id)
+
+    async def read_events(
+        self,
+        job_id: str,
+        after_id: str,
+        *,
+        block_milliseconds: int,
+    ) -> list[JobEvent]:
+        """在有界阻塞时间内读取指定游标后的公开事件。"""
+        return await self._events.read_after(
+            job_id,
+            after_id,
+            block_milliseconds=block_milliseconds,
+        )
+
+    async def publish_progress(
+        self,
+        job_id: str,
+        stage: JobEventStage,
+    ) -> None:
+        """发布不包含节点输入、输出或错误的稳定业务进度。"""
+        try:
+            record = await self.get(job_id)
+        except RedisError as error:
+            _log_event_publish_failure(job_id, stage, error)
+            return
+        await self._publish_safely(record, JobEventType.PROGRESS, stage)
 
     async def execution_input(self, job_id: str) -> DDLJobRequest:
         """读取仅供 worker 使用的初始请求。"""
@@ -114,13 +168,20 @@ class DDLJobStore:
         """按集中状态表执行修订感知的原子转换。"""
         if target not in _ALLOWED_TRANSITIONS[expected]:
             raise ValueError(f"非法任务状态转换: {expected}->{target}")
-        return await self._state.transition(
+        changed = await self._state.transition(
             job_id,
             revision,
             expected,
             target,
             fields=fields,
         )
+        if changed and target in _STATUS_EVENT_TYPES:
+            await self._publish_current_safely(
+                job_id,
+                _STATUS_EVENT_TYPES[target],
+                _stage_for_status(target),
+            )
+        return changed
 
     async def mark_running(self, job_id: str, revision: int) -> bool:
         """Pending -> running，并增加尝试次数。"""
@@ -208,7 +269,14 @@ class DDLJobStore:
                 "回答修订或问题集合已过期",
                 http_status=409,
             )
-        return await self.get(job_id), result == 1
+        updated = await self.get(job_id)
+        if result == 1:
+            await self._publish_safely(
+                updated,
+                JobEventType.PROGRESS,
+                JobEventStage.QUEUED,
+            )
+        return updated, result == 1
 
     async def mark_terminal(
         self,
@@ -288,6 +356,36 @@ class DDLJobStore:
         """仅在检查点删除成功后确认清理 outbox。"""
         await self._outbox.acknowledge_checkpoint_cleanup(job_id)
 
+    async def _publish_current_safely(
+        self,
+        job_id: str,
+        event_type: JobEventType,
+        stage: JobEventStage,
+    ) -> None:
+        """读取转换后的权威投影并以非阻断副作用发布。"""
+        try:
+            record = await self.get(job_id)
+        except RedisError as error:
+            _log_event_publish_failure(job_id, stage, error)
+            return
+        await self._publish_safely(record, event_type, stage)
+
+    async def _publish_safely(
+        self,
+        record: JobRecord,
+        event_type: JobEventType,
+        stage: JobEventStage,
+    ) -> None:
+        """发布失败只记录安全告警，不回滚已成功的业务状态。"""
+        try:
+            await self._events.publish(
+                record.job_id,
+                event_type,
+                _event_data(record, stage),
+            )
+        except RedisError as error:
+            _log_event_publish_failure(record.job_id, stage, error)
+
 
 _ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.PENDING: {JobStatus.RUNNING},
@@ -303,3 +401,63 @@ _ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.REJECTED: set(),
     JobStatus.FAILED: set(),
 }
+
+_STATUS_EVENT_TYPES = {
+    JobStatus.PENDING: JobEventType.PROGRESS,
+    JobStatus.WAITING_INPUT: JobEventType.WAITING_INPUT,
+    JobStatus.SUCCEEDED: JobEventType.SUCCEEDED,
+    JobStatus.REJECTED: JobEventType.REJECTED,
+    JobStatus.FAILED: JobEventType.FAILED,
+}
+
+
+def _stage_for_status(status: JobStatus) -> JobEventStage:
+    """把公开状态映射为重连快照使用的稳定阶段。"""
+    return {
+        JobStatus.PENDING: JobEventStage.QUEUED,
+        JobStatus.RUNNING: JobEventStage.RUNNING,
+        JobStatus.WAITING_INPUT: JobEventStage.WAITING_INPUT,
+        JobStatus.SUCCEEDED: JobEventStage.SUCCEEDED,
+        JobStatus.REJECTED: JobEventStage.REJECTED,
+        JobStatus.FAILED: JobEventStage.FAILED,
+    }[status]
+
+
+def _event_data(record: JobRecord, stage: JobEventStage) -> JobEventData:
+    """只从公开 JobRecord 构造事件数据。"""
+    return JobEventData(
+        job_id=record.job_id,
+        revision=record.revision,
+        attempt=record.attempt,
+        status=record.status,
+        stage=stage,
+        emitted_at=datetime.now(UTC),
+        questions=(
+            record.questions if record.status == JobStatus.WAITING_INPUT else None
+        ),
+        result=record.result if record.status == JobStatus.SUCCEEDED else None,
+        error=(
+            record.error
+            if record.status
+            in {JobStatus.REJECTED, JobStatus.FAILED}
+            else None
+        ),
+    )
+
+
+def _log_event_publish_failure(
+    job_id: str,
+    stage: JobEventStage,
+    error: RedisError,
+) -> None:
+    """记录不包含任务输入和异常文本的安全事件写入告警。"""
+    logger.bind(
+        trace_id=job_id,
+        component="ddl_metadata.jobs",
+        event_name="ddl_metadata.job.event_publish_failed",
+        operation="publish_job_event",
+        outcome="degraded",
+        stage=stage.value,
+        retryable=True,
+        error_type=type(error).__name__,
+    ).warning("DDL 任务公开事件写入失败，将由权威快照修复")

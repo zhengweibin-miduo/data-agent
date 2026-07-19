@@ -42,12 +42,14 @@ api:
   max_ddl_bytes: 262144
   max_tables: 50
   max_columns: 500
+  sse_heartbeat_seconds: 15
 
 redis:
   url: redis://localhost:6379/0
   key_prefix: ddl
   checkpoint_retention_seconds: 86400
   result_retention_seconds: 86400
+  event_stream_max_events: 256
   waiting_timeout_seconds: 1800
   worker_concurrency: 4
   worker_job_timeout_seconds: 600

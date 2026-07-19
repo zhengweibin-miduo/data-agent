@@ -295,6 +295,8 @@ DDLJobStore(redis).submit(request) -> JobRecord
 RedisJobStateStore(redis, keys).transition(...) -> bool
 SourceLeaseStore(redis, keys).renew(source, job_id) -> bool
 JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
+JobEventStore(redis, keys).publish(job_id, event_type, data) -> str
+JobEventStore(redis, keys).read_after(job_id, after_id, ...) -> list[JobEvent]
 ```
 
 ### 3. Contracts
@@ -309,8 +311,9 @@ JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
   enters its async context, awaits `asetup()`, and closes that same context.
 - Consumers import the application-facing facade from
   `data_agent.ddl_metadata.jobs.store`. The facade composes
-  `RedisJobStateStore`, `SourceLeaseStore`, and `JobOutboxStore`; API, worker,
-  and memory services do not construct those specialized stores separately.
+  `RedisJobStateStore`, `SourceLeaseStore`, `JobOutboxStore`, and
+  `JobEventStore`; API, worker, and memory services do not construct those
+  specialized stores separately.
 - Redis-specific job modules live under `ddl_metadata/jobs/redis/`.
   Stateful persistence collaborators retain the `Store` suffix, while pure
   `JobKeys`, `JobCodec`, and `JobScripts` centralize key formatting, canonical
@@ -325,6 +328,17 @@ JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
   revision.
 - Queue IDs contain job ID plus revision. Worker graph invocations reuse
   `thread_id=job_id` and `durability="sync"`.
+- Worker graph execution fully consumes LangGraph v2 `tasks` streaming. Only
+  task-start node names are mapped to stable public business stages; task
+  input, result, interrupt, error, raw DDL, prompt, and checkpoint payloads
+  never enter the public event contract.
+- Each job's public notifications use
+  `ddl:job:{job_id}:events`. `XADD MAXLEN ~` applies the configured approximate
+  length bound and every append refreshes the same TTL used by retained job
+  results. The Stream remains a notification log; the job Hash is authoritative.
+- Event publication happens after the authoritative state transition. A
+  publication failure is logged with safe typed fields and does not roll back
+  or fail successful business work; SSE timeout repair rereads the Hash.
 - A reclaimed arq activation may legitimately find the public projection still
   at `running`. When its revision matches, the worker reconciles and resumes
   the existing checkpoint instead of requiring another `pending -> running`
@@ -351,6 +365,8 @@ JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
 | Checkpoint interrupt but public state still running | Worker repairs projection to `waiting_input` |
 | Persist failure after prior checkpoints | Resume `persist_snapshot` without repeating completed model nodes |
 | Missing Redis modules or failed saver setup | Fail worker startup and close the partial saver |
+| Public event append fails after a state transition | Preserve the state transition; repair clients from the authoritative Hash |
+| Event Stream exceeds its configured target length | Redis approximately trims old notifications and retains a bounded tail |
 
 ### 5. Good / Base / Bad Cases
 
@@ -366,6 +382,7 @@ JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
 ```powershell
 docker compose -f docs/docker/docker-compose.yml config
 uv run pytest tests/integration/infrastructure/test_redis.py
+uv run pytest tests/integration/test_job_events.py
 uv run pytest tests/integration/test_worker.py
 uv run pytest tests/integration/test_ddl_metadata_flow.py
 ```

@@ -124,6 +124,11 @@ class APISettings(SettingsModel):
     max_ddl_bytes: int = Field(gt=0, description="单次请求允许提交的 DDL 最大字节数。")
     max_tables: int = Field(gt=0, description="单次 DDL 解析允许包含的最大表数量。")
     max_columns: int = Field(gt=0, description="单次 DDL 解析允许包含的最大字段总数。")
+    sse_heartbeat_seconds: float = Field(
+        gt=0,
+        le=300,
+        description="DDL 任务 SSE 空闲心跳和 Redis 阻塞读取的间隔秒数。",
+    )
 
     @field_validator("cors_origins")
     @classmethod
@@ -157,6 +162,11 @@ class RedisSettings(SettingsModel):
     result_retention_seconds: int = Field(
         gt=0,
         description="DDL 任务结果及状态在 Redis 中的保留秒数。",
+    )
+    event_stream_max_events: int = Field(
+        gt=0,
+        le=10000,
+        description="每个 DDL 任务事件 Stream 近似保留的最大事件数。",
     )
     waiting_timeout_seconds: int = Field(
         gt=0,

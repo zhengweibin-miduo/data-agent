@@ -20,7 +20,11 @@ def test_api_route_contract_is_unchanged() -> None:
             tuple(sorted(route.methods or set())),
             route.name,
             route.status_code,
-            route.response_model.__name__,
+            (
+                route.response_model.__name__
+                if route.response_model is not None
+                else None
+            ),
         )
         for route in (*jobs_router.routes, *memories_router.routes)
         if isinstance(route, APIRoute)
@@ -42,6 +46,13 @@ def test_api_route_contract_is_unchanged() -> None:
                 "get_job",
                 None,
                 "JobRecord",
+            ),
+            (
+                "/api/v1/metadata/ddl-jobs/{job_id}/events",
+                ("GET",),
+                "get_job_events",
+                None,
+                None,
             ),
             (
                 "/api/v1/metadata/ddl-jobs/{job_id}/answers",
