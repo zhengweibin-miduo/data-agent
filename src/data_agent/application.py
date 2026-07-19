@@ -11,7 +11,7 @@ from redis.exceptions import RedisError
 
 from data_agent.ddl_metadata.api import router as ddl_metadata_router
 from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore
 from data_agent.ddl_metadata.memory.service import MemoryService
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase

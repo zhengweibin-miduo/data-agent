@@ -51,7 +51,14 @@ src/data_agent/
     │   └── metadata_generator.py
     ├── jobs/
     │   ├── __init__.py
-    │   └── store.py
+    │   ├── ddl_job_store.py         # Compatible lifecycle facade
+    │   ├── job_codec_store.py       # Job projection and canonical payloads
+    │   ├── job_keys_store.py        # Redis keys and member identifiers
+    │   ├── job_outbox_store.py      # Dispatch and checkpoint cleanup outboxes
+    │   ├── job_scripts_store.py     # Atomic Redis Lua protocols
+    │   ├── redis_base_store.py      # Narrow redis-py awaitable typing support
+    │   ├── redis_job_state_store.py # Atomic job record persistence
+    │   └── source_lease_store.py    # Job and browser-mutation source leases
     ├── memory/
     │   ├── __init__.py
     │   ├── context.py
@@ -104,7 +111,10 @@ the package from `src/`.
 - `data_agent.ddl_metadata.workflow` owns LangGraph orchestration and the typed
   metadata-generation boundary.
 - `data_agent.ddl_metadata.jobs` owns revision-aware Redis job transitions,
-  leases, dispatch, retention, and cleanup outboxes.
+  leases, dispatch, retention, and cleanup outboxes. `DDLJobStore` is the
+  application-facing facade; specialized `*_store.py` modules own keys,
+  canonical encoding, Lua scripts, atomic state persistence, leases, and
+  outboxes without leaking Redis fields to API, worker, or memory consumers.
 - `data_agent.ddl_metadata.memory` owns trusted-memory context loading,
   payload construction/rebuilding, snapshot persistence orchestration, and
   browser-facing management behavior.
@@ -139,6 +149,10 @@ until a real cross-feature abstraction exists.
 - Capability names use precise suffixes such as `Client`, `Repository`,
   `Store`, `Service`, `Loader`, or `Factory`. Do not introduce generic
   `Manager`, `Helper`, or `Utils` names when a concrete responsibility exists.
+- DDL job store modules use complete `snake_case` names ending in
+  `_store.py`; their specialized classes use `PascalCase` names ending in
+  `Store`. Keep the application-facing facade in `ddl_job_store.py`, not a
+  generic `store.py`.
 - Test modules use a `test_` prefix and pytest collects them from `tests/`.
 - Public packages, modules, classes, functions, methods, fixtures, and tests
   use Chinese Google Style Docstrings.

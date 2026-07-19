@@ -292,6 +292,9 @@ checkpoint lifecycle.
 RedisClient.initialize() -> Redis
 await CheckpointStore.initialize() -> AsyncRedisSaver
 DDLJobStore(redis).submit(request) -> JobRecord
+RedisJobStateStore(redis, keys).transition(...) -> bool
+SourceLeaseStore(redis, keys).renew(source, job_id) -> bool
+JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
 ```
 
 ### 3. Contracts
@@ -304,6 +307,14 @@ DDLJobStore(redis).submit(request) -> JobRecord
 - `RedisClient` owns the decoded application client used by `DDLJobStore`.
   `CheckpointStore` owns a separate `AsyncRedisSaver`, explicitly
   enters its async context, awaits `asetup()`, and closes that same context.
+- Consumers import the application-facing facade from
+  `data_agent.ddl_metadata.jobs.ddl_job_store`. The facade composes
+  `RedisJobStateStore`, `SourceLeaseStore`, and `JobOutboxStore`; API, worker,
+  and memory services do not construct those specialized stores separately.
+- Job modules use complete `snake_case` names ending in `_store.py`.
+  `JobKeysStore`, `JobCodecStore`, and `JobScriptsStore` centralize key
+  formatting, canonical payload conversion, and Lua text so those protocols
+  have one implementation source.
 - The public source of truth is `ddl:job:{job_id}` plus revision-aware
   transitions. LangGraph checkpoints are recovery state and arq result keys are
   not public API records.

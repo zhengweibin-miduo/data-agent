@@ -12,7 +12,7 @@ from langgraph.types import interrupt
 from loguru import logger
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.jobs.store import question_set_id
+from data_agent.ddl_metadata.jobs.ddl_job_store import question_set_id
 from data_agent.ddl_metadata.memory.context import LoadedMemoryContext
 from data_agent.ddl_metadata.memory.snapshots import build_accepted_memories
 from data_agent.ddl_metadata.models import (

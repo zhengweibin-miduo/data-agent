@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Query, Request, status
 from loguru import logger
 
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore
 from data_agent.ddl_metadata.memory.service import MemoryService
 from data_agent.ddl_metadata.models import (
     AnswerRequest,

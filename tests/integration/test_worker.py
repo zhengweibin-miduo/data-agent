@@ -10,7 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.jobs.store import DDLJobStore, question_set_id
+from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore, question_set_id
 from data_agent.ddl_metadata.models import (
     AnswerRequest,
     DDLJobRequest,

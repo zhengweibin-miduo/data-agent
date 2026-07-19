@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore
 from data_agent.ddl_metadata.memory.context import MemoryContextLoader
 from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
 from data_agent.ddl_metadata.models import (

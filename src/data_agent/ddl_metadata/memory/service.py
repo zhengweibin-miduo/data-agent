@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.identifiers import metric_id
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore
 from data_agent.ddl_metadata.memory.payloads import (
     content_object_ids,
     memory_content_hash,
