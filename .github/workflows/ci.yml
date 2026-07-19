@@ -68,6 +68,11 @@ jobs:
       - name: Initialize application memory database
         run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_agent.sql
 
+      - name: Configure Redis durability
+        run: |
+          redis-cli CONFIG SET appendonly yes
+          redis-cli CONFIG SET appendfsync everysec
+
       - name: Check lock file
         run: uv lock --check
 

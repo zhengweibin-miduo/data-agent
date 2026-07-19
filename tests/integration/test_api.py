@@ -18,6 +18,7 @@ from data_agent.ddl_metadata.models.memory import (
     SemanticDecisionContent,
 )
 from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import APISettings, AppSettings, app_config
 from tests.helpers.checks import (
     check_condition,
@@ -337,5 +338,8 @@ async def test_memory_api() -> None:
                 )
                 check_equal("test_memory_api 检查点 10", add.status_code, 404)
     finally:
-        await ensure_schema()
-        await cleanup_schema(schema)
+        try:
+            await ensure_schema()
+            await cleanup_schema(schema)
+        finally:
+            await MySQLDatabase.close()
