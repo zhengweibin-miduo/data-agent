@@ -439,3 +439,37 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 完成个人软件架构设计手册
+
+**Date**: 2026-07-19
+**Task**: 完成个人软件架构设计手册
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+清理旧记忆方案兼容遗留，交付并验证中文 HTML 架构手册及 12 张 SVG 架构图。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6fec91e` | (see git log) |
+| `fcd71f2` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
