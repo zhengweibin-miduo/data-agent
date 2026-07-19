@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "加载 backend 变更的预开发清单、依赖方向和规范路由。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "约束 jobs 包的职责边界、命名、依赖方向和中文 Docstring。"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "保持 Redis job、来源租约、dispatch 与 checkpoint cleanup 的原子契约。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "保持任务转换、回答过期和 API 安全错误映射不变。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "遵循类型、测试输出、静态检查和 integration 标记约束。"}
