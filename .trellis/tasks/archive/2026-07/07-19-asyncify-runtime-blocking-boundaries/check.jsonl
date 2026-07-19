@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"Full backend quality-check routing."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Verify final ownership and absence of compatibility shims."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Required checks, native async tests, and review conventions."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify queued delivery, flush ordering, fields, redaction, and deterministic tests."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify error identity, parser projection, and lifecycle failure propagation."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Verify no synchronous external I/O remains on async hot paths."}
+{"file":"code_review.md","reason":"Repository-mandated Simplified Chinese P0/P1 review rules and evidence format."}
+{"file":".trellis/tasks/07-19-asyncify-runtime-blocking-boundaries/research/async-runtime-boundary-audit.md","reason":"Check final code against the complete convert/retain inventory and residual caveats."}
