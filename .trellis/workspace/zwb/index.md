@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-07-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~508 | Active |
+| `journal-1.md` | ~541 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-07-19 | 拆分 DDL 任务存储职责 | `9ff9053` | `feature/langgraph-ddl-metadata-20260717` |
 | 15 | 2026-07-19 | 补齐 MySQL 建表备注 | `9d2ba13` | `feature/langgraph-ddl-metadata-20260717` |
 | 14 | 2026-07-19 | 完成个人软件架构设计手册 | `6fec91e`, `fcd71f2` | `feature/langgraph-ddl-metadata-20260717` |
 | 13 | 2026-07-19 | 基于 Mem0 重构项目记忆架构 | `fa7afff` | `feature/langgraph-ddl-metadata-20260717` |

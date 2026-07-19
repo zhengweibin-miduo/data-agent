@@ -506,3 +506,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 拆分 DDL 任务存储职责
+
+**Date**: 2026-07-19
+**Task**: 拆分 DDL 任务存储职责
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+将 DDLJobStore 拆分为键、编解码、Lua、状态、租约和 outbox 专职 Store，保留门面兼容并完成静态与 live 集成验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9ff9053` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
