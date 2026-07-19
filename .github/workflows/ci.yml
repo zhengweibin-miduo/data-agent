@@ -70,8 +70,8 @@ jobs:
 
       - name: Configure Redis durability
         run: |
-          redis-cli CONFIG SET appendonly yes
-          redis-cli CONFIG SET appendfsync everysec
+          docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET appendonly yes
+          docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET appendfsync everysec
 
       - name: Check lock file
         run: uv lock --check
