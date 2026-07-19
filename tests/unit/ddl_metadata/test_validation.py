@@ -1,11 +1,11 @@
 """模型元数据确定性校验检查。"""
 
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.models.physical import PhysicalSchema
+from data_agent.ddl_metadata.models.semantic import (
     ColumnRole,
     MetricAnswer,
     MetricMetadata,
     MetricQuestion,
-    PhysicalSchema,
     SemanticColumn,
     SemanticMetadata,
     SemanticTable,

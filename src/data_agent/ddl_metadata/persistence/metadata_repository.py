@@ -6,9 +6,9 @@ from sqlalchemy import Table, delete, exists, select
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.models.physical import PhysicalSchema
+from data_agent.ddl_metadata.models.semantic import (
     MetricMetadata,
-    PhysicalSchema,
     SemanticMetadata,
 )
 from data_agent.ddl_metadata.persistence.tables import (

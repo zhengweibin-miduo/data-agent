@@ -5,10 +5,12 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.memory.outbox import MemoryIndexRebuilder
-from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
+from data_agent.ddl_metadata.memory.application.snapshots import (
+    MetadataSnapshotService,
+)
+from data_agent.ddl_metadata.memory.indexing.rebuilder import MemoryIndexRebuilder
+from data_agent.ddl_metadata.memory.mysql.tables import memory_index_outbox
 from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.persistence.tables import memory_index_outbox
 from data_agent.infrastructure.mysql import MySQLDatabase
 from tests.helpers.checks import check_condition, check_equal
 from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for

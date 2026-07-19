@@ -12,7 +12,11 @@ from sqlglot.errors import ParseError
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.identifiers import column_id, table_id
-from data_agent.ddl_metadata.models import PhysicalColumn, PhysicalSchema, PhysicalTable
+from data_agent.ddl_metadata.models.physical import (
+    PhysicalColumn,
+    PhysicalSchema,
+    PhysicalTable,
+)
 from data_agent.settings import APISettings, app_config
 
 

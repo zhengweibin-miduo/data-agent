@@ -161,9 +161,9 @@ await MemorySearchService.search(
 ### 6. Tests Required
 
 ```powershell
-uv run pytest tests/unit/ddl_metadata/test_memory.py
+uv run pytest tests/unit/ddl_metadata/memory/domain/test_memory.py
 uv run pytest tests/integration/test_memory_services.py
-uv run pytest tests/integration/test_memory_api.py
+uv run pytest tests/integration/test_api.py -k memory
 uv run pytest -m "not tei"
 uv run ruff check src tests
 uv run pyright src tests
@@ -308,13 +308,14 @@ JobOutboxStore(redis, keys).dispatch(queue, limit=100) -> int
   `CheckpointStore` owns a separate `AsyncRedisSaver`, explicitly
   enters its async context, awaits `asetup()`, and closes that same context.
 - Consumers import the application-facing facade from
-  `data_agent.ddl_metadata.jobs.ddl_job_store`. The facade composes
+  `data_agent.ddl_metadata.jobs.store`. The facade composes
   `RedisJobStateStore`, `SourceLeaseStore`, and `JobOutboxStore`; API, worker,
   and memory services do not construct those specialized stores separately.
-- Job modules use complete `snake_case` names ending in `_store.py`.
-  `JobKeysStore`, `JobCodecStore`, and `JobScriptsStore` centralize key
-  formatting, canonical payload conversion, and Lua text so those protocols
-  have one implementation source.
+- Redis-specific job modules live under `ddl_metadata/jobs/redis/`.
+  Stateful persistence collaborators retain the `Store` suffix, while pure
+  `JobKeys`, `JobCodec`, and `JobScripts` centralize key formatting, canonical
+  payload conversion, and Lua text so those protocols have one implementation
+  source.
 - The public source of truth is `ddl:job:{job_id}` plus revision-aware
   transitions. LangGraph checkpoints are recovery state and arq result keys are
   not public API records.
@@ -445,7 +446,7 @@ LLMMetadataGenerator.classify(...) -> SemanticMetadata
 ```powershell
 uv run pytest tests/unit/infrastructure/test_llm_client.py
 uv run pytest tests/unit/ddl_metadata/test_validation.py
-uv run pytest tests/unit/ddl_metadata/test_graph.py
+uv run pytest tests/unit/ddl_metadata/workflow/test_graph.py
 ```
 
 These CI checks use deterministic fakes/mocks and do not contact or require a

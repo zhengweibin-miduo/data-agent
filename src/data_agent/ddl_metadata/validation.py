@@ -3,12 +3,12 @@
 from collections import Counter
 
 from data_agent.ddl_metadata.identifiers import metric_id
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.models.physical import PhysicalSchema
+from data_agent.ddl_metadata.models.semantic import (
     ColumnRole,
     MetricAnswer,
     MetricMetadata,
     MetricQuestion,
-    PhysicalSchema,
     SemanticMetadata,
     TableRole,
     ValidationIssue,

@@ -6,15 +6,19 @@ import pytest
 from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 
-from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
-from data_agent.ddl_metadata.models import MemoryCandidate
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.persistence.memory_repository import MemoryRepository
-from data_agent.ddl_metadata.persistence.tables import (
+from data_agent.ddl_metadata.memory.application.snapshots import (
+    MetadataSnapshotService,
+)
+from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
+from data_agent.ddl_metadata.memory.mysql.tables import (
     agent_memory,
     agent_memory_event,
     agent_memory_link,
     memory_index_outbox,
+)
+from data_agent.ddl_metadata.models.memory import MemoryCandidate
+from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.ddl_metadata.persistence.tables import (
     table_info,
 )
 from data_agent.infrastructure.mysql import MySQLDatabase

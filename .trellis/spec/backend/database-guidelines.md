@@ -9,14 +9,18 @@ The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
 `src/data_agent/infrastructure/mysql.py`.
 
 The DDL metadata feature uses SQLAlchemy Core table definitions in
-`src/data_agent/ddl_metadata/persistence/tables.py` plus Session-scoped
-repositories. It deliberately does not add ORM entities or a migration
-framework. `MetadataRepository` owns the four Meta snapshot tables;
-`MemoryRepository` owns authoritative long-term memory, append-only events,
-typed links, index outbox, and lifecycle updates. The Meta tables use the
-default database in `mysql.url`; all four memory tables are schema-qualified to `memory.database`
-(`data_agent` by default). They still share one engine and Session so MySQL can
-commit the two InnoDB databases atomically.
+`ddl_metadata/persistence/tables.py` for Meta snapshots and
+`ddl_metadata/memory/mysql/tables.py` for long-term memory. Both import the
+single `MetaData` owner from `ddl_metadata/persistence/schema.py`. The project
+deliberately does not add ORM entities or a migration framework.
+`MetadataRepository` owns the four Meta snapshot tables; `MemoryRepository`
+owns authoritative records, append-only events, typed links, and browser
+mutations; `MemoryIndexOutboxRepository` owns derived-index desired state,
+claiming, retry, acknowledgement, projections, and rebuild scans. The Meta
+tables use the default database in `mysql.url`; all four memory tables are
+schema-qualified to `memory.database` (`data_agent` by default). They still
+share one engine and caller-owned Session so MySQL commits both InnoDB
+databases and record-plus-outbox changes atomically.
 
 ## Engine Lifecycle
 

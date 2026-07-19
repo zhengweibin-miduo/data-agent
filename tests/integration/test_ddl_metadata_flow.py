@@ -8,22 +8,25 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore
-from data_agent.ddl_metadata.memory.context import MemoryContextLoader
-from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.memory.application.context import MemoryContextLoader
+from data_agent.ddl_metadata.memory.application.snapshots import (
+    MetadataSnapshotService,
+)
+from data_agent.ddl_metadata.memory.mysql.tables import agent_memory
+from data_agent.ddl_metadata.models.jobs import (
     AnswerRequest,
     DDLJobRequest,
     JobResult,
     JobStatus,
+)
+from data_agent.ddl_metadata.models.semantic import (
     MetricAnswer,
     MetricQuestion,
 )
-from data_agent.ddl_metadata.persistence.tables import agent_memory, table_info
-from data_agent.ddl_metadata.workflow.graph import (
-    DDLGraphDependencies,
-    build_ddl_metadata_graph,
-)
+from data_agent.ddl_metadata.persistence.tables import table_info
+from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
+from data_agent.ddl_metadata.workflow.graph import build_ddl_metadata_graph
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.redis import RedisClient
@@ -241,7 +244,7 @@ async def _test_flow() -> None:
         for job_id, revision in created_jobs:
             await _cleanup_job(jobs, job_id, source, revision)
         if schema is not None:
-            from data_agent.ddl_metadata.models import PhysicalSchema
+            from data_agent.ddl_metadata.models.physical import PhysicalSchema
 
             await cleanup_schema(PhysicalSchema.model_validate(schema))
         await CheckpointStore.close()

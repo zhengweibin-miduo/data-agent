@@ -5,204 +5,175 @@
 This repository is a backend-only installable Python application. Runtime code
 lives under `src/data_agent/` and is organized by business feature first.
 Shared external-resource lifecycles live under `infrastructure`; DDL metadata
-contracts, workflow, persistence, API routes, and worker behavior live together
-under `ddl_metadata`.
-
-Keep application composition, infrastructure lifecycle, deterministic business
-logic, persistence, and HTTP/worker boundaries separate. Do not move workflow
-or SQL behavior into routes.
+then separates transport, application orchestration, deterministic domain
+logic, technology-specific persistence/indexing, workflow composition, and
+worker entry points.
 
 ## Directory Layout
 
 ```text
 src/data_agent/
-├── __init__.py
-├── main.py                         # ASGI object and executable entry
-├── application.py                  # FastAPI factory and lifespan composition
-├── settings.py                     # Typed YAML settings and shared instance
-├── logging.py                      # Central Loguru sink configuration
+├── application.py
+├── logging.py
+├── main.py
+├── settings.py
 ├── infrastructure/
-│   ├── __init__.py
-│   ├── mysql.py                    # Engine, Session, transaction lifecycle
-│   ├── redis.py                    # Decoded application Redis client
-│   ├── checkpoint_store.py         # LangGraph Redis saver lifecycle
-│   ├── llm_client.py               # OpenAI-compatible ChatOpenAI lifecycle
-│   ├── tei_embeddings.py           # TEI/Hugging Face embedding lifecycle
+│   ├── checkpoint_store.py
 │   ├── elasticsearch.py
-│   └── qdrant.py
+│   ├── llm_client.py
+│   ├── mysql.py
+│   ├── qdrant.py
+│   ├── redis.py
+│   └── tei_embeddings.py
 └── ddl_metadata/
-    ├── __init__.py
-    ├── api.py                      # Feature router and safe HTTP mapping
-    ├── worker.py                   # arq execution, retry, and recovery
+    ├── api/
+    │   ├── jobs.py
+    │   ├── memories.py
+    │   └── router.py
+    ├── jobs/
+    │   ├── identifiers.py
+    │   ├── store.py
+    │   └── redis/
+    │       ├── base.py
+    │       ├── codec.py
+    │       ├── keys.py
+    │       ├── lease_store.py
+    │       ├── outbox_store.py
+    │       ├── scripts.py
+    │       └── state_store.py
+    ├── memory/
+    │   ├── application/
+    │   │   ├── context.py
+    │   │   ├── search.py
+    │   │   ├── service.py
+    │   │   └── snapshots.py
+    │   ├── domain/
+    │   │   ├── candidates.py
+    │   │   ├── payloads.py
+    │   │   └── ranking.py
+    │   ├── indexing/
+    │   │   ├── dispatcher.py
+    │   │   ├── elasticsearch.py
+    │   │   ├── qdrant.py
+    │   │   └── rebuilder.py
+    │   └── mysql/
+    │       ├── index_outbox.py
+    │       ├── repository.py
+    │       └── tables.py
+    ├── models/
+    ├── persistence/
+    │   ├── metadata_repository.py
+    │   ├── schema.py
+    │   └── tables.py
+    ├── workflow/
+    │   ├── contracts.py
+    │   ├── graph.py
+    │   ├── llm_metadata_generator.py
+    │   ├── nodes.py
+    │   ├── routing.py
+    │   └── state.py
+    ├── worker/
+    │   ├── job_runner.py
+    │   ├── lifecycle.py
+    │   ├── maintenance.py
+    │   └── settings.py
     ├── errors.py
     ├── identifiers.py
     ├── parsing.py
-    ├── validation.py
-    ├── models/
-    │   ├── __init__.py
-    │   ├── base.py
-    │   ├── physical.py
-    │   ├── semantic.py
-    │   ├── memory.py
-    │   └── jobs.py
-    ├── workflow/
-    │   ├── __init__.py
-    │   ├── graph.py
-    │   └── metadata_generator.py
-    ├── jobs/
-    │   ├── __init__.py
-    │   ├── ddl_job_store.py         # Compatible lifecycle facade
-    │   ├── job_codec_store.py       # Job projection and canonical payloads
-    │   ├── job_keys_store.py        # Redis keys and member identifiers
-    │   ├── job_outbox_store.py      # Dispatch and checkpoint cleanup outboxes
-    │   ├── job_scripts_store.py     # Atomic Redis Lua protocols
-    │   ├── redis_base_store.py      # Narrow redis-py awaitable typing support
-    │   ├── redis_job_state_store.py # Atomic job record persistence
-    │   └── source_lease_store.py    # Job and browser-mutation source leases
-    ├── memory/
-    │   ├── __init__.py
-    │   ├── context.py
-    │   ├── payloads.py
-    │   ├── service.py
-    │   └── snapshots.py
-    └── persistence/
-        ├── __init__.py
-        ├── tables.py
-        ├── metadata_repository.py
-        └── memory_repository.py
-tests/
-├── conftest.py
-├── helpers/
-├── unit/
-│   ├── infrastructure/
-│   └── ddl_metadata/
-└── integration/
-    ├── infrastructure/
-    ├── persistence/
-    ├── test_api.py
-    ├── test_worker.py
-    ├── test_memory_services.py
-    └── test_ddl_metadata_flow.py
-conf/
-└── app_config.yaml
-docs/docker/
-├── docker-compose.yml
-├── elasticsearch/
-└── mysql/
+    └── validation.py
 ```
 
-The distribution name is `data-agent`; its Python import package is
-`data_agent`. The project uses a declared build backend and `uv sync` installs
-the package from `src/`.
+Tests mirror deterministic package boundaries under `tests/unit/`; integration
+tests remain scenario-oriented under `tests/integration/`. Configuration stays
+under `conf/`, while local service definitions and SQL bootstrap assets stay
+under `docs/docker/`.
 
-## Module Boundaries
+## Ownership
 
-- `data_agent.settings` owns Pydantic settings schemas, YAML loading, and the
-  shared `app_config` instance.
-- `data_agent.infrastructure` owns explicit third-party resource lifecycle.
-  Resource wrappers keep idempotent `initialize()`, guarded `get_client()`, and
-  async `close()` behavior where applicable.
-- `data_agent.ddl_metadata.models` owns typed contracts shared by HTTP,
-  workflow state, Redis projections, model responses, and persistence.
-- `data_agent.application` owns the FastAPI factory, configured CORS, shared
-  API resource lifespan, router inclusion, and application-level setup.
-- `data_agent.ddl_metadata.api` owns DDL metadata routes and safe
-  exception-to-HTTP mapping; it does not mutate Redis or SQL directly.
-- `data_agent.ddl_metadata.workflow` owns LangGraph orchestration and the typed
-  metadata-generation boundary.
-- `data_agent.ddl_metadata.jobs` owns revision-aware Redis job transitions,
-  leases, dispatch, retention, and cleanup outboxes. `DDLJobStore` is the
-  application-facing facade; specialized `*_store.py` modules own keys,
-  canonical encoding, Lua scripts, atomic state persistence, leases, and
-  outboxes without leaking Redis fields to API, worker, or memory consumers.
-- `data_agent.ddl_metadata.memory` owns trusted-memory context loading,
-  payload construction/rebuilding, snapshot persistence orchestration, and
-  browser-facing management behavior.
-- `data_agent.ddl_metadata.persistence` owns SQLAlchemy Core tables and bound
-  statements. Repositories receive `AsyncSession`; transaction ownership stays
-  with `MySQLDatabase.session()` and the calling service.
-- `data_agent.ddl_metadata.worker` owns arq activation, checkpoint
-  reconciliation, bounded retry, outbox dispatch, and waiting-input expiry.
-- `data_agent.logging` owns Loguru sink setup. Application and worker
-  lifecycles call it before emitting application logs.
-- `tests/unit` contains deterministic tests without live services.
-  `tests/integration` contains tests requiring MySQL, Redis, optional TEI, or
-  combined application boundaries. TEI tests carry the additional `tei`
-  marker so CI can exclude them unless the service is provisioned. Reusable
-  fakes and factories live in `tests/helpers`, never another `test_*.py`
-  module.
-- `conf/` contains configuration values; `data_agent.settings` contains Python
-  schemas and loading behavior.
-- `docs/docker/` owns local infrastructure, not application runtime code.
-
-There is no generic root `utils`, `common`, `service`, or `repository` package
-and no ORM entity layer. Keep deterministic helpers beside their feature owner
-until a real cross-feature abstraction exists.
-
-## Naming Conventions
-
-- Python packages, modules, functions, variables, and configuration keys use
-  `snake_case`.
-- Classes use `PascalCase`; established acronyms keep their canonical forms,
-  including `DDL`, `LLM`, `API`, `TEI`, and `MySQL`.
-- Runtime configuration classes use the `Settings` suffix.
-- Capability names use precise suffixes such as `Client`, `Repository`,
-  `Store`, `Service`, `Loader`, or `Factory`. Do not introduce generic
-  `Manager`, `Helper`, or `Utils` names when a concrete responsibility exists.
-- DDL job store modules use complete `snake_case` names ending in
-  `_store.py`; their specialized classes use `PascalCase` names ending in
-  `Store`. Keep the application-facing facade in `ddl_job_store.py`, not a
-  generic `store.py`.
-- Test modules use a `test_` prefix and pytest collects them from `tests/`.
-- Public packages, modules, classes, functions, methods, fixtures, and tests
-  use Chinese Google Style Docstrings.
-- Package `__init__.py` files contain a meaningful package Docstring, import no
-  application modules, and perform no connection or configuration side
-  effects.
+- `data_agent.application` is the FastAPI composition root and lifecycle owner.
+- `data_agent.infrastructure` owns one explicit external-resource lifecycle per
+  module. It does not own feature orchestration.
+- `ddl_metadata.api` owns HTTP request/response mapping. Job and memory routes
+  are separate owners and `api.router` aggregates them.
+- `ddl_metadata.jobs.store.DDLJobStore` is the application-facing job facade.
+  Redis keys, codecs, Lua scripts, state, outboxes, and leases are private
+  technology-specific collaborators under `jobs.redis`.
+- `ddl_metadata.memory.domain` contains deterministic transformations only. It
+  must not import FastAPI, arq, initialized clients, SQLAlchemy sessions, Redis,
+  Elasticsearch, Qdrant, or TEI.
+- `ddl_metadata.memory.application` owns memory use cases and transaction
+  boundaries. It composes domain behavior, MySQL repositories, index adapters,
+  and Meta persistence without defining SQL or external payload formats.
+- `ddl_metadata.memory.mysql.MemoryRepository` owns authoritative records,
+  history, links, browser mutations, and exact reads.
+  `MemoryIndexOutboxRepository` separately owns desired index state, claims,
+  retries, acknowledgements, projections, and rebuild scans. Both receive the
+  caller's `AsyncSession` so record-plus-outbox writes remain atomic.
+- `ddl_metadata.memory.indexing` owns Elasticsearch/Qdrant adapters and the
+  dispatcher/rebuilder use cases for derived projections.
+- `ddl_metadata.persistence` owns the Meta snapshot tables/repository.
+  `persistence.schema.metadata` is the single SQLAlchemy `MetaData` shared by
+  Meta and memory table modules.
+- `ddl_metadata.workflow.state` and `.contracts` are importable without graph
+  construction; `.nodes` owns dependency-bound node behavior, `.routing` owns
+  pure conditional routing, and `.graph` only registers and compiles topology.
+- `ddl_metadata.worker.job_runner` owns one DDL execution/recovery unit,
+  `.maintenance` owns scheduled jobs, `.lifecycle` owns resources and graph
+  composition, and `.settings.WorkerSettings` is the only arq discovery class.
+- Models, parsing, validation, identifiers, errors, settings, logging, and root
+  composition remain cohesive. File size alone is not a reason to split them.
 
 ## Dependency Direction
 
-The intended direction is:
-
 ```text
 main/application
-    ├── infrastructure
-    └── ddl_metadata.api / ddl_metadata.worker
-            ├── workflow / jobs / memory
-            │       ├── models
-            │       └── persistence
-            └── models
+  -> api/router + jobs/store + memory/application
+  -> infrastructure lifecycle
+
+worker/settings
+  -> worker/job_runner + worker/maintenance + worker/lifecycle
+
+worker/job_runner
+  -> jobs/store + workflow state
+
+workflow/graph
+  -> workflow nodes/routing/contracts/state
+
+workflow/nodes
+  -> memory/domain + parsing + validation + models
+
+memory/application
+  -> memory/domain + memory/mysql + memory/indexing + persistence metadata
+
+jobs/store
+  -> jobs/redis
 ```
 
-Models, parsing, validation, identifiers, and errors do not depend on FastAPI,
-arq, initialized Redis clients, or active SQLAlchemy Sessions. Persistence does
-not own commits or resource lifecycle.
+Technology-specific packages may depend on typed models, settings, and shared
+infrastructure clients, but deterministic domain modules never depend on
+technology-specific packages. API, worker, workflow, and memory consumers use
+the application-facing job facade and do not import `jobs.redis`.
 
-## External-Service Layout
+## Naming and Package Rules
 
-A configured shared dependency normally has:
+- Python packages, modules, functions, variables, and configuration keys use
+  `snake_case`; classes use `PascalCase`.
+- Established acronyms retain `DDL`, `LLM`, `API`, `TEI`, and `MySQL`.
+- Stateful persistence classes use precise suffixes such as `Repository` or
+  `Store`. Pure Redis primitives are `JobKeys`, `JobCodec`, and `JobScripts`.
+- Public runtime and test objects use Chinese Google Style Docstrings.
+- Every package `__init__.py` contains only a meaningful package Docstring and
+  has no imports, initialized clients, configuration mutation, or side effects.
+- Consumers import from the concrete owning module. Retired internal paths do
+  not receive compatibility shims.
+- Do not introduce generic root `utils`, `common`, `manager`, `service`, or
+  repository packages without a demonstrated cross-feature contract.
 
-1. A typed section in `data_agent.settings` and matching values in
-   `conf/app_config.yaml`.
-2. A lifecycle adapter under `data_agent.infrastructure`.
-3. A local service definition under `docs/docker/` when it runs locally.
-4. Focused unit or marked integration coverage under `tests/`.
+## Compatibility Boundaries
 
-Redis uses separate application-client and LangGraph-checkpoint wrappers because
-their serialization and lifecycle contracts differ. The LLM client reads its
-API key only from `DATA_AGENT_LLM_API_KEY`; YAML contains non-secret model
-settings only.
-
-## Retired Layout
-
-The hard migration does not provide compatibility packages for:
-
-- `app.*`;
-- `app_test.*`;
-- repository-root `main.py`;
-- horizontal root `api`, `client`, `model`, `service`, `repository`, or
-  `worker` ownership.
-
-Active source, CI, current specs, and validation commands must use
-`data_agent.*` and `tests/`. Archived tasks and developer journals remain
-historical records and may retain paths that were correct when written.
+Package moves must preserve HTTP route metadata, Pydantic contracts, arq
+function and cron names, Redis keys/hash fields/canonical JSON/Lua behavior,
+MySQL schemas and statements, LangGraph state keys/node names/edge topology,
+configuration keys/defaults, and structured logging event/field names. Package
+refactors require a hard migration across source, tests, active documentation,
+configuration, and current specs; archived Trellis artifacts remain historical.

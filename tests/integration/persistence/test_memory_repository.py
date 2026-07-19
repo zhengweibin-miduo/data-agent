@@ -5,16 +5,16 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.memory.snapshots import build_accepted_memories
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
+from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
+from data_agent.ddl_metadata.memory.mysql.tables import memory_index_outbox
+from data_agent.ddl_metadata.models.memory import (
     MemoryEventType,
     MemoryIndexOperation,
     MemoryIndexTarget,
     MemoryStatus,
 )
 from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.persistence.memory_repository import MemoryRepository
-from data_agent.ddl_metadata.persistence.tables import memory_index_outbox
 from data_agent.infrastructure.mysql import MySQLDatabase
 from tests.helpers.checks import check_equal
 from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for

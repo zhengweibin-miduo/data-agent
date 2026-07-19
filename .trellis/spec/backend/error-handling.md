@@ -73,8 +73,9 @@ a later `initialize()` creates a fresh resource after close.
 
 ## API Error Responses
 
-`data_agent.ddl_metadata.api` centrally maps `DDLMetadataError` to its declared
-status and a safe envelope:
+The application exception handler centrally maps `DDLMetadataError` raised by
+the split `data_agent.ddl_metadata.api.jobs` and `.memories` routers to its
+declared status and a safe envelope:
 
 ```json
 {

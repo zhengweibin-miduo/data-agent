@@ -10,24 +10,22 @@ from langgraph.checkpoint.memory import InMemorySaver
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore, question_set_id
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.jobs.identifiers import question_set_id
+from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.models.jobs import (
     AnswerRequest,
     DDLJobRequest,
     JobError,
     JobStatus,
+)
+from data_agent.ddl_metadata.models.semantic import (
     MetricAnswer,
     MetricQuestion,
 )
-from data_agent.ddl_metadata.worker import (
-    _RETRYABLE,
-    cleanup_checkpoints,
-    run_ddl_job,
-)
-from data_agent.ddl_metadata.workflow.graph import (
-    DDLGraphDependencies,
-    build_ddl_metadata_graph,
-)
+from data_agent.ddl_metadata.worker.job_runner import _RETRYABLE, run_ddl_job
+from data_agent.ddl_metadata.worker.maintenance import cleanup_checkpoints
+from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
+from data_agent.ddl_metadata.workflow.graph import build_ddl_metadata_graph
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.redis import RedisClient
 from tests.helpers.checks import (

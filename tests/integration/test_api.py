@@ -8,10 +8,12 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError
 
 from data_agent.application import create_app
-from data_agent.ddl_metadata.jobs.ddl_job_store import DDLJobStore
-from data_agent.ddl_metadata.memory.snapshots import MetadataSnapshotService
-from data_agent.ddl_metadata.models import (
-    DDLJobRequest,
+from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.memory.application.snapshots import (
+    MetadataSnapshotService,
+)
+from data_agent.ddl_metadata.models.jobs import DDLJobRequest
+from data_agent.ddl_metadata.models.memory import (
     MemoryKind,
     SemanticDecisionContent,
 )

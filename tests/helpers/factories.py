@@ -3,25 +3,27 @@
 from sqlalchemy import delete, or_, select
 
 from data_agent.ddl_metadata.identifiers import metric_id
-from data_agent.ddl_metadata.models import (
+from data_agent.ddl_metadata.memory.mysql.tables import (
+    agent_memory,
+    agent_memory_event,
+    agent_memory_link,
+    memory_index_outbox,
+)
+from data_agent.ddl_metadata.models.physical import PhysicalSchema
+from data_agent.ddl_metadata.models.semantic import (
     ColumnRole,
     MetricAnswer,
     MetricMetadata,
     MetricQuestion,
-    PhysicalSchema,
     SemanticColumn,
     SemanticMetadata,
     SemanticTable,
     TableRole,
 )
+from data_agent.ddl_metadata.persistence.schema import metadata
 from data_agent.ddl_metadata.persistence.tables import (
-    agent_memory,
-    agent_memory_event,
-    agent_memory_link,
     column_info,
     column_metric,
-    memory_index_outbox,
-    metadata,
     metric_info,
     table_info,
 )

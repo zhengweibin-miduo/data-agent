@@ -3,7 +3,7 @@
 import hashlib
 import json
 
-from data_agent.ddl_metadata.models import PhysicalSchema
+from data_agent.ddl_metadata.models.physical import PhysicalSchema
 
 
 def stable_id(kind: str, *parts: str) -> str:

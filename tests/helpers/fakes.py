@@ -2,17 +2,19 @@
 
 from langchain_core.runnables import RunnableConfig
 
-from data_agent.ddl_metadata.memory.context import LoadedMemoryContext
-from data_agent.ddl_metadata.models import (
-    ColumnRole,
+from data_agent.ddl_metadata.memory.application.context import LoadedMemoryContext
+from data_agent.ddl_metadata.models.memory import (
     MemoryCandidate,
     MemoryContent,
+)
+from data_agent.ddl_metadata.models.physical import PhysicalSchema
+from data_agent.ddl_metadata.models.semantic import (
+    ColumnRole,
     MetricAnswer,
     MetricMetadata,
     MetricOutput,
     MetricQuestion,
     MetricQuestionSet,
-    PhysicalSchema,
     SemanticColumn,
     SemanticMetadata,
     SemanticTable,
