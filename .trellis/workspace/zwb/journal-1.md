@@ -539,3 +539,37 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: 完成 DDL 元数据包职责重组
+
+**Date**: 2026-07-19
+**Task**: 完成 DDL 元数据包职责重组
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+完成仓库级职责与包结构重组；全量检查无 P0/P1，Ruff、Pyright、30 个非 TEI 测试与 TEI 专项测试均通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b4adbeb` | (see git log) |
+| `c86ce9c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
