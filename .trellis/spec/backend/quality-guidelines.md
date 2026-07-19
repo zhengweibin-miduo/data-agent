@@ -20,6 +20,13 @@
 
 - Configuration models inherit `SettingsModel`, whose
   `ConfigDict(extra="forbid")` rejects unknown fields.
+- Every configuration field uses `Field(description="...")` with a concrete
+  Chinese business explanation. Preserve defaults and validation constraints
+  in the same `Field`; `tests/unit/test_settings.py` recursively rejects
+  missing or non-Chinese descriptions across root and nested settings models.
+- Runtime configuration modules contain definitions, validators, loaders, and
+  shared instances only. Default-configuration self-checks belong in pytest,
+  not in a production-module `if __name__ == "__main__"` assertion block.
 - Shared infrastructure resources use typed `ClassVar[ClientType | None]`
   state, idempotent `initialize()`, guarded `get_client()`, and async
   `close()`.
