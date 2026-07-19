@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-07-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~575 | Active |
+| `journal-1.md` | ~608 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-07-19 | 异步化运行时阻塞边界 | `93842e0` | `feature/langgraph-ddl-metadata-20260717` |
 | 17 | 2026-07-19 | 完成 DDL 元数据包职责重组 | `b4adbeb`, `c86ce9c` | `feature/langgraph-ddl-metadata-20260717` |
 | 16 | 2026-07-19 | 拆分 DDL 任务存储职责 | `9ff9053` | `feature/langgraph-ddl-metadata-20260717` |
 | 15 | 2026-07-19 | 补齐 MySQL 建表备注 | `9d2ba13` | `feature/langgraph-ddl-metadata-20260717` |

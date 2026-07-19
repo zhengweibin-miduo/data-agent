@@ -573,3 +573,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: 异步化运行时阻塞边界
+
+**Date**: 2026-07-19
+**Task**: 异步化运行时阻塞边界
+**Branch**: `feature/langgraph-ddl-metadata-20260717`
+
+### Summary
+
+完成全仓同步边界审计；将 DDL 解析迁移为线程承载的异步公共契约，队列化并排空 Loguru sink，增加有界 DDL 大小检查，删除旧同步公共调用并通过全量质量门禁。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `93842e0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

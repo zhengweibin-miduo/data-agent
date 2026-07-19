@@ -3,7 +3,7 @@
   "name": "add-ddl-job-sse-streaming",
   "title": "为 DDL 元数据任务增加 SSE 流式输出",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

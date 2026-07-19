@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/07-19-add-ddl-job-sse-streaming/prd.md", "reason": "Verify every accepted streaming, reconnect, compatibility, safety, and boundedness criterion."}
+{"file": ".trellis/tasks/07-19-add-ddl-job-sse-streaming/design.md", "reason": "Check implementation against the approved SSE and Redis Stream architecture."}
+{"file": ".trellis/tasks/07-19-add-ddl-job-sse-streaming/implement.md", "reason": "Verify every implementation step, test command, and rollback concern."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Check package ownership and prevent API or worker imports of Redis implementation details."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Check Redis lifecycle, bounded external I/O, and LangGraph streaming behavior."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check pre-response HTTP errors and post-response safe SSE errors."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run the repository quality gate and required tests."}
+{"file": "code_review.md", "reason": "Apply the repository's mandatory AI review format and severity rules."}
