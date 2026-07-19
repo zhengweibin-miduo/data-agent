@@ -242,6 +242,10 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
   `'data_agent'@'%'` unless Compose is changed in the same task.
 - Databases: the bootstrap scripts create `data_agent`, `dw`, and `meta`;
   Compose does not set `MYSQL_DATABASE`.
+- Documentation: every bootstrap `CREATE TABLE` has a Chinese table-level
+  `COMMENT`, and every business column has a Chinese column-level `COMMENT`.
+  Comments explain business meaning without changing types, constraints,
+  indexes, foreign keys, seed data, or statement order.
 - Ownership: `meta.sql` owns exactly the four Meta tables.
   `data_agent.sql` uses InnoDB and owns exactly the four application memory
   tables and does not manage retired memory contracts.
@@ -257,18 +261,21 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 | Initialized `mysql_data` | Skip bootstrap scripts and preserve data |
 | Missing init-directory mount | Start MySQL without creating the three local databases |
 | `GRANT` user differs from `MYSQL_USER` and does not exist | Initialization fails at `GRANT` |
+| A table or business column lacks a Chinese `COMMENT` | Static bootstrap review fails before merge |
 | Compose cannot resolve `./mysql` | `docker compose config` or startup reports the invalid mount |
 | Memory database equals the `mysql.url` default | Configuration validation fails before startup |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: an empty disposable volume creates `data_agent`, `dw`, and `meta`; the
-  application user can access each owned schema while Meta contains only its
-  four business tables.
+  application user can access each owned schema, Meta contains only its four
+  business tables, and database inspection exposes Chinese table and column
+  meanings.
 - Base: restarting an initialized local container leaves all database contents
   unchanged.
 - Bad: forcing the scripts to run on every startup can execute their
-  `DROP TABLE` statements and destroy local data.
+  `DROP TABLE` statements and destroy local data; adding a new uncommented
+  table also leaves the disposable schema undocumented.
 
 ### 6. Tests Required
 
@@ -277,6 +284,9 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
   are present.
 - Search all files under `docs/docker/mysql/` and assert that bootstrap grants
   target `'data_agent'@'%'` and do not reference stale users.
+- Statically assert that every bootstrap table and business column carries a
+  non-empty Chinese `COMMENT`; compare SQL tokens with comments removed when a
+  comment-only task must prove that no schema or seed-data behavior changed.
 - Run the repository checks against the default Meta URL after applying
   `data_agent.sql`; assert the SQLAlchemy memory objects use
   `schema=memory.database` and a forced memory-side constraint failure rolls
@@ -298,6 +308,21 @@ Correct: the SQL reuses the configured local application user.
 
 ```sql
 GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
+```
+
+Wrong: a bootstrap table leaves its purpose and fields undocumented.
+
+```sql
+CREATE TABLE example_table (id BIGINT PRIMARY KEY);
+```
+
+Correct: MySQL persists both table-level and column-level Chinese comments.
+
+```sql
+CREATE TABLE example_table
+(
+    id BIGINT PRIMARY KEY COMMENT '示例编号'
+) COMMENT = '示例表';
 ```
 
 ## Configuration and Naming

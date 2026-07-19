@@ -8,11 +8,11 @@ USE dw;
 DROP TABLE IF EXISTS dim_region;
 CREATE TABLE dim_region
 (
-    region_id   VARCHAR(20) PRIMARY KEY,
-    province    VARCHAR(50),
-    region_name VARCHAR(50),
-    country     VARCHAR(50)
-);
+    region_id   VARCHAR(20) PRIMARY KEY COMMENT '地区维度的唯一业务编码',
+    province    VARCHAR(50) COMMENT '订单归属的省级行政区名称',
+    region_name VARCHAR(50) COMMENT '省份所属的业务大区名称',
+    country     VARCHAR(50) COMMENT '订单归属的国家名称'
+) COMMENT = '地区维度，描述订单归属的国家、省份和业务大区';
 
 INSERT INTO dim_region (region_id, province, region_name, country)
 VALUES ('R001', '广东省', '华南', '中国'),
@@ -26,11 +26,11 @@ VALUES ('R001', '广东省', '华南', '中国'),
 DROP TABLE IF EXISTS dim_customer;
 CREATE TABLE dim_customer
 (
-    customer_id   VARCHAR(20) PRIMARY KEY,
-    customer_name VARCHAR(50),
-    gender        VARCHAR(10),
-    member_level  VARCHAR(20)
-);
+    customer_id   VARCHAR(20) PRIMARY KEY COMMENT '客户维度的唯一业务编码',
+    customer_name VARCHAR(50) COMMENT '客户姓名',
+    gender        VARCHAR(10) COMMENT '客户登记的性别',
+    member_level  VARCHAR(20) COMMENT '客户当前会员等级'
+) COMMENT = '客户维度，描述下单客户的基础资料与会员等级';
 
 INSERT INTO dim_customer (customer_id, customer_name, gender, member_level)
 VALUES ('C001', '李伟', '男', '黄金'),
@@ -59,11 +59,11 @@ VALUES ('C001', '李伟', '男', '黄金'),
 DROP TABLE IF EXISTS dim_product;
 CREATE TABLE dim_product
 (
-    product_id   VARCHAR(20) PRIMARY KEY,
-    product_name VARCHAR(200),
-    category     VARCHAR(50),
-    brand        VARCHAR(50)
-);
+    product_id   VARCHAR(20) PRIMARY KEY COMMENT '商品维度的唯一业务编码',
+    product_name VARCHAR(200) COMMENT '商品展示名称及规格',
+    category     VARCHAR(50) COMMENT '商品所属业务品类',
+    brand        VARCHAR(50) COMMENT '商品品牌名称'
+) COMMENT = '商品维度，描述订单商品的名称、品类与品牌';
 
 INSERT INTO dim_product (product_id, product_name, category, brand)
 VALUES ('P001', 'iPhone 15 Pro', '手机数码', '苹果'),
@@ -87,12 +87,12 @@ VALUES ('P001', 'iPhone 15 Pro', '手机数码', '苹果'),
 DROP TABLE IF EXISTS dim_date;
 CREATE TABLE dim_date
 (
-    date_id INT PRIMARY KEY,
-    year    INT,
-    quarter VARCHAR(2),
-    month   INT,
-    day     INT
-);
+    date_id INT PRIMARY KEY COMMENT '自然日键，格式为 YYYYMMDD',
+    year    INT COMMENT '自然日所属公历年份',
+    quarter VARCHAR(2) COMMENT '自然日所属季度，如 Q1',
+    month   INT COMMENT '自然日所属月份，取值 1 至 12',
+    day     INT COMMENT '自然日在当月的日期序号'
+) COMMENT = '日期维度，提供订单日期的年、季度、月和日历拆分';
 
 INSERT INTO dim_date (date_id, year, quarter, month, day)
 VALUES (20250101, 2025, 'Q1', 1, 1),
@@ -191,14 +191,14 @@ VALUES (20250101, 2025, 'Q1', 1, 1),
 DROP TABLE IF EXISTS fact_order;
 CREATE TABLE fact_order
 (
-    order_id       VARCHAR(30) PRIMARY KEY,
-    customer_id    VARCHAR(20),
-    product_id     VARCHAR(20),
-    date_id        INT,
-    region_id      VARCHAR(20),
-    order_quantity INT,
-    order_amount   DECIMAL(10, 2)
-);
+    order_id       VARCHAR(30) PRIMARY KEY COMMENT '订单事实的唯一业务编号',
+    customer_id    VARCHAR(20) COMMENT '下单客户的维度编码',
+    product_id     VARCHAR(20) COMMENT '订单商品的维度编码',
+    date_id        INT COMMENT '订单发生自然日的日期维度键',
+    region_id      VARCHAR(20) COMMENT '订单归属地区的维度编码',
+    order_quantity INT COMMENT '该订单商品的成交数量',
+    order_amount   DECIMAL(10, 2) COMMENT '该订单商品的成交总金额，单位为元'
+) COMMENT = '订单事实表，记录客户在指定日期和地区购买商品的数量与金额';
 
 INSERT INTO fact_order (order_id, customer_id, product_id, date_id, region_id, order_quantity, order_amount)
 VALUES ('ORD20250101001', 'C001', 'P001', 20250101, 'R001', 1, 8999.00),

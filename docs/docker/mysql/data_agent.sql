@@ -9,71 +9,71 @@ USE data_agent;
 
 CREATE TABLE IF NOT EXISTS agent_memory
 (
-    id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
-    uid                CHAR(64) NOT NULL UNIQUE,
-    source             VARCHAR(128) NOT NULL,
-    kind               VARCHAR(32) NOT NULL,
-    scope_key          VARCHAR(256) NOT NULL,
-    schema_fingerprint CHAR(64) NOT NULL,
-    memory_text        TEXT NOT NULL,
-    content            JSON NOT NULL,
-    content_hash       CHAR(64) NOT NULL,
-    trust              VARCHAR(32) NOT NULL,
-    status             VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
-    content_version    VARCHAR(32) NOT NULL,
-    projection_version VARCHAR(32) NOT NULL,
-    created_job_id     CHAR(64) NOT NULL,
-    created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id                 BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '权威记忆的内部自增主键',
+    uid                CHAR(64) NOT NULL UNIQUE COMMENT '基于记忆内容与作用域生成的稳定唯一标识',
+    source             VARCHAR(128) NOT NULL COMMENT '记忆所属的 DDL 数据源标识',
+    kind               VARCHAR(32) NOT NULL COMMENT '记忆业务类型，如语义决策、指标问题、用户回答或指标定义',
+    scope_key          VARCHAR(256) NOT NULL COMMENT '记忆对应表、字段或指标的稳定作用域标识',
+    schema_fingerprint CHAR(64) NOT NULL COMMENT '生成记忆时物理结构快照的 SHA-256 指纹',
+    memory_text        TEXT NOT NULL COMMENT '用于全文检索与向量检索的规范化记忆文本',
+    content            JSON NOT NULL COMMENT '权威长期记忆的结构化业务内容',
+    content_hash       CHAR(64) NOT NULL COMMENT '结构化内容的 SHA-256 哈希，用于幂等去重',
+    trust              VARCHAR(32) NOT NULL COMMENT '事实可信来源，区分模型校验与用户确认',
+    status             VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' COMMENT '记忆生命周期状态，如 ACTIVE 或 DELETED',
+    content_version    VARCHAR(32) NOT NULL COMMENT '结构化记忆内容的格式版本',
+    projection_version VARCHAR(32) NOT NULL COMMENT 'Elasticsearch 与 Qdrant 索引投影的格式版本',
+    created_job_id     CHAR(64) NOT NULL COMMENT '首次生成该记忆的 DDL 任务标识',
+    created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '权威记忆首次创建时间',
     updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                       ON UPDATE CURRENT_TIMESTAMP,
-    deleted_at         DATETIME NULL,
+                                       ON UPDATE CURRENT_TIMESTAMP COMMENT '权威记忆最近更新时间',
+    deleted_at         DATETIME NULL COMMENT '记忆被软删除的时间，未删除时为空',
     INDEX idx_agent_memory_exact
         (source, kind, scope_key, schema_fingerprint, status),
     INDEX idx_agent_memory_rebuild (status, id),
     UNIQUE KEY uq_agent_memory_content
         (source, kind, scope_key, schema_fingerprint, content_hash)
-) ENGINE = InnoDB;
+) ENGINE = InnoDB COMMENT = '存储经验证的权威长期记忆及其生命周期状态';
 
 CREATE TABLE IF NOT EXISTS agent_memory_event
 (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    memory_id   BIGINT NOT NULL,
-    event_type  VARCHAR(16) NOT NULL,
-    old_content JSON NULL,
-    new_content JSON NULL,
-    job_id      CHAR(64) NULL,
-    actor_type  VARCHAR(16) NOT NULL,
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '记忆历史事件的内部自增主键',
+    memory_id   BIGINT NOT NULL COMMENT '事件所属权威记忆的内部主键',
+    event_type  VARCHAR(16) NOT NULL COMMENT '历史事件类型，如新增、更新、删除或关联',
+    old_content JSON NULL COMMENT '事件发生前的结构化记忆内容',
+    new_content JSON NULL COMMENT '事件发生后的结构化记忆内容',
+    job_id      CHAR(64) NULL COMMENT '触发事件的 DDL 任务标识，非任务事件可为空',
+    actor_type  VARCHAR(16) NOT NULL COMMENT '事件执行者类型，区分工作流、用户与系统',
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '历史事件创建时间',
     INDEX idx_agent_memory_event_history (memory_id, id),
     CONSTRAINT fk_agent_memory_event_memory
         FOREIGN KEY (memory_id) REFERENCES agent_memory (id)
-) ENGINE = InnoDB;
+) ENGINE = InnoDB COMMENT = '以只追加方式记录权威记忆的新增、更新、删除与关联历史';
 
 CREATE TABLE IF NOT EXISTS agent_memory_link
 (
-    memory_id        BIGINT NOT NULL,
-    linked_memory_id BIGINT NOT NULL,
-    link_type        VARCHAR(32) NOT NULL,
+    memory_id        BIGINT NOT NULL COMMENT '关联关系起点记忆的内部主键',
+    linked_memory_id BIGINT NOT NULL COMMENT '关联关系终点记忆的内部主键',
+    link_type        VARCHAR(32) NOT NULL COMMENT '记忆关联类型，如相关、派生来源或替代',
     PRIMARY KEY (memory_id, linked_memory_id, link_type),
     CONSTRAINT fk_agent_memory_link_memory
         FOREIGN KEY (memory_id) REFERENCES agent_memory (id),
     CONSTRAINT fk_agent_memory_link_linked
         FOREIGN KEY (linked_memory_id) REFERENCES agent_memory (id)
-) ENGINE = InnoDB;
+) ENGINE = InnoDB COMMENT = '维护权威记忆之间有方向的业务关联关系';
 
 CREATE TABLE IF NOT EXISTS memory_index_outbox
 (
-    memory_uid         CHAR(64) NOT NULL,
-    target             VARCHAR(16) NOT NULL,
-    operation          VARCHAR(16) NOT NULL,
-    projection_version VARCHAR(32) NOT NULL,
-    attempts           INT NOT NULL DEFAULT 0,
-    available_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_error_type    VARCHAR(128) NULL,
+    memory_uid         CHAR(64) NOT NULL COMMENT '待同步权威记忆的稳定唯一标识',
+    target             VARCHAR(16) NOT NULL COMMENT '派生索引目标，如 Elasticsearch 或 Qdrant',
+    operation          VARCHAR(16) NOT NULL COMMENT '索引期望操作，如 UPSERT 或 DELETE',
+    projection_version VARCHAR(32) NOT NULL COMMENT '本次同步使用的索引投影格式版本',
+    attempts           INT NOT NULL DEFAULT 0 COMMENT '已经失败的投递尝试次数',
+    available_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录可被工作进程领取或重试的最早时间',
+    last_error_type    VARCHAR(128) NULL COMMENT '最近一次投递失败的错误类型',
     updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                         ON UPDATE CURRENT_TIMESTAMP,
+                                         ON UPDATE CURRENT_TIMESTAMP COMMENT '索引期望状态最近更新时间',
     PRIMARY KEY (memory_uid, target),
     INDEX idx_memory_index_outbox_claim (available_at, updated_at),
     CONSTRAINT fk_memory_index_outbox_memory
         FOREIGN KEY (memory_uid) REFERENCES agent_memory (uid)
-) ENGINE = InnoDB;
+) ENGINE = InnoDB COMMENT = '记录同步权威记忆到派生索引的可重试期望状态';
