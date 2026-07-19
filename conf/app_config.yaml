@@ -15,14 +15,14 @@ logging:
 
 qdrant:
   url: http://localhost:6333
-  memory_collection: data_agent_memory_v2
+  memory_collection: data_agent_memory
   vector_size: 1024
   distance: Cosine
   top_k: 20
 
 elasticsearch:
   url: http://localhost:9200
-  memory_index: data_agent_memory_v2
+  memory_index: data_agent_memory
   analyzer: ik_max_word
   top_k: 20
 
