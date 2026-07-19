@@ -1,0 +1,2 @@
+{"file": ".agents/skills/git-pr-rules/SKILL.md", "reason": "检查工作流中的分支格式、基线判定和创建前后门禁是否符合项目规则。"}
+{"file": ".trellis/tasks/07-20-enforce-task-worktree-branch/research/current-worktree-contract.md", "reason": "检查 workflow 改动是否与当前本地 Trellis 能力和既定 worktree 路径一致。"}

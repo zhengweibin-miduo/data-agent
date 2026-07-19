@@ -1,0 +1,2 @@
+{"file": ".agents/skills/git-pr-rules/SKILL.md", "reason": "实现 Phase 1.0 时遵循项目权威的分支命名、基线和安全规则。"}
+{"file": ".trellis/tasks/07-20-enforce-task-worktree-branch/research/current-worktree-contract.md", "reason": "使用已验证的 Trellis 0.6.7 能力、hook 时序和 worktree 路径结论。"}
