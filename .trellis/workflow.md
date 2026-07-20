@@ -360,11 +360,11 @@ inside that worktree.
    git branch --list "<task-branch>"
    git branch --remotes --list "*/<task-branch>"
    git worktree list --porcelain
-   Test-Path -LiteralPath "<repo-root>/.trellis/worktrees/<MM-DD-task-slug>"
+   python -c "from pathlib import Path; print(Path(r'<repo-root>/.trellis/worktrees/<MM-DD-task-slug>').exists())"
    ```
 
-   `Test-Path` must return `False` (use the platform-equivalent filesystem check
-   outside PowerShell). Stop on any conflict; do not reuse, delete, or overwrite
+   The Python path check must return `False` on every platform, including
+   Windows PowerShell/CMD and POSIX shells. Stop on any conflict; do not reuse, delete, or overwrite
    an existing branch, directory, or registered worktree.
 
 4. Create the branch and worktree together from the confirmed start point:
@@ -417,13 +417,13 @@ inside that worktree.
    ```bash
    git branch --show-current
    git rev-parse --show-toplevel
-   Resolve-Path -LiteralPath ".trellis/tasks/<MM-DD-task-slug>/task.json"
+   python -c "from pathlib import Path; print(Path(r'.trellis/tasks/<MM-DD-task-slug>/task.json').resolve())"
    ```
 
    The branch output must exactly equal `<task-branch>`, and the repository root
    must exactly equal
-   `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>`. `Resolve-Path` must point
-   beneath that same worktree (use the platform equivalent outside PowerShell).
+   `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>`. The Python resolved path
+   must point beneath that same worktree on every platform, including Windows.
    Also verify from the original parent worktree that the ignored nested
    worktree path did not create a parent-branch diff or untracked entry:
 
