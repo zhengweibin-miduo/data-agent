@@ -96,6 +96,7 @@ async def test_turn_idempotency_history_and_tenant_isolation() -> None:
                         agent_conversation.c.uid == conversation_uid
                     )
                 )
+        await MySQLDatabase.close()
 
 
 async def test_extraction_claims_one_ordered_turn_per_conversation() -> None:
@@ -160,3 +161,4 @@ async def test_extraction_claims_one_ordered_turn_per_conversation() -> None:
                         agent_conversation.c.uid == conversation_uid
                     )
                 )
+        await MySQLDatabase.close()
