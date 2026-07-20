@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS agent_message
     conversation_id BIGINT NOT NULL COMMENT '消息所属会话内部主键',
     turn_uid        CHAR(64) NOT NULL COMMENT '消息所属幂等轮次标识',
     role            VARCHAR(16) NOT NULL COMMENT '纯文本消息角色，仅允许 user 或 assistant',
-    content         TEXT NOT NULL COMMENT '永久保存的纯文本消息内容',
+    content         MEDIUMTEXT NOT NULL COMMENT '永久保存的纯文本消息内容',
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '消息创建时间',
     UNIQUE KEY uq_agent_message_turn_role
         (conversation_id, turn_uid, role),

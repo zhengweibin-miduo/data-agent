@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
 from data_agent.ddl_metadata.persistence.schema import metadata
 from data_agent.settings import app_config
@@ -55,7 +56,7 @@ agent_message = Table(
     ),
     Column("turn_uid", String(64), nullable=False),
     Column("role", String(16), nullable=False),
-    Column("content", Text, nullable=False),
+    Column("content", MEDIUMTEXT, nullable=False),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     UniqueConstraint(
         "conversation_id",
