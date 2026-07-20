@@ -339,6 +339,9 @@ inside that worktree.
      `<MM-DD-task-slug>` (the exact name `task.py create` will generate).
    - Worktree path:
      `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>`.
+     This directory is intentionally ignored by `.trellis/.gitignore` so the
+     parent worktree does not see nested task worktrees as untracked embedded
+     repositories.
    - Branch: use a repository-specific convention when one exists; otherwise
      use `<type>/<short-slug>-<YYYYMMDD>`. Select `feature`, `fix`, `hotfix`,
      `refactor`, `docs`, `test`, or `chore` from the task's nature. Platform
@@ -401,6 +404,15 @@ inside that worktree.
    must exactly equal
    `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>`. `Resolve-Path` must point
    beneath that same worktree (use the platform equivalent outside PowerShell).
+   Also verify from the original parent worktree that the ignored nested
+   worktree path did not create a parent-branch diff or untracked entry:
+
+   ```bash
+   git -C "<repo-root>" status --short -- ".trellis/worktrees/<MM-DD-task-slug>"
+   ```
+
+   This command must produce no output. Stop and fix the ignore rules before
+   continuing if the parent worktree reports the nested worktree path.
    Then run:
 
    ```bash
