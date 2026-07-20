@@ -177,6 +177,7 @@ Create new children with `task.py create "<title>" --slug <name> --parent <paren
 No active task. First classify the current turn and ask for task-creation consent before creating any Trellis task.
 Simple conversation / small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
 Complex task: ask the user if you can create a Trellis task and enter the planning phase. If the user says no, explain, clarify scope, or suggest a smaller split.
+After consent, create the rule-compliant task branch and `.trellis/worktrees/<MM-DD-task-slug>` worktree, continue the session there, and only then run `task.py create`.
 [/workflow-state:no_task]
 
 ### Phase 1: Plan
@@ -311,21 +312,162 @@ Goal: classify the request, get task-creation consent when a task is needed, and
 
 #### 1.0 Create task `[required · once]`
 
-Create the task directory only after task-creation consent. The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
+Create the task only after task-creation consent. **Never run `task.py create`
+directly in the current shared worktree.** Every new Trellis task must first get
+its own rule-compliant branch and worktree, and task creation must run from
+inside that worktree.
 
-```bash
-python ./.trellis/scripts/task.py create "<task title>" --slug <name>
-```
+1. Inspect and preserve the current workspace, then confirm the PR target and
+   branch start point according to `.agents/skills/git-pr-rules/SKILL.md`:
 
-`--slug` is the human-readable name only. Do **not** include the `MM-DD-` date prefix; `task.py create` adds that prefix automatically.
+   ```bash
+   git status --short --branch
+   git remote -v
+   git worktree list --porcelain
+   ```
 
-For task trees, create the parent task first and then create each child with `--parent <parent-dir>`. Do not start the parent just because children exist; start the child that owns the next independently verifiable deliverable.
+   Identify any existing changes without stashing, discarding, moving, or
+   including them in the new task. Determine the actual PR target before
+   choosing the start point; do not assume `main`, `master`, or `dev`. If the
+   start point depends on a remote ref, fetch that remote and verify
+   `refs/remotes/<base-remote>/<pr-base>` exists before continuing.
 
-After this command succeeds, the per-turn breadcrumb auto-switches to `[workflow-state:planning]`, telling the AI to stay in planning.
+2. Choose the final names before creating anything:
 
-Run only `create` here — do not also run `start`. `start` flips status to `in_progress`, which switches the breadcrumb to the implementation phase before planning artifacts are reviewed. Save `start` for step 1.4.
+   - Developer name: capture the current parent worktree identity before creating
+     the new worktree, for example with
+     `python ./.trellis/scripts/get_developer.py`. Treat empty output as a setup
+     error and run `init_developer.py` in the parent worktree before continuing.
+   - Task slug: a human-readable `<task-slug>` without the date prefix.
+   - Task directory name:
+     `<MM-DD-task-slug>` (the exact name `task.py create` will generate).
+   - Worktree path:
+     `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>`.
+     This directory is intentionally ignored by `.trellis/.gitignore` so the
+     parent worktree does not see nested task worktrees as untracked embedded
+     repositories.
+   - Branch: use a repository-specific convention when one exists; otherwise
+     use `<type>/<short-slug>-<YYYYMMDD>`. Select `feature`, `fix`, `hotfix`,
+     `refactor`, `docs`, `test`, or `chore` from the task's nature. Platform
+     defaults such as `agent/<description>` must not override the project rule.
 
-Skip when `python ./.trellis/scripts/task.py current --source` already points to a task.
+3. Before creation, prove that both targets are free. The branch checks below
+   must produce no matching local or fetched remote branch; the filesystem path
+   must not exist; and `git worktree list --porcelain` must not register the
+   target path:
+
+   ```bash
+   git branch --list "<task-branch>"
+   git branch --remotes --list "*/<task-branch>"
+   git worktree list --porcelain
+   python -c "from pathlib import Path; print(Path(r'<repo-root>/.trellis/worktrees/<MM-DD-task-slug>').exists())"
+   ```
+
+   The Python path check must return `False` on every platform, including
+   Windows PowerShell/CMD and POSIX shells. Stop on any conflict; do not reuse, delete, or overwrite
+   an existing branch, directory, or registered worktree.
+
+4. Create the branch and worktree together from the confirmed start point:
+
+   ```bash
+   git worktree add -b "<task-branch>" "<repo-root>/.trellis/worktrees/<MM-DD-task-slug>" "<start-point>"
+   ```
+
+5. Switch the session's working directory to the new worktree before doing
+   anything task-specific. A shell-local `cd` that does not persist to later
+   tool calls is insufficient: set subsequent tool calls' working directory to
+   the new worktree, or reopen/continue the AI session rooted there.
+
+6. Reinitialize the developer identity inside the new worktree before task
+   creation. `.trellis/.developer` is intentionally local-only and is not copied
+   by `git worktree add`; skipping this step makes `task.py create` fail unless
+   every create command passes `--assignee` and accepts the creator fallback. Use
+   the developer name captured from the parent worktree:
+
+   ```bash
+   python ./.trellis/scripts/init_developer.py "<developer-name>"
+   python ./.trellis/scripts/get_developer.py
+   ```
+
+   The `get_developer.py` output must exactly equal `<developer-name>` before
+   continuing.
+
+7. From the new worktree, preflight the branch and repository root, then create
+   the task:
+
+   ```bash
+   git branch --show-current
+   git rev-parse --show-toplevel
+   python ./.trellis/scripts/task.py create "<task title>" --slug <task-slug>
+   python ./.trellis/scripts/task.py set-branch <MM-DD-task-slug> "<task-branch>"
+   python ./.trellis/scripts/task.py set-base-branch <MM-DD-task-slug> "<pr-base>"
+   ```
+
+   The two preflight outputs must exactly equal `<task-branch>` and
+   `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>` before `task.py create`
+   runs, and `task.py create` must run only after the new worktree has its own
+   `.trellis/.developer`. Because the current CLI initializes `base_branch`
+   from the checked-out branch and leaves `branch` unset, the two metadata
+   commands are required:
+   `<pr-base>` is the confirmed PR target branch name, not a remote-qualified
+   start-point ref.
+
+8. After task creation and metadata updates, verify all three locations again:
+
+   ```bash
+   git branch --show-current
+   git rev-parse --show-toplevel
+   python -c "from pathlib import Path; print(Path(r'.trellis/tasks/<MM-DD-task-slug>/task.json').resolve())"
+   ```
+
+   The branch output must exactly equal `<task-branch>`, and the repository root
+   must exactly equal
+   `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>`. The Python resolved path
+   must point beneath that same worktree on every platform, including Windows.
+   Also verify from the original parent worktree that the ignored nested
+   worktree path did not create a parent-branch diff or untracked entry:
+
+   ```bash
+   git -C "<repo-root>" status --short -- ".trellis/worktrees/<MM-DD-task-slug>"
+   ```
+
+   This command must produce no output. Stop and fix the ignore rules before
+   continuing if the parent worktree reports the nested worktree path.
+   Then run:
+
+   ```bash
+   python ./.trellis/scripts/task.py current --source
+   python ./.trellis/scripts/task.py validate <MM-DD-task-slug>
+   ```
+
+   The task command sets status to `planning`, writes `task.json`, creates the
+   default `prd.md`, and auto-targets the new task when session identity is
+   available. After it succeeds, the per-turn breadcrumb auto-switches to
+   `[workflow-state:planning]`, telling the AI to stay in planning.
+
+For task trees, create the parent first and then create each child with
+`--parent <parent-dir>`. Apply the complete branch/worktree sequence above to
+each new parent or child. `git worktree add` materializes only the chosen Git
+start-point; it does not copy uncommitted files from the parent's worktree.
+Therefore, when a child needs an independent branch/worktree, first make the
+parent task metadata available in the child's start-point by committing the
+parent task directory on the parent task branch. Then use that parent-branch
+commit as the child's start-point and run `task.py create ... --parent
+<parent-dir>` inside the child worktree. After creation, verify the link from
+both sides: the child `task.json` must contain the parent, and the parent
+`task.json` in the child worktree must list the new child. Do not copy task
+metadata between worktrees or create the child without `--parent`; either action
+breaks the bidirectional parent/child link. Do not start the parent just because
+children exist; start the child that owns the next independently verifiable
+deliverable.
+
+Run only `create` here — do not also run `start`. `start` flips status to
+`in_progress`, which switches the breadcrumb to the implementation phase before
+planning artifacts are reviewed. Save `start` for step 1.4.
+
+Skip when `python ./.trellis/scripts/task.py current --source` already points to
+a task, except when the reviewed plan explicitly requires creating another
+parent or child task.
 
 #### 1.1 Requirement exploration `[required · repeatable]`
 

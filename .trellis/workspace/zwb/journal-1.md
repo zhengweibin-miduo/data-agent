@@ -639,3 +639,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Trellis 任务 worktree 与分支规范
+
+**Date**: 2026-07-20
+**Task**: Trellis 任务 worktree 与分支规范
+**Branch**: `chore/trellis-worktree-workflow-20260720`
+
+### Summary
+
+在 Phase 1.0 中强制每个新 Trellis 任务先创建符合 PR 规则的独立分支和 worktree，再进入 worktree 创建任务，并补充分支、基准、路径及父子任务校验。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b15f2c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
