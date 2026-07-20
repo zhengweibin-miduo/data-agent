@@ -42,6 +42,8 @@ def content_object_ids(content: MemoryContent) -> list[str]:
             content.metric.fact_table_id,
             *content.metric.relevant_column_ids,
         ]
+    elif content.kind == MemoryKind.USER_MEMORY:
+        return list(content.evidence_message_uids)
     return []
 
 
@@ -79,13 +81,18 @@ def build_memory_text(content: MemoryContent) -> str:
             f"类型：{content.kind.value}；问题标识：{answer.question_id}；"
             f"用户确认回答：{answer.answer}"
         )
-    else:
+    elif content.kind == MemoryKind.METRIC_DEFINITION:
         metric = content.metric
         text = (
             f"类型：{content.kind.value}；指标：{metric.name}；"
             f"定义：{metric.definition}；事实表：{metric.fact_table_id}；"
             f"相关列：{'、'.join(sorted(metric.relevant_column_ids))}；"
             f"别名：{'、'.join(sorted(metric.aliases))}"
+        )
+    else:
+        text = (
+            f"类型：{content.category.value}；键：{content.key}；"
+            f"用户确认事实：{content.value}"
         )
     return text[:_MAX_MEMORY_TEXT_LENGTH]
 

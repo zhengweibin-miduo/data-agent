@@ -6,9 +6,12 @@ from arq.connections import ArqRedis
 from loguru import logger
 from redis.exceptions import RedisError
 
+from data_agent.conversation.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.memory.indexing.dispatcher import MemoryIndexDispatcher
+from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
+from data_agent.infrastructure.mysql import MySQLDatabase
 
 
 async def dispatch_pending(ctx: dict[Any, Any]) -> None:
@@ -53,3 +56,19 @@ async def dispatch_memory_index_outbox(ctx: dict[Any, Any]) -> None:
     """周期性同步可重建 ES/Qdrant 记忆投影。"""
     del ctx
     await MemoryIndexDispatcher().dispatch()
+
+
+async def extract_conversation_memory(ctx: dict[Any, Any]) -> None:
+    """周期性提炼完成对话轮次的用户长期记忆。"""
+    extractor = cast(
+        ConversationMemoryExtractor,
+        ctx["conversation_extractor"],
+    )
+    await extractor.dispatch()
+
+
+async def purge_user_memories(ctx: dict[Any, Any]) -> None:
+    """物理清理派生索引已确认删除的用户记忆。"""
+    del ctx
+    async with MySQLDatabase.session() as session:
+        await MemoryRepository(session).purge_ready_user_memories()

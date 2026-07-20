@@ -133,6 +133,10 @@ support, and the installed `data_agent` package is the runtime import target.
   configured maximum is not evidence that trimming works.
 - For persistence/memory work, prove scoped cleanup, rollback, exact compatible
   reuse, soft-delete exclusion, update events, and outbox replay.
+- For conversation work, prove text-only contract rejection, stable keyset
+  history, tenant isolation, one active turn, turn/outbox idempotency, exact
+  quote evidence, ambiguous-confirmation rejection, summary cursor
+  monotonicity, and delete-before-purge ordering.
 - Verify pytest collection uses `tests/` and the installed `data_agent`
   package, not a repository-root fallback import.
 - Verify every public runtime and test object has a meaningful Docstring; do

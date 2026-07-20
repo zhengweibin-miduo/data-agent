@@ -10,8 +10,10 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    IsNullCondition,
     MatchAny,
     MatchValue,
+    PayloadField,
     PayloadSchemaType,
     PointIdsList,
     PointStruct,
@@ -30,6 +32,7 @@ def _qdrant_point_id(memory_uid: str) -> str:
 def _filter_conditions(
     source: str,
     kinds: set[MemoryKind] | None,
+    user_id: str | None,
 ) -> list[Condition]:
     """构造两个索引共享的严格作用域条件。"""
     conditions: list[Condition] = [
@@ -44,6 +47,11 @@ def _filter_conditions(
             match=MatchValue(value=app_config.memory.projection_version),
         ),
     ]
+    conditions.append(
+        IsNullCondition(is_null=PayloadField(key="user_id"))
+        if user_id is None
+        else FieldCondition(key="user_id", match=MatchValue(value=user_id))
+    )
     if kinds:
         conditions.append(
             FieldCondition(
@@ -74,6 +82,7 @@ class MemoryQdrantIndex:
             )
         for field in (
             "source",
+            "user_id",
             "kind",
             "status",
             "content_version",
@@ -126,6 +135,8 @@ class MemoryQdrantIndex:
         source: str,
         kinds: set[MemoryKind] | None,
         limit: int,
+        *,
+        user_id: str | None = None,
     ) -> list[str]:
         """在严格作用域过滤后执行向量检索。"""
         if len(vector) != app_config.qdrant.vector_size:
@@ -133,7 +144,7 @@ class MemoryQdrantIndex:
         result = await self._client.query_points(
             collection_name=self._collection,
             query=vector,
-            query_filter=Filter(must=_filter_conditions(source, kinds)),
+            query_filter=Filter(must=_filter_conditions(source, kinds, user_id)),
             limit=limit,
             with_payload=["memory_uid"],
         )

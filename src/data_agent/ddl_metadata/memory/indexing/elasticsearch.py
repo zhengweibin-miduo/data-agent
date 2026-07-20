@@ -39,6 +39,9 @@ class MemoryElasticsearchIndex:
                         for field in (
                             "memory_uid",
                             "source",
+                            "user_id",
+                            "created_conversation_uid",
+                            "created_message_uid",
                             "kind",
                             "scope_key",
                             "schema_fingerprint",
@@ -88,6 +91,8 @@ class MemoryElasticsearchIndex:
         source: str,
         kinds: set[MemoryKind] | None,
         limit: int,
+        *,
+        user_id: str | None = None,
     ) -> list[str]:
         """在严格作用域过滤后执行 BM25 检索。"""
         filters: list[dict[str, object]] = [
@@ -96,6 +101,11 @@ class MemoryElasticsearchIndex:
             {"term": {"content_version": app_config.memory.content_version}},
             {"term": {"projection_version": app_config.memory.projection_version}},
         ]
+        filters.append(
+            {"bool": {"must_not": {"exists": {"field": "user_id"}}}}
+            if user_id is None
+            else {"term": {"user_id": user_id}}
+        )
         if kinds:
             filters.append({"terms": {"kind": [kind.value for kind in kinds]}})
         response = await self._client.search(

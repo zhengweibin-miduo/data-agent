@@ -25,6 +25,13 @@ src/data_agent/
 │   ├── qdrant.py
 │   ├── redis.py
 │   └── tei_embeddings.py
+├── conversation/
+│   ├── api.py
+│   ├── extraction.py
+│   ├── models.py
+│   ├── mysql_tables.py
+│   ├── repository.py
+│   └── service.py
 └── ddl_metadata/
     ├── api/
     │   ├── job_events.py
@@ -93,6 +100,10 @@ under `docs/docker/`.
 ## Ownership
 
 - `data_agent.application` is the FastAPI composition root and lifecycle owner.
+- `data_agent.conversation` owns permanent text conversations, turn
+  idempotency, bounded context, and the leased conversation-memory extraction
+  outbox. It reuses the authoritative memory package instead of defining a
+  second memory stack.
 - `data_agent.infrastructure` owns one explicit external-resource lifecycle per
   module. It does not own feature orchestration.
 - `ddl_metadata.api` owns HTTP request/response mapping. Job and memory routes

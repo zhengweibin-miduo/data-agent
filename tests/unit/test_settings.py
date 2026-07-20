@@ -78,6 +78,16 @@ def test_default_app_config_loads_expected_values() -> None:
         "127.0.0.1",
     )
     check_equal(
+        "test_default_app_config_loads_expected_values 对话消息上限",
+        app_config.conversation.max_message_chars,
+        32768,
+    )
+    check_equal(
+        "test_default_app_config_loads_expected_values 记忆投影版本",
+        app_config.memory.projection_version,
+        "v2",
+    )
+    check_equal(
         "test_default_app_config_loads_expected_values SSE 心跳",
         app_config.api.sse_heartbeat_seconds,
         15,

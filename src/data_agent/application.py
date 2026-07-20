@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from redis.exceptions import RedisError
 
+from data_agent.conversation.api import router as conversation_router
+from data_agent.conversation.service import ConversationService
 from data_agent.ddl_metadata.api.router import router as ddl_metadata_router
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
@@ -34,6 +36,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     jobs = DDLJobStore(redis)
     app.state.jobs = jobs
     app.state.memories = MemoryService(jobs)
+    app.state.conversations = ConversationService()
     logger.bind(
         component="application.api",
         event_name="application.lifecycle.started",
@@ -118,4 +121,5 @@ def create_app() -> FastAPI:
     app.add_exception_handler(DDLMetadataError, _handle_business_error)
     app.add_exception_handler(RedisError, _handle_redis_error)
     app.include_router(ddl_metadata_router)
+    app.include_router(conversation_router)
     return app

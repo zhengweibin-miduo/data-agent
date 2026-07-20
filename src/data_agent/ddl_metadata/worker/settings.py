@@ -10,6 +10,8 @@ from data_agent.ddl_metadata.worker.maintenance import (
     dispatch_memory_index_outbox,
     dispatch_pending,
     expire_waiting,
+    extract_conversation_memory,
+    purge_user_memories,
 )
 from data_agent.settings import app_config
 
@@ -40,6 +42,15 @@ class WorkerSettings:
             dispatch_memory_index_outbox,
             second={2, 12, 22, 32, 42, 52},
             run_at_startup=True,
+        ),
+        cron(
+            extract_conversation_memory,
+            second={4, 14, 24, 34, 44, 54},
+            run_at_startup=True,
+        ),
+        cron(
+            purge_user_memories,
+            second={7, 17, 27, 37, 47, 57},
         ),
     ]
     on_startup = startup

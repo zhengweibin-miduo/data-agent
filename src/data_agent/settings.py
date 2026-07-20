@@ -253,6 +253,38 @@ class MemorySettings(SettingsModel):
     )
 
 
+class ConversationSettings(SettingsModel):
+    """永久文本会话与异步记忆提炼配置。"""
+
+    max_message_chars: int = Field(
+        gt=0,
+        le=65535,
+        description="单条用户或助手文本消息允许的最大字符数。",
+    )
+    context_message_limit: int = Field(
+        gt=0,
+        le=100,
+        description="组装模型上下文时最多读取的最近消息数量。",
+    )
+    context_max_chars: int = Field(
+        gt=0,
+        description="组装模型上下文时最近消息允许占用的最大字符数。",
+    )
+    summary_max_chars: int = Field(
+        gt=0,
+        description="会话摘要允许保存和返回的最大字符数。",
+    )
+    extraction_batch_size: int = Field(
+        gt=0,
+        le=100,
+        description="每轮异步提炼领取的完成对话轮次数量。",
+    )
+    extraction_lease_seconds: int = Field(
+        gt=0,
+        description="对话记忆提炼任务的领取租约秒数。",
+    )
+
+
 class AppSettings(SettingsModel):
     """从 YAML 加载的应用根配置。"""
 
@@ -267,6 +299,9 @@ class AppSettings(SettingsModel):
     redis: RedisSettings = Field(description="Redis、任务队列和恢复配置。")
     llm: LLMSettings = Field(description="OpenAI 兼容模型调用配置。")
     memory: MemorySettings = Field(description="长期语义记忆配置。")
+    conversation: ConversationSettings = Field(
+        description="永久文本会话与异步长期记忆提炼配置。"
+    )
 
     @model_validator(mode="after")
     def validate_source_lease_window(self) -> "AppSettings":

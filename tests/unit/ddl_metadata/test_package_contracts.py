@@ -119,6 +119,8 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             "cron:expire_waiting",
             "cron:cleanup_checkpoints",
             "cron:dispatch_memory_index_outbox",
+            "cron:extract_conversation_memory",
+            "cron:purge_user_memories",
         ],
     )
     check_equal(
@@ -129,6 +131,8 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             0,
             {5, 15, 25, 35, 45, 55},
             {2, 12, 22, 32, 42, 52},
+            {4, 14, 24, 34, 44, 54},
+            {7, 17, 27, 37, 47, 57},
         ],
     )
     check_equal("worker startup", WorkerSettings.__dict__["on_startup"], startup)

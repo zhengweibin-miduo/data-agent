@@ -329,6 +329,34 @@ CREATE TABLE example_table
 ) COMMENT = '示例表';
 ```
 
+## Scenario: Permanent Conversations and User Memory
+
+Conversation history is authoritative in schema-qualified MySQL tables
+`agent_conversation`, `agent_message`, and `conversation_memory_outbox`.
+Messages are text-only and keyset-paged by their auto-increment `id`; Redis
+checkpoints never store conversation history. Starting a turn persists the
+user message and acquires the conversation's single `active_turn_uid`.
+Completing it commits the assistant message, extraction outbox row, and gate
+release in one transaction.
+
+Conversation-derived `agent_memory` rows use
+`source=data_agent_conversation`, a non-null `user_id`, nullable
+`created_job_id`, and explicit conversation/message provenance. DDL memory
+rows retain `user_id IS NULL`. Every user-memory read, mutation, exact lookup,
+hybrid-search authority check, and supersede lookup includes the same
+`user_id` predicate. User deletion tombstones memory and leaves DELETE desired
+states until both projection targets acknowledge them; only then may the
+worker physically remove memory, links, and events. Previously soft-deleted
+user memories also enter purge, and user mutations lock the authority row so
+they cannot resurrect data after user deletion.
+
+`docs/docker/mysql/data_agent.sql` owns fresh bootstrap, while
+`upgrade_mem0_long_term_memory.sql` is the explicit one-time non-destructive
+upgrade for an initialized database. The projection version must be bumped and
+the project-owned ES index and Qdrant collection explicitly recreated after
+the MySQL upgrade. Rebuild advances each scanned ACTIVE authority row to the
+configured projection version while enqueueing both targets.
+
 ## Configuration and Naming
 
 - The YAML key is `mysql.url` in `conf/app_config.yaml`.

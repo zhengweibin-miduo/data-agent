@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend scope, pre-development routing, and cross-layer ownership index."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Feature-first package boundaries and dependency direction for the new conversation domain."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLAlchemy Core, caller-owned transactions, MySQL bootstrap, memory authority, and outbox contracts."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Existing LLM, Redis, TEI, Elasticsearch, Qdrant, worker lifecycle, and failure contracts."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Safe HTTP errors, rollback, retry, and cleanup behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Typed contracts, Chinese docstrings, offline LLM fakes, integration markers, and required commands."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Tenant and provenance fields must remain consistent across HTTP, MySQL, outboxes, indexes, and tests."}
+{"file": ".trellis/tasks/07-20-mem0-long-term-memory/research/conversation-memory-extension-points.md", "reason": "Repository evidence, reuse points, smallest design, affected files, migration caveats, and validation risks."}
+{"file": ".trellis/tasks/archive/2026-07/07-19-mem0-memory-architecture/research/mem0-open-source-architecture.md", "reason": "Pinned Mem0 open-source behavior and the project's existing domain adaptation decisions."}

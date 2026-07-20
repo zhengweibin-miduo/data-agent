@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend quality routing and full cross-layer review scope."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check tenant predicates, transaction atomicity, schema/bootstrap parity, outbox replay, and deletion ordering."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Check worker lifecycle, LLM extraction, ES/Qdrant tenant filters, degradation, and rebuild behavior."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check safe error envelopes, retry classification, rollback, and cleanup."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Authoritative validation commands, test conventions, docstrings, and offline/live test boundaries."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Audit user_id, message cursor, evidence IDs, and projection fields end to end."}
+{"file": ".trellis/tasks/07-20-mem0-long-term-memory/research/conversation-memory-extension-points.md", "reason": "Verify implementation against identified security, migration, concurrency, deletion, and live-LLM risks."}

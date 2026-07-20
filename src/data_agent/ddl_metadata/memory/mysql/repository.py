@@ -16,6 +16,7 @@ from data_agent.ddl_metadata.memory.mysql.tables import (
     agent_memory,
     agent_memory_event,
     agent_memory_link,
+    memory_index_outbox,
 )
 from data_agent.ddl_metadata.models.memory import (
     MEMORY_CONTENT_ADAPTER,
@@ -61,6 +62,17 @@ def _parse_detail(
     return MemoryDetail(
         uid=str(row["uid"]),
         source=str(row["source"]),
+        user_id=(str(row["user_id"]) if row["user_id"] is not None else None),
+        created_conversation_uid=(
+            str(row["created_conversation_uid"])
+            if row["created_conversation_uid"] is not None
+            else None
+        ),
+        created_message_uid=(
+            str(row["created_message_uid"])
+            if row["created_message_uid"] is not None
+            else None
+        ),
         kind=MemoryKind(str(row["kind"])),
         scope_key=str(row["scope_key"]),
         schema_fingerprint=str(row["schema_fingerprint"]),
@@ -71,10 +83,15 @@ def _parse_detail(
         status=MemoryStatus(str(row["status"])),
         content_version=str(row["content_version"]),
         projection_version=str(row["projection_version"]),
-        created_job_id=str(row["created_job_id"]),
+        created_job_id=(
+            str(row["created_job_id"])
+            if row["created_job_id"] is not None
+            else None
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         deleted_at=row["deleted_at"],
+        purge_requested_at=row["purge_requested_at"],
         links=links or [],
     )
 
@@ -95,7 +112,17 @@ class MemoryRepository:
         existing_rows = (
             await self._session.execute(
                 select(agent_memory.c.uid, agent_memory.c.status).where(
-                    agent_memory.c.uid.in_(candidate_uids)
+                    agent_memory.c.uid.in_(candidate_uids),
+                    or_(
+                        agent_memory.c.user_id.is_(None),
+                        agent_memory.c.user_id.in_(
+                            {
+                                candidate.user_id
+                                for candidate in candidates
+                                if candidate.user_id is not None
+                            }
+                        ),
+                    ),
                 )
             )
         ).all()
@@ -114,17 +141,21 @@ class MemoryRepository:
             if candidate.kind not in {
                 MemoryKind.SEMANTIC_DECISION,
                 MemoryKind.METRIC_DEFINITION,
+                MemoryKind.USER_MEMORY,
             }:
                 continue
             older = (
                 await self._session.scalars(
                     select(agent_memory.c.uid).where(
                         agent_memory.c.source == candidate.source,
+                        agent_memory.c.user_id.is_(candidate.user_id)
+                        if candidate.user_id is None
+                        else agent_memory.c.user_id == candidate.user_id,
                         agent_memory.c.kind == candidate.kind.value,
                         agent_memory.c.scope_key == candidate.scope_key,
                         agent_memory.c.status == MemoryStatus.ACTIVE.value,
                         agent_memory.c.uid != candidate.uid,
-                    )
+                    ).with_for_update()
                 )
             ).all()
             candidate.supersedes_uids = sorted(
@@ -137,6 +168,7 @@ class MemoryRepository:
                     {
                         "uid": candidate.uid,
                         "source": candidate.source,
+                        "user_id": candidate.user_id,
                         "kind": candidate.kind.value,
                         "scope_key": candidate.scope_key,
                         "schema_fingerprint": candidate.schema_fingerprint,
@@ -148,7 +180,12 @@ class MemoryRepository:
                         "content_version": candidate.content_version,
                         "projection_version": candidate.projection_version,
                         "created_job_id": candidate.created_job_id,
+                        "created_conversation_uid": (
+                            candidate.created_conversation_uid
+                        ),
+                        "created_message_uid": candidate.created_message_uid,
                         "deleted_at": None,
+                        "purge_requested_at": None,
                     }
                     for candidate in accepted_candidates
                 ]
@@ -240,6 +277,17 @@ class MemoryRepository:
                 for candidate in accepted_candidates
                 for old_uid in candidate.supersedes_uids
             }
+            superseded_filters = [
+                and_(
+                    agent_memory.c.uid == uid,
+                    (
+                        agent_memory.c.user_id.is_(None)
+                        if candidate.user_id is None
+                        else agent_memory.c.user_id == candidate.user_id
+                    ),
+                )
+                for uid, candidate in replacement_by_uid.items()
+            ]
             superseded_rows = (
                 await self._session.execute(
                     select(
@@ -247,7 +295,7 @@ class MemoryRepository:
                         agent_memory.c.uid,
                         agent_memory.c.content,
                     ).where(
-                        agent_memory.c.uid.in_(superseded),
+                        or_(*superseded_filters),
                         agent_memory.c.status == MemoryStatus.ACTIVE.value,
                     )
                 )
@@ -272,7 +320,7 @@ class MemoryRepository:
             await self._session.execute(
                 update(agent_memory)
                 .where(
-                    agent_memory.c.uid.in_(superseded),
+                    or_(*superseded_filters),
                     agent_memory.c.status == MemoryStatus.ACTIVE.value,
                 )
                 .values(status=MemoryStatus.DELETED.value, deleted_at=func.now())
@@ -314,6 +362,7 @@ class MemoryRepository:
                 select(agent_memory)
                 .where(
                     agent_memory.c.source == source,
+                    agent_memory.c.user_id.is_(None),
                     agent_memory.c.kind == kind.value,
                     agent_memory.c.status == MemoryStatus.ACTIVE.value,
                     agent_memory.c.content_version == content_version,
@@ -354,6 +403,7 @@ class MemoryRepository:
                 )
                 .where(
                     agent_memory.c.source == source,
+                    agent_memory.c.user_id.is_(None),
                     agent_memory.c.scope_key.in_(scope_keys),
                     agent_memory.c.status == MemoryStatus.ACTIVE.value,
                     agent_memory_event.c.event_type == MemoryEventType.UPDATE.value,
@@ -402,6 +452,7 @@ class MemoryRepository:
                 select(agent_memory)
                 .where(
                     agent_memory.c.source == source,
+                    agent_memory.c.user_id.is_(None),
                     agent_memory.c.schema_fingerprint == schema_fingerprint,
                     agent_memory.c.kind.in_([kind.value for kind in kinds]),
                     agent_memory.c.status == MemoryStatus.ACTIVE.value,
@@ -442,14 +493,26 @@ class MemoryRepository:
             result[int(memory_id)].add(str(uid))
         return result
 
-    async def get_by_uid(self, uid: str) -> StoredMemory | None:
+    async def get_by_uid(
+        self,
+        uid: str,
+        *,
+        user_id: str | None = None,
+        for_update: bool = False,
+    ) -> StoredMemory | None:
         """读取一条权威记忆及有界关联。"""
-        row = (
+        statement = select(agent_memory).where(
+            agent_memory.c.uid == uid,
             (
-                await self._session.execute(
-                    select(agent_memory).where(agent_memory.c.uid == uid)
-                )
-            )
+                agent_memory.c.user_id.is_(None)
+                if user_id is None
+                else agent_memory.c.user_id == user_id
+            ),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = (
+            (await self._session.execute(statement))
             .mappings()
             .one_or_none()
         )
@@ -478,7 +541,18 @@ class MemoryRepository:
                     or_(
                         agent_memory_link.c.memory_id == identifier,
                         agent_memory_link.c.linked_memory_id == identifier,
-                    )
+                    ),
+                    (
+                        and_(
+                            source_memory.c.user_id.is_(None),
+                            linked_memory.c.user_id.is_(None),
+                        )
+                        if user_id is None
+                        else and_(
+                            source_memory.c.user_id == user_id,
+                            linked_memory.c.user_id == user_id,
+                        )
+                    ),
                 )
                 .limit(500)
             )
@@ -493,7 +567,12 @@ class MemoryRepository:
         ]
         return StoredMemory(identifier, _parse_detail(row, links))
 
-    async def get_many_active(self, uids: list[str]) -> list[StoredMemory]:
+    async def get_many_active(
+        self,
+        uids: list[str],
+        *,
+        user_id: str | None = None,
+    ) -> list[StoredMemory]:
         """批量回查活动权威内容，保持输入 UID 的稳定顺序。"""
         if not uids:
             return []
@@ -501,6 +580,11 @@ class MemoryRepository:
             await self._session.execute(
                 select(agent_memory).where(
                     agent_memory.c.uid.in_(uids),
+                    (
+                        agent_memory.c.user_id.is_(None)
+                        if user_id is None
+                        else agent_memory.c.user_id == user_id
+                    ),
                     agent_memory.c.status == MemoryStatus.ACTIVE.value,
                 )
             )
@@ -517,11 +601,17 @@ class MemoryRepository:
         query: str,
         kinds: set[MemoryKind] | None,
         *,
+        user_id: str | None = None,
         limit: int,
     ) -> list[str]:
         """以 scope key 或完整投影文本执行安全的 MySQL 精确基线检索。"""
         filters = [
             agent_memory.c.source == source,
+            (
+                agent_memory.c.user_id.is_(None)
+                if user_id is None
+                else agent_memory.c.user_id == user_id
+            ),
             agent_memory.c.status == MemoryStatus.ACTIVE.value,
             agent_memory.c.content_version == app_config.memory.content_version,
             or_(
@@ -547,11 +637,12 @@ class MemoryRepository:
         self,
         uid: str,
         *,
+        user_id: str | None = None,
         offset: int,
         limit: int,
     ) -> MemoryHistoryPage | None:
         """读取有界只追加历史。"""
-        memory = await self.get_by_uid(uid)
+        memory = await self.get_by_uid(uid, user_id=user_id)
         if memory is None:
             return None
         rows = list(
@@ -621,7 +712,14 @@ class MemoryRepository:
             return
         await self._session.execute(
             update(agent_memory)
-            .where(agent_memory.c.id == memory.id)
+            .where(
+                agent_memory.c.id == memory.id,
+                (
+                    agent_memory.c.user_id.is_(None)
+                    if memory.detail.user_id is None
+                    else agent_memory.c.user_id == memory.detail.user_id
+                ),
+            )
             .values(status=MemoryStatus.DELETED.value, deleted_at=func.now())
         )
         await self._session.execute(
@@ -638,3 +736,99 @@ class MemoryRepository:
             {memory.detail.uid},
             MemoryIndexOperation.DELETE,
         )
+
+    async def tombstone_user(self, user_id: str) -> None:
+        """立即隐藏用户记忆并投递双目标删除期望。"""
+        rows = (
+            await self._session.execute(
+                select(
+                    agent_memory.c.id,
+                    agent_memory.c.uid,
+                    agent_memory.c.content,
+                    agent_memory.c.status,
+                )
+                .where(
+                    agent_memory.c.user_id == user_id,
+                    agent_memory.c.purge_requested_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).mappings()
+        values = list(rows)
+        if not values:
+            return
+        identifiers = {int(row["id"]) for row in values}
+        uids = {str(row["uid"]) for row in values}
+        await self._session.execute(
+            update(agent_memory)
+            .where(
+                agent_memory.c.id.in_(identifiers),
+                agent_memory.c.user_id == user_id,
+            )
+            .values(
+                status=MemoryStatus.DELETED.value,
+                deleted_at=func.now(),
+                purge_requested_at=func.now(),
+            )
+        )
+        active = [
+            row
+            for row in values
+            if str(row["status"]) == MemoryStatus.ACTIVE.value
+        ]
+        if active:
+            await self._session.execute(
+                insert(agent_memory_event).values(
+                    [
+                        {
+                            "memory_id": int(row["id"]),
+                            "event_type": MemoryEventType.DELETE.value,
+                            "old_content": row["content"],
+                            "new_content": None,
+                            "job_id": None,
+                            "actor_type": MemoryActorType.SYSTEM.value,
+                        }
+                        for row in active
+                    ]
+                )
+            )
+        await self._outbox.set_desired_state(uids, MemoryIndexOperation.DELETE)
+
+    async def purge_ready_user_memories(self, limit: int = 100) -> int:
+        """两个派生目标均确认删除后物理清理用户级 tombstone。"""
+        rows = list(
+            (
+                await self._session.execute(
+                    select(agent_memory.c.id, agent_memory.c.uid)
+                    .where(
+                        agent_memory.c.purge_requested_at.is_not(None),
+                        ~agent_memory.c.uid.in_(
+                            select(memory_index_outbox.c.memory_uid)
+                        ),
+                    )
+                    .order_by(agent_memory.c.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            ).mappings()
+        )
+        if not rows:
+            return 0
+        identifiers = {int(row["id"]) for row in rows}
+        await self._session.execute(
+            agent_memory_link.delete().where(
+                or_(
+                    agent_memory_link.c.memory_id.in_(identifiers),
+                    agent_memory_link.c.linked_memory_id.in_(identifiers),
+                )
+            )
+        )
+        await self._session.execute(
+            agent_memory_event.delete().where(
+                agent_memory_event.c.memory_id.in_(identifiers)
+            )
+        )
+        await self._session.execute(
+            agent_memory.delete().where(agent_memory.c.id.in_(identifiers))
+        )
+        return len(rows)
