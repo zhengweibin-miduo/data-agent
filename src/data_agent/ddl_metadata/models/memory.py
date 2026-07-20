@@ -25,6 +25,16 @@ class MemoryKind(StrEnum):
     METRIC_QUESTION = "METRIC_QUESTION"
     USER_ANSWER = "USER_ANSWER"
     METRIC_DEFINITION = "METRIC_DEFINITION"
+    USER_MEMORY = "USER_MEMORY"
+
+
+class UserMemoryCategory(StrEnum):
+    """跨会话用户记忆类别。"""
+
+    PROFILE = "PROFILE"
+    PREFERENCE = "PREFERENCE"
+    CONSTRAINT = "CONSTRAINT"
+    BUSINESS_RULE = "BUSINESS_RULE"
 
 
 class MemoryStatus(StrEnum):
@@ -120,11 +130,25 @@ class MetricDefinitionContent(ContractModel):
     metric: MetricMetadata
 
 
+class UserMemoryContent(ContractModel):
+    """由用户原文证据支持的跨会话长期记忆。"""
+
+    kind: Literal[MemoryKind.USER_MEMORY]
+    trust: Literal["user_confirmed"] = "user_confirmed"
+    category: UserMemoryCategory
+    key: str = Field(min_length=1, max_length=256)
+    value: str = Field(min_length=1, max_length=4096)
+    supporting_user_quote: str = Field(min_length=1, max_length=4096)
+    evidence_message_uids: list[str] = Field(min_length=1, max_length=20)
+    confirmed_assistant_message_uid: str | None = None
+
+
 MemoryContent = Annotated[
     SemanticDecisionContent
     | MetricQuestionContent
     | UserAnswerContent
-    | MetricDefinitionContent,
+    | MetricDefinitionContent
+    | UserMemoryContent,
     Field(discriminator="kind"),
 ]
 MEMORY_CONTENT_ADAPTER = TypeAdapter(MemoryContent)
@@ -135,6 +159,9 @@ class MemoryProjection(ContractModel):
 
     memory_uid: str
     source: str
+    user_id: str | None = None
+    created_conversation_uid: str | None = None
+    created_message_uid: str | None = None
     kind: MemoryKind
     scope_key: str
     schema_fingerprint: str
@@ -154,6 +181,9 @@ class MemoryCandidate(ContractModel):
 
     uid: str
     source: str
+    user_id: str | None = None
+    created_conversation_uid: str | None = None
+    created_message_uid: str | None = None
     kind: MemoryKind
     scope_key: str
     schema_fingerprint: str
@@ -163,7 +193,7 @@ class MemoryCandidate(ContractModel):
     trust: MemoryTrust
     content_version: str
     projection_version: str
-    created_job_id: str
+    created_job_id: str | None = None
     derived_from_uids: list[str] = Field(default_factory=list)
     related_uids: list[str] = Field(default_factory=list)
     supersedes_uids: list[str] = Field(default_factory=list)
@@ -182,6 +212,9 @@ class MemoryDetail(ContractModel):
 
     uid: str
     source: str
+    user_id: str | None = None
+    created_conversation_uid: str | None = None
+    created_message_uid: str | None = None
     kind: MemoryKind
     scope_key: str
     schema_fingerprint: str
@@ -192,10 +225,11 @@ class MemoryDetail(ContractModel):
     status: MemoryStatus
     content_version: str
     projection_version: str
-    created_job_id: str
+    created_job_id: str | None = None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    purge_requested_at: datetime | None = None
     links: list[MemoryLink] = Field(default_factory=list)
 
 

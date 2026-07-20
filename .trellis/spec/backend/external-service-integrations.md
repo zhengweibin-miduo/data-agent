@@ -480,3 +480,22 @@ result = json.loads(await model.ainvoke(prompt))
 structured = model.with_structured_output(ResponseModel, method=method)
 result = await structured.ainvoke(messages)
 ```
+
+## Scenario: Conversation Memory Extraction
+
+Completed text turns are claimed from MySQL with a short lease and committed
+before the structured LLM call starts. Only the oldest pending turn per
+conversation is eligible, and each wave claims at most the configured LLM
+concurrency. The model returns a bounded summary and zero or more typed
+user-memory candidates. Runtime validation requires every
+candidate to reference a message owned by the same user and conversation, an
+exact non-empty user quote, and, for an assistant-originated conclusion, an
+exact assistant quote plus a later user quote that repeats the confirmed
+conclusion. Ambiguous assent, unrelated statements, duplicate result scopes,
+and assistant-only claims are discarded.
+
+Finalization uses a fresh MySQL transaction and the lease token as a
+compare-and-set boundary. It advances the summary cursor monotonically,
+upserts accepted candidates through the existing authoritative memory/event/
+index-outbox path, and removes the extraction row. Failure clears the lease
+and applies bounded exponential backoff without changing persisted messages.

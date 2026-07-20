@@ -42,6 +42,7 @@ class MemorySearchService:
         query: str,
         source: str,
         *,
+        user_id: str | None = None,
         kinds: set[MemoryKind] | None = None,
         limit: int | None = None,
         exact_uids: Sequence[str] = (),
@@ -62,6 +63,7 @@ class MemorySearchService:
                     source,
                     query,
                     kinds,
+                    user_id=user_id,
                     limit=bounded_limit,
                 )
 
@@ -72,6 +74,7 @@ class MemorySearchService:
                 source,
                 kinds,
                 app_config.elasticsearch.top_k,
+                user_id=user_id,
             )
 
         async def vector_search() -> list[str]:
@@ -82,6 +85,7 @@ class MemorySearchService:
                 source,
                 kinds,
                 app_config.qdrant.top_k,
+                user_id=user_id,
             )
 
         results = await asyncio.gather(
@@ -120,7 +124,10 @@ class MemorySearchService:
             )
         async with MySQLDatabase.session() as session:
             repository = MemoryRepository(session)
-            memories = await repository.get_many_active(sorted(candidate_uids))
+            memories = await repository.get_many_active(
+                sorted(candidate_uids),
+                user_id=user_id,
+            )
             pending_targets = await MemoryIndexOutboxRepository(
                 session
             ).pending_targets(candidate_uids)
@@ -153,6 +160,7 @@ class MemorySearchService:
                 continue
             if (
                 detail.source != source
+                or detail.user_id != user_id
                 or detail.status != MemoryStatus.ACTIVE
                 or detail.content_version != app_config.memory.content_version
                 or detail.projection_version != app_config.memory.projection_version

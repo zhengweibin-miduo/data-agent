@@ -156,6 +156,19 @@ class MemoryIndexOutboxRepository:
         return MemoryProjection(
             memory_uid=str(row["uid"]),
             source=str(row["source"]),
+            user_id=(
+                str(row["user_id"]) if row["user_id"] is not None else None
+            ),
+            created_conversation_uid=(
+                str(row["created_conversation_uid"])
+                if row["created_conversation_uid"] is not None
+                else None
+            ),
+            created_message_uid=(
+                str(row["created_message_uid"])
+                if row["created_message_uid"] is not None
+                else None
+            ),
             kind=MemoryKind(str(row["kind"])),
             scope_key=str(row["scope_key"]),
             schema_fingerprint=str(row["schema_fingerprint"]),
@@ -193,4 +206,14 @@ class MemoryIndexOutboxRepository:
 
     async def enqueue_rebuild(self, uids: set[str]) -> None:
         """为活动 UID 重新生成双目标 UPSERT 期望状态。"""
+        if not uids:
+            return
+        await self._session.execute(
+            update(agent_memory)
+            .where(
+                agent_memory.c.uid.in_(uids),
+                agent_memory.c.status == MemoryStatus.ACTIVE.value,
+            )
+            .values(projection_version=app_config.memory.projection_version)
+        )
         await self.set_desired_state(uids, MemoryIndexOperation.UPSERT)

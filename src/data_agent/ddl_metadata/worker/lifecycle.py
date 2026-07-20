@@ -4,6 +4,7 @@ from typing import Any
 
 from loguru import logger
 
+from data_agent.conversation.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.memory.application.context import MemoryContextLoader
 from data_agent.ddl_metadata.memory.application.snapshots import (
@@ -57,10 +58,11 @@ async def startup(ctx: dict[Any, Any]) -> None:
                 error_type=type(error).__name__,
                 retryable=True,
             ).warning("记忆索引初始化延后")
-    LLMClient.initialize()
+    model = LLMClient.initialize()
     await LLMClient.check_structured_output_capability()
     checkpointer = await CheckpointStore.initialize()
     ctx["jobs"] = DDLJobStore(redis)
+    ctx["conversation_extractor"] = ConversationMemoryExtractor(model)
     ctx["graph"] = build_ddl_metadata_graph(
         DDLGraphDependencies(
             model=LLMMetadataGenerator(),

@@ -672,3 +672,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: 修复 PR 22 CI 事件循环冲突
+
+**Date**: 2026-07-20
+**Task**: 修复 PR 22 CI 事件循环冲突
+**Branch**: `fix/pr22-ci-20260720`
+
+### Summary
+
+定位 GitHub Actions pytest 失败为会话仓储集成测试跨 function-scoped event loop 复用 MySQL 异步引擎；在两个测试 finally 中关闭 MySQLDatabase，目标测试、非集成测试、Ruff、Pyright、compileall、配置检查与 diff 检查通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `edb3012` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

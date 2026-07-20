@@ -100,6 +100,13 @@ Configured mappings include:
 FastAPI owns its standard `422` request-validation response. Do not expose
 exception reprs, stack traces, internal Redis fields, raw DDL, or model output.
 
+Conversation APIs reuse the same safe business envelope. Tenant mismatch and
+unknown conversation/memory identifiers both return `404`;
+`conversation_busy`, stale turns, and idempotency content conflicts return
+`409`. Empty, oversized, unknown, attachment, multimodal, or unsupported-role
+payloads remain FastAPI/Pydantic `422` errors. Extraction failures are worker
+retries and never hide or roll back already committed messages.
+
 ## Worker Retry and Terminal Errors
 
 The worker retries only the explicit transient exception set: OpenAI

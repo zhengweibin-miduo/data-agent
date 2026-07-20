@@ -21,6 +21,7 @@ agent_memory = Table(
     Column("id", BigInteger, primary_key=True, autoincrement=True),
     Column("uid", String(64), nullable=False, unique=True),
     Column("source", String(128), nullable=False),
+    Column("user_id", String(128), nullable=True),
     Column("kind", String(32), nullable=False),
     Column("scope_key", String(256), nullable=False),
     Column("schema_fingerprint", String(64), nullable=False),
@@ -31,7 +32,9 @@ agent_memory = Table(
     Column("status", String(16), nullable=False),
     Column("content_version", String(32), nullable=False),
     Column("projection_version", String(32), nullable=False),
-    Column("created_job_id", String(64), nullable=False),
+    Column("created_job_id", String(64), nullable=True),
+    Column("created_conversation_uid", String(64), nullable=True),
+    Column("created_message_uid", String(64), nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     Column(
         "updated_at",
@@ -41,6 +44,7 @@ agent_memory = Table(
         onupdate=func.now(),
     ),
     Column("deleted_at", DateTime, nullable=True),
+    Column("purge_requested_at", DateTime, nullable=True),
     schema=app_config.memory.database,
 )
 agent_memory_event = Table(

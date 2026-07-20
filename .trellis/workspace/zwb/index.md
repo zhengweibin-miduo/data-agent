@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~674 | Active |
+| `journal-1.md` | ~707 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-07-20 | 修复 PR 22 CI 事件循环冲突 | `edb3012` | `fix/pr22-ci-20260720` |
 | 20 | 2026-07-20 | Trellis 任务 worktree 与分支规范 | `1b15f2c` | `chore/trellis-worktree-workflow-20260720` |
 | 19 | 2026-07-19 | 增加 DDL 任务 SSE 流式输出 | `caab5d9` | `feature/langgraph-ddl-metadata-20260717` |
 | 18 | 2026-07-19 | 异步化运行时阻塞边界 | `93842e0` | `feature/langgraph-ddl-metadata-20260717` |

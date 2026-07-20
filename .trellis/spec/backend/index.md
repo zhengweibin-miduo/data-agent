@@ -15,6 +15,7 @@ local Docker services that exist in this repository.
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Current module organization and file layout | Defined |
 | [Database Guidelines](./database-guidelines.md) | Existing async SQLAlchemy scope and known absences | Defined |
+| [Conversation and Long-Term User Memory](./conversation-memory.md) | Permanent text conversations, async extraction, and tenant-scoped recall | Defined |
 | [Error Handling](./error-handling.md) | Lifecycle errors, propagation, and cleanup | Defined |
 | [Quality Guidelines](./quality-guidelines.md) | CI checks, test patterns, and review standards | Defined |
 | [Logging Guidelines](./logging-guidelines.md) | Loguru sinks, formats, context and safety | Defined |
@@ -41,6 +42,8 @@ relational schema.
 - Read [Directory Structure](./directory-structure.md) for every backend change.
 - Read [Database Guidelines](./database-guidelines.md) for MySQL, SQLAlchemy,
   repository, snapshot, or long-term-memory changes.
+- Read [Conversation and Long-Term User Memory](./conversation-memory.md) for
+  conversation, turn, context, extraction, or user-memory recall changes.
 - Read [External Service Integrations](./external-service-integrations.md) for
   TEI, Redis, LangGraph checkpoint, or OpenAI-compatible model changes.
 - Read [Error Handling](./error-handling.md) when changing API status mapping,
