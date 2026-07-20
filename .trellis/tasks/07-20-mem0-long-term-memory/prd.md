@@ -86,7 +86,8 @@ checkpoint 继续只负责活动 DDL 任务恢复，不承担对话历史职责�
 
 - Redis job、LangGraph checkpoint、DDL 工作流和现有 DDL 长期记忆语义保持不变。
 - 新会话表、记忆租户/来源字段和索引字段同时更新 SQLAlchemy Core 定义、
-  新环境 bootstrap SQL 与已初始化 MySQL 的显式升级脚本。
+  新环境 bootstrap SQL；`docs/docker/mysql/` 只保留创建语句，不提供
+  `ALTER TABLE`、数据更新或已初始化环境升级脚本。
 - 记忆投影版本升级后显式重建项目专用 ES index 和 Qdrant collection；
   旧投影不得进入用户记忆召回。
 - 不新增 Mem0 SDK、另一个任务队列、ORM 或数据库迁移框架。

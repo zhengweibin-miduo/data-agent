@@ -8,8 +8,8 @@
   `conversation_memory_outbox` SQLAlchemy Core 表。
 - [ ] 扩展 `agent_memory` 的 `user_id`、对话/消息来源和 purge 标志，
   保持 DDL 行兼容。
-- [ ] 更新 `docs/docker/mysql/data_agent.sql`，并添加已初始化环境的一次性
-  非破坏升级 SQL。
+- [ ] 更新 `docs/docker/mysql/data_agent.sql` 供空环境创建完整结构；
+  该目录不添加字段更新或已初始化环境升级 SQL。
 - [ ] 增加配置模型和默认值，保持 `extra=forbid` 与中文字段说明。
 
 ## 2. 会话与消息主链路

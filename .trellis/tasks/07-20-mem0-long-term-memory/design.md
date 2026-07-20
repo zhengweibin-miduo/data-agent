@@ -119,8 +119,8 @@ INDEX (user_id, kind, status, updated_at)
 - 对话记忆 UID、唯一性和所有读取都包含 `user_id`，不能只在服务返回前过滤。
 - `purge_requested_at` 只用于用户级清除；普通记忆软删除继续保留审计历史。
 
-现有 `created_job_id` 列改为可空。新环境 bootstrap 和一次性升级 SQL 必须
-同时更新；不引入 Alembic。
+现有 `created_job_id` 列在新环境 bootstrap 中定义为可空。
+`docs/docker/mysql/` 只保存创建语句，不提供字段更新脚本；不引入 Alembic。
 
 ## 4. HTTP 与服务契约
 
@@ -297,9 +297,10 @@ conversation:
 ## 11. 迁移与回滚
 
 - 更新 `docs/docker/mysql/data_agent.sql` 供空环境创建完整结构。
-- 增加一次性、显式的 MySQL 升级 SQL，新增会话表及可空记忆字段，不修改
-  Meta 四表。
-- 升级 SQL 执行后校验列、索引、外键和 DDL 记忆行仍完整。
+- `docs/docker/mysql/` 仅保存数据库与表的创建定义，不放置 `ALTER TABLE`、
+  数据更新或已初始化环境升级脚本。
+- 已初始化且结构不兼容的本地环境需按当前 bootstrap 重新配置，并校验列、
+  索引、外键和 DDL 记忆行。
 - bump `memory.projection_version`，recreate 并全量重建项目专用索引。
 - 代码回滚时保留新增 MySQL 数据；旧代码忽略新表和可空列。旧投影版本不能
   混用，回滚后需按旧版本再次重建索引。

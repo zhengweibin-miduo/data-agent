@@ -350,12 +350,14 @@ worker physically remove memory, links, and events. Previously soft-deleted
 user memories also enter purge, and user mutations lock the authority row so
 they cannot resurrect data after user deletion.
 
-`docs/docker/mysql/data_agent.sql` owns fresh bootstrap, while
-`upgrade_mem0_long_term_memory.sql` is the explicit one-time non-destructive
-upgrade for an initialized database. The projection version must be bumped and
-the project-owned ES index and Qdrant collection explicitly recreated after
-the MySQL upgrade. Rebuild advances each scanned ACTIVE authority row to the
-configured projection version while enqueueing both targets.
+`docs/docker/mysql/` owns fresh bootstrap only. Its SQL files contain database
+and table creation definitions, not `ALTER TABLE`, data updates, or upgrade
+scripts for initialized environments. This repository does not provide a
+database migration framework; an existing incompatible local environment must
+be reprovisioned from the current bootstrap before the project-owned ES index
+and Qdrant collection are recreated. Rebuild advances each scanned ACTIVE
+authority row to the configured projection version while enqueueing both
+targets.
 
 ## Configuration and Naming
 

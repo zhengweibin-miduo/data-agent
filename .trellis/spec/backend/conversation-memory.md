@@ -53,9 +53,10 @@ data_agent.agent_memory
 ```
 
 `docs/docker/mysql/data_agent.sql` defines a fresh environment.
-`docs/docker/mysql/upgrade_mem0_long_term_memory.sql` is the explicit
-non-destructive upgrade for an initialized environment. Do not introduce a
-second memory stack, ORM, migration framework, or queue.
+`docs/docker/mysql/` contains bootstrap creation definitions only; it does not
+contain `ALTER TABLE`, data updates, or upgrade scripts for initialized
+environments. Do not introduce a second memory stack, ORM, migration framework,
+or queue.
 
 ### 3. Contracts
 
