@@ -449,13 +449,17 @@ For task trees, create the parent first and then create each child with
 `--parent <parent-dir>`. Apply the complete branch/worktree sequence above to
 each new parent or child. `git worktree add` materializes only the chosen Git
 start-point; it does not copy uncommitted files from the parent's worktree.
-Therefore, before creating a child, verify that the chosen start-point's
-committed tree already contains the parent task directory. If it does not, stop
-and keep planning the parent until that prerequisite can be satisfied through
-the normal reviewed commit flow; do not copy task metadata between worktrees or
-create the child without `--parent`. This preserves the bidirectional
-parent/child link. Do not start the parent just because children exist; start
-the child that owns the next independently verifiable deliverable.
+Therefore, when a child needs an independent branch/worktree, first make the
+parent task metadata available in the child's start-point by committing the
+parent task directory on the parent task branch. Then use that parent-branch
+commit as the child's start-point and run `task.py create ... --parent
+<parent-dir>` inside the child worktree. After creation, verify the link from
+both sides: the child `task.json` must contain the parent, and the parent
+`task.json` in the child worktree must list the new child. Do not copy task
+metadata between worktrees or create the child without `--parent`; either action
+breaks the bidirectional parent/child link. Do not start the parent just because
+children exist; start the child that owns the next independently verifiable
+deliverable.
 
 Run only `create` here — do not also run `start`. `start` flips status to
 `in_progress`, which switches the breadcrumb to the implementation phase before
