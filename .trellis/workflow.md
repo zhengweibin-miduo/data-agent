@@ -334,6 +334,10 @@ inside that worktree.
 
 2. Choose the final names before creating anything:
 
+   - Developer name: capture the current parent worktree identity before creating
+     the new worktree, for example with
+     `python ./.trellis/scripts/get_developer.py`. Treat empty output as a setup
+     error and run `init_developer.py` in the parent worktree before continuing.
    - Task slug: a human-readable `<task-slug>` without the date prefix.
    - Task directory name:
      `<MM-DD-task-slug>` (the exact name `task.py create` will generate).
@@ -374,7 +378,21 @@ inside that worktree.
    tool calls is insufficient: set subsequent tool calls' working directory to
    the new worktree, or reopen/continue the AI session rooted there.
 
-6. From the new worktree, preflight the branch and repository root, then create
+6. Reinitialize the developer identity inside the new worktree before task
+   creation. `.trellis/.developer` is intentionally local-only and is not copied
+   by `git worktree add`; skipping this step makes `task.py create` fail unless
+   every create command passes `--assignee` and accepts the creator fallback. Use
+   the developer name captured from the parent worktree:
+
+   ```bash
+   python ./.trellis/scripts/init_developer.py "<developer-name>"
+   python ./.trellis/scripts/get_developer.py
+   ```
+
+   The `get_developer.py` output must exactly equal `<developer-name>` before
+   continuing.
+
+7. From the new worktree, preflight the branch and repository root, then create
    the task:
 
    ```bash
@@ -387,12 +405,14 @@ inside that worktree.
 
    The two preflight outputs must exactly equal `<task-branch>` and
    `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>` before `task.py create`
-   runs. Because the current CLI initializes `base_branch` from the checked-out
-   branch and leaves `branch` unset, the two metadata commands are required:
+   runs, and `task.py create` must run only after the new worktree has its own
+   `.trellis/.developer`. Because the current CLI initializes `base_branch`
+   from the checked-out branch and leaves `branch` unset, the two metadata
+   commands are required:
    `<pr-base>` is the confirmed PR target branch name, not a remote-qualified
    start-point ref.
 
-7. After task creation and metadata updates, verify all three locations again:
+8. After task creation and metadata updates, verify all three locations again:
 
    ```bash
    git branch --show-current
