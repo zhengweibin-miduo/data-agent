@@ -705,3 +705,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: 初始化记忆投影版本为 v1
+
+**Date**: 2026-07-21
+**Task**: 初始化记忆投影版本为 v1
+**Branch**: `fix/initial-projection-version-20260721`
+
+### Summary
+
+将尚未使用的记忆投影初始版本调整为 v1，同步配置、测试、规范及长期记忆任务规划，并通过离线质量检查。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1c57772` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
