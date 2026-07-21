@@ -48,7 +48,7 @@
 - [ ] 扩展 MemorySearchService：DDL 路径保持原作用域，用户路径强制
   `user_id + USER_MEMORY`。
 - [ ] 保持 RRF、pending outbox 排除、版本/hash/status 和 MySQL 权威回查。
-- [ ] bump `memory.projection_version`，验证显式 recreate + cursor rebuild。
+- [ ] 初始 `memory.projection_version` 使用 `v1`，不执行 recreate 或 cursor rebuild。
 - [ ] 验证单个派生服务失败时仍能安全降级，不跨用户返回候选。
 
 ## 6. 删除
@@ -92,8 +92,8 @@
 
 ## 风险与回滚点
 
-- MySQL 升级脚本和 ES/Qdrant projection rebuild 是主要部署门禁，失败时停止
-  新代码启动，不在半迁移状态接受对话写入。
+- MySQL 升级脚本是主要部署门禁，失败时停止新代码启动，不在半迁移
+  状态接受对话写入。初始 `v1` 投影尚未使用，不设 rebuild 门禁。
 - 任何租户过滤缺失都属于阻断发布问题；API 层事后过滤不能替代 SQL/索引条件。
 - 用户删除先 tombstone、后 purge；不得为了立即物理删除而丢失派生索引重试能力。
 - 不验证真实外部 LLM 时只能声明离线契约通过，不能声明生产端点兼容。
