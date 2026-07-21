@@ -89,7 +89,7 @@ Required YAML keys are:
 
 ```yaml
 memory:
-  projection_version: v2
+  projection_version: v1
 conversation:
   max_message_chars: 32768
   context_message_limit: 20
@@ -153,9 +153,10 @@ the purge worker physically remove memory, links, and events.
 - Memory tests must assert `user_id` in UID/scope/hash authority, superseding
   corrections, soft delete, delete outbox replay, delete-before-purge ordering,
   ES/Qdrant filters, and MySQL post-search authority checks.
-- Migration tests must compare SQLAlchemy MySQL DDL with bootstrap and upgrade
-  SQL, preserve DDL memory rows, set projection version `v2`, and require an
-  explicit ES/Qdrant recreation and rebuild.
+- Configuration tests must assert initial projection version `v1`. Migration
+  tests must compare SQLAlchemy MySQL DDL with bootstrap and upgrade SQL and
+  preserve DDL memory rows. Explicit ES/Qdrant recreation and rebuild is
+  required only after an incompatible change to a published projection.
 - The quality gate is `uv lock --check`, Ruff, Pyright, `compileall`, settings
   load, non-integration pytest, compose rendering, SQLAlchemy MySQL DDL
   compilation, and `git diff --check`. Run live dependency tests only when

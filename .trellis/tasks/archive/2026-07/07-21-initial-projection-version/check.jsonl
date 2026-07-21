@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行仓库规定的最小质量检查"}
+{"file":".trellis/spec/backend/conversation-memory.md","reason":"检查配置与长期记忆规范一致性"}

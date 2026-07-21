@@ -244,8 +244,8 @@ trust                 user_confirmed
   条件回查。
 - pending index outbox、状态、内容/投影版本和 hash 校验保持不变。
 
-投影版本从 `v1` 升级，部署时先更新 MySQL，再显式 recreate 项目专用
-ES/Qdrant 索引并从 MySQL ACTIVE 记忆重建。
+初始投影版本使用 `v1`。该投影尚未使用，本次不执行 recreate 或全量
+rebuild；仅已发布投影发生不兼容结构变更时才递增版本并重建。
 
 ## 8. 删除与清理
 
@@ -301,9 +301,9 @@ conversation:
   数据更新或已初始化环境升级脚本。
 - 已初始化且结构不兼容的本地环境需按当前 bootstrap 重新配置，并校验列、
   索引、外键和 DDL 记忆行。
-- bump `memory.projection_version`，recreate 并全量重建项目专用索引。
-- 代码回滚时保留新增 MySQL 数据；旧代码忽略新表和可空列。旧投影版本不能
-  混用，回滚后需按旧版本再次重建索引。
+- 初始 `memory.projection_version` 保持 `v1`，本次不 recreate 或全量重建。
+- 代码回滚时保留新增 MySQL 数据；旧代码忽略新表和可空列。已发布投影发生
+  不兼容结构变更时，才在版本递增后 recreate 并重建索引。
 
 ## 12. 验证重点
 
