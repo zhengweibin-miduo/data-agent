@@ -42,12 +42,20 @@ class MetadataSnapshotService:
                 *[column.id for table in schema.tables for column in table.columns],
             )
         }
+        valid_fingerprints = set(fingerprints.values()) | {schema.schema_fingerprint}
         async with MySQLDatabase.session() as session:
+            metadata_repository = MetadataRepository(session)
+            expiration_memory_keys = (
+                await metadata_repository.fingerprint_expiration_memory_keys(
+                    schema,
+                    metrics,
+                )
+            )
             memory_repository = MemoryRepository(session)
             await memory_repository.expire_fingerprint_bound(
                 schema.source,
-                set(fingerprints.values()),
-                memory_keys=set(fingerprints),
+                valid_fingerprints,
+                memory_keys=expiration_memory_keys,
             )
-            await MetadataRepository(session).synchronize(schema, metadata, metrics)
+            await metadata_repository.synchronize(schema, metadata, metrics)
             await memory_repository.upsert_candidates(accepted)

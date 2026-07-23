@@ -24,7 +24,12 @@ from data_agent.ddl_metadata.persistence.tables import (
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
 from tests.helpers.checks import check_equal, check_exception, fail_check
-from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
+from tests.helpers.factories import (
+    cleanup_schema,
+    ensure_schema,
+    metric_bundle,
+    semantic_for,
+)
 
 
 async def _force_memory_failure(
@@ -235,6 +240,73 @@ async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> No
             "test_snapshot_failure_keeps_previous_fingerprint_memory_active 检查点 1",
             MemoryStatus(str(status)),
             MemoryStatus.ACTIVE,
+        )
+    finally:
+        await cleanup_schema(original_schema)
+        await cleanup_schema(changed_schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_snapshot_expires_removed_column_and_metric_memories() -> None:
+    """验证提交范围内被删除列和孤儿指标的旧记忆会随指纹失效。"""
+    await ensure_schema()
+    source = f"expire_removed_{uuid4().hex}"
+    original_schema = await parse_ddl(
+        source,
+        "CREATE TABLE fact_order (id BIGINT PRIMARY KEY, amount DECIMAL(10, 2))",
+    )
+    changed_schema = await parse_ddl(
+        source,
+        "CREATE TABLE fact_order (id BIGINT PRIMARY KEY)",
+    )
+    questions, answers, metrics = metric_bundle(original_schema)
+    removed_column_id = next(
+        column.id
+        for table in original_schema.tables
+        for column in table.columns
+        if column.name == "amount"
+    )
+    metric_id = metrics[0].id
+    service = MetadataSnapshotService()
+    try:
+        await service.persist(
+            original_schema,
+            semantic_for(original_schema, fact=True),
+            questions,
+            answers,
+            metrics,
+        )
+        await service.persist(
+            changed_schema,
+            semantic_for(changed_schema, fact=True),
+            [],
+            [],
+            [],
+        )
+        async with MySQLDatabase.session() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(agent_memory.c.memory_key, agent_memory.c.status).where(
+                            agent_memory.c.source == source,
+                            agent_memory.c.memory_key.in_(
+                                {removed_column_id, metric_id}
+                            ),
+                        )
+                    )
+                ).all()
+            )
+        status_by_key = {str(key): MemoryStatus(str(status)) for key, status in rows}
+        check_equal(
+            "test_snapshot_expires_removed_column_and_metric_memories 检查点 1",
+            status_by_key[removed_column_id],
+            MemoryStatus.EXPIRED,
+        )
+        check_equal(
+            "test_snapshot_expires_removed_column_and_metric_memories 检查点 2",
+            status_by_key[metric_id],
+            MemoryStatus.EXPIRED,
         )
     finally:
         await cleanup_schema(original_schema)
