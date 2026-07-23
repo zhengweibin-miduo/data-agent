@@ -234,6 +234,10 @@ class MemoryRepository:
             for uid, status in existing_status.items()
             if status == MemoryStatus.DELETED
         }
+        for candidate in candidates:
+            if candidate.uid in deleted_uids:
+                candidate.decision = MemoryDecision.NOOP
+                candidate.supersedes_uids = []
         accepted_candidates = [
             candidate for candidate in candidates if candidate.uid not in deleted_uids
         ]
