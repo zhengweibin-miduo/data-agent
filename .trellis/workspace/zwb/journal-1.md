@@ -771,3 +771,38 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: 统一运行时装配并规范项目职责
+
+**Date**: 2026-07-24
+**Task**: 统一运行时装配并规范项目职责
+**Branch**: `refactor/project-structure-20260724`
+
+### Summary
+
+新增私有资源计划与显式 RuntimeHandle，统一 API 和 Worker 生命周期，补齐启动回滚、尽力关闭、状态恢复和生命周期测试；同步后端规范并加入架构设计相关技能。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `db05383` | (see git log) |
+| `6543a0c` | (see git log) |
+| `0e15ae8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
