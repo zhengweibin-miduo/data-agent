@@ -193,10 +193,20 @@ class MemorySearchService:
         items.sort(key=lambda item: (-item.score, item.memory.uid))
         items = items[:bounded_limit]
         if items:
-            async with MySQLDatabase.session() as session:
-                await MemoryRepository(session).record_access(
-                    {item.memory.uid for item in items},
-                    source=source,
-                    user_id=user_id,
+            try:
+                async with MySQLDatabase.session() as session:
+                    await MemoryRepository(session).record_access(
+                        {item.memory.uid for item in items},
+                        source=source,
+                        user_id=user_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.bind(trace_id="-").warning(
+                    "记忆访问统计写入失败，搜索结果已按 best-effort 返回 "
+                    "source={} user_id={} item_count={} error_type={}",
+                    source,
+                    user_id,
+                    len(items),
+                    type(exc).__name__,
                 )
         return MemorySearchResponse(items=items, degraded_targets=degraded)
