@@ -282,6 +282,7 @@ class MemoryRepository:
             }
             if deleted_same_content_uids:
                 scope_deleted_uids.update(deleted_same_content_uids)
+                candidate.decision = MemoryDecision.NOOP
                 candidate.supersedes_uids = []
                 continue
             active_uids = {str(row["uid"]) for row in active_rows}
