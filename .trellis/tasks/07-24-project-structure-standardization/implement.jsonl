@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引与预开发检查"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "运行时装配所有权与依赖方向"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "生命周期异常传播与清理契约"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "生命周期日志与Loguru排空契约"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "基础设施客户端初始化关闭顺序"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码测试和验证规范"}
+{"file": ".trellis/tasks/07-24-project-structure-standardization/research/runtime-assembly-evidence.md", "reason": "当前入口与可观察生命周期证据"}
