@@ -272,6 +272,109 @@ async def test_superseded_content_can_become_active_again() -> None:
 
 
 @pytest.mark.integration
+async def test_deleted_reactivated_content_is_not_replayed() -> None:
+    """验证删除后的版本化 A 不会被原始 A 快照重放复活。"""
+    await ensure_schema()
+    schema = await parse_ddl(
+        f"memory_deleted_replay_{uuid4().hex}",
+        "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64))",
+    )
+    candidates = build_accepted_memories(
+        schema,
+        semantic_for(schema, fact=False),
+        [],
+        [],
+        [],
+        job_id=uuid4().hex,
+    )
+    original_a = candidates[0]
+    replayed_a = original_a.model_copy(deep=True)
+    replayed_after_delete = original_a.model_copy(deep=True)
+    if not isinstance(original_a.content, SemanticDecisionContent):
+        raise RuntimeError("测试候选必须是语义记忆")
+    if original_a.content.table is None:
+        raise RuntimeError("测试候选必须包含表语义")
+    content_b = original_a.content.model_copy(
+        update={
+            "table": original_a.content.table.model_copy(
+                update={"description": f"修正后的客户维表-{uuid4().hex}"}
+            )
+        }
+    )
+    content_b_json = canonical_content_json(content_b)
+    candidate_b = original_a.model_copy(
+        deep=True,
+        update={
+            "uid": memory_uid(
+                original_a.source,
+                original_a.category,
+                original_a.memory_key,
+                original_a.schema_fingerprint or "",
+                content_b_json,
+            ),
+            "memory_text": build_memory_text(content_b),
+            "content": content_b,
+            "content_hash": memory_content_hash(content_b),
+            "created_job_id": uuid4().hex,
+        },
+    )
+    try:
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([original_a])
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([candidate_b])
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([replayed_a])
+            reactivated_a = await MemoryRepository(session).get_by_uid(replayed_a.uid)
+            if reactivated_a is None:
+                raise RuntimeError("重新生效的 A 必须存在")
+            await MemoryRepository(session).soft_delete(reactivated_a)
+            deleted_uid = replayed_a.uid
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([replayed_after_delete])
+            rows = list(
+                (
+                    await session.execute(
+                        select(agent_memory.c.uid, agent_memory.c.status)
+                        .where(
+                            agent_memory.c.source == original_a.source,
+                            agent_memory.c.category == original_a.category,
+                            agent_memory.c.memory_key == original_a.memory_key,
+                        )
+                        .order_by(agent_memory.c.record_version)
+                    )
+                ).mappings()
+            )
+            check_equal(
+                "test_deleted_reactivated_content_is_not_replayed 检查点 1",
+                [MemoryStatus(str(row["status"])) for row in rows],
+                [
+                    MemoryStatus.SUPERSEDED,
+                    MemoryStatus.SUPERSEDED,
+                    MemoryStatus.DELETED,
+                ],
+            )
+            check_equal(
+                "test_deleted_reactivated_content_is_not_replayed 检查点 2",
+                len(rows),
+                3,
+            )
+            outbox_operation = await session.scalar(
+                select(memory_index_outbox.c.operation).where(
+                    memory_index_outbox.c.memory_uid == deleted_uid
+                )
+            )
+            check_equal(
+                "test_deleted_reactivated_content_is_not_replayed 检查点 3",
+                outbox_operation,
+                MemoryIndexOperation.DELETE.value,
+            )
+    finally:
+        await cleanup_schema(schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
 async def test_metric_merge_preserves_complementary_evidence() -> None:
     """验证 MERGE 策略写新版本前保留既有指标问答证据。"""
     await ensure_schema()

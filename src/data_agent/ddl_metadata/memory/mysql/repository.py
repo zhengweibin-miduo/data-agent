@@ -241,6 +241,7 @@ class MemoryRepository:
         noop_rows: list[tuple[MemoryCandidate, RowMapping]] = []
         record_versions: dict[str, int] = {}
         versioned_uids: dict[str, str] = {}
+        scope_deleted_uids: set[str] = set()
         for candidate in accepted_candidates:
             base_uid = candidate.uid
             active_key = _active_key(candidate)
@@ -254,6 +255,7 @@ class MemoryRepository:
                             agent_memory.c.content,
                             agent_memory.c.content_hash,
                             agent_memory.c.record_version,
+                            agent_memory.c.status,
                         )
                         .where(
                             agent_memory.c.source == candidate.source,
@@ -272,6 +274,16 @@ class MemoryRepository:
             active_rows = [
                 row for row in scope_rows if str(row["active_key"]) == active_key
             ]
+            deleted_same_content_uids = {
+                str(row["uid"])
+                for row in scope_rows
+                if MemoryStatus(str(row["status"])) == MemoryStatus.DELETED
+                and str(row["content_hash"]) == candidate.content_hash
+            }
+            if deleted_same_content_uids:
+                scope_deleted_uids.update(deleted_same_content_uids)
+                candidate.supersedes_uids = []
+                continue
             active_uids = {str(row["uid"]) for row in active_rows}
             same_content = any(
                 str(row["content_hash"]) == candidate.content_hash
@@ -586,7 +598,7 @@ class MemoryRepository:
             MemoryIndexOperation.UPSERT,
         )
         await self._outbox.set_desired_state(
-            deleted_uids,
+            deleted_uids | scope_deleted_uids,
             MemoryIndexOperation.DELETE,
         )
 
