@@ -413,6 +413,13 @@ class MemoryService:
             if user_id is None:
                 await self._validate_meta_references(session, content)
             await repository.upsert_candidates([candidate])
+            if candidate.decision == MemoryDecision.NOOP:
+                raise DDLMetadataError(
+                    "stale_memory",
+                    "memory_update",
+                    "修正内容与已删除或未生效的历史事实冲突",
+                    http_status=409,
+                )
             history = await repository.history(
                 candidate.uid,
                 user_id=user_id,

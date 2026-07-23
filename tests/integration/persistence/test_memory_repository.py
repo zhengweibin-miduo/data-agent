@@ -1,29 +1,42 @@
 """Mem0 风格权威记忆仓储集成检查。"""
 
+from typing import cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
+from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.identifiers import memory_uid, scope_fingerprint
+from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.memory.application.service import MemoryService
 from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
 from data_agent.ddl_metadata.memory.domain.payloads import (
     build_memory_text,
     canonical_content_json,
     memory_content_hash,
 )
+from data_agent.ddl_metadata.memory.domain.policies import category_policy
 from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
 from data_agent.ddl_metadata.memory.mysql.tables import (
     agent_memory,
+    agent_memory_event,
+    agent_memory_link,
     memory_index_outbox,
 )
 from data_agent.ddl_metadata.models.memory import (
+    BuiltinMemoryCategory,
+    MemoryActorType,
+    MemoryCandidate,
+    MemoryDecision,
     MemoryEventType,
     MemoryIndexOperation,
     MemoryIndexTarget,
     MemoryStatus,
+    MemoryTrust,
     MetricDefinitionContent,
     SemanticDecisionContent,
+    UserMemoryContent,
 )
 from data_agent.ddl_metadata.models.semantic import (
     MetricAnswer,
@@ -34,6 +47,86 @@ from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.infrastructure.mysql import MySQLDatabase
 from tests.helpers.checks import check_equal
 from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
+
+
+def _user_memory_candidate(
+    *,
+    user_id: str,
+    memory_key: str,
+    content: UserMemoryContent,
+) -> MemoryCandidate:
+    """构造用户长期记忆候选。"""
+    source = "data_agent_conversation"
+    category = BuiltinMemoryCategory.USER_PREFERENCE.value
+    policy = category_policy(category)
+    content_json = canonical_content_json(content)
+    uid = memory_uid(
+        f"{source}:{user_id}",
+        category,
+        memory_key,
+        "",
+        content_json,
+    )
+    return MemoryCandidate(
+        uid=uid,
+        source=source,
+        user_id=user_id,
+        category=category,
+        memory_key=memory_key,
+        content_schema=policy.content_schema,
+        schema_fingerprint=None,
+        memory_text=build_memory_text(content),
+        content=content,
+        content_hash=memory_content_hash(content),
+        trust=MemoryTrust.USER_CONFIRMED,
+        content_version="v2",
+        projection_version="v2",
+        importance_score=policy.importance_score,
+        lifecycle_policy=policy.lifecycle_policy,
+        decision=MemoryDecision.ADD,
+        actor_type=MemoryActorType.USER,
+    )
+
+
+async def _cleanup_user_memory(user_id: str) -> None:
+    """按用户 ID 清理当前测试写入的长期记忆。"""
+    async with MySQLDatabase.session() as session:
+        memory_ids = set(
+            (
+                await session.scalars(
+                    select(agent_memory.c.id).where(agent_memory.c.user_id == user_id)
+                )
+            ).all()
+        )
+        memory_uids = set(
+            (
+                await session.scalars(
+                    select(agent_memory.c.uid).where(agent_memory.c.user_id == user_id)
+                )
+            ).all()
+        )
+        if memory_ids:
+            await session.execute(
+                delete(agent_memory_link).where(
+                    (agent_memory_link.c.memory_id.in_(memory_ids))
+                    | (agent_memory_link.c.linked_memory_id.in_(memory_ids))
+                )
+            )
+            await session.execute(
+                delete(agent_memory_event).where(
+                    agent_memory_event.c.memory_id.in_(memory_ids)
+                )
+            )
+        if memory_uids:
+            await session.execute(
+                delete(memory_index_outbox).where(
+                    memory_index_outbox.c.memory_uid.in_(memory_uids)
+                )
+            )
+        if memory_ids:
+            await session.execute(
+                delete(agent_memory).where(agent_memory.c.id.in_(memory_ids))
+            )
 
 
 @pytest.mark.integration
@@ -126,6 +219,87 @@ async def test_memory_repository() -> None:
             )
     finally:
         await cleanup_schema(schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_update_to_deleted_content_returns_conflict() -> None:
+    """验证用户修正命中已删除历史事实时返回冲突而非成功。"""
+    await ensure_schema()
+    user_id = f"user_{uuid4().hex}"
+    memory_key = f"preference_{uuid4().hex}"
+    evidence_message_uid = f"msg_{uuid4().hex}"
+    supporting_user_quote = "我现在想要详细解释"
+    content_a = UserMemoryContent(
+        value="用户偏好简洁回答",
+        supporting_user_quote=supporting_user_quote,
+        evidence_message_uids=[evidence_message_uid],
+    )
+    content_b = UserMemoryContent(
+        value="用户偏好详细解释",
+        supporting_user_quote=supporting_user_quote,
+        evidence_message_uids=[evidence_message_uid],
+    )
+    try:
+        async with MySQLDatabase.session() as session:
+            repository = MemoryRepository(session)
+            candidate_a = _user_memory_candidate(
+                user_id=user_id,
+                memory_key=memory_key,
+                content=content_a,
+            )
+            await repository.upsert_candidates([candidate_a])
+            active_a = await repository.get_by_uid(candidate_a.uid, user_id=user_id)
+            if active_a is None:
+                raise RuntimeError("初始用户记忆必须存在")
+            await repository.soft_delete(active_a)
+            candidate_b = _user_memory_candidate(
+                user_id=user_id,
+                memory_key=memory_key,
+                content=content_b,
+            )
+            await repository.upsert_candidates([candidate_b])
+            active_b = await repository.get_by_uid(candidate_b.uid, user_id=user_id)
+            if active_b is None:
+                raise RuntimeError("当前用户记忆必须存在")
+        service = MemoryService(cast(DDLJobStore, object()))
+        with pytest.raises(DDLMetadataError) as exc_info:
+            await service.update(
+                candidate_b.uid,
+                content_a,
+                expected_version=active_b.detail.record_version,
+                user_id=user_id,
+            )
+        check_equal(
+            "test_update_to_deleted_content_returns_conflict 检查点 1",
+            exc_info.value.http_status,
+            409,
+        )
+        async with MySQLDatabase.session() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(agent_memory.c.status, agent_memory.c.content_hash)
+                        .where(
+                            agent_memory.c.user_id == user_id,
+                            agent_memory.c.memory_key == memory_key,
+                        )
+                        .order_by(agent_memory.c.record_version)
+                    )
+                ).mappings()
+            )
+            check_equal(
+                "test_update_to_deleted_content_returns_conflict 检查点 2",
+                [MemoryStatus(str(row["status"])) for row in rows],
+                [MemoryStatus.DELETED, MemoryStatus.ACTIVE],
+            )
+            check_equal(
+                "test_update_to_deleted_content_returns_conflict 检查点 3",
+                str(rows[-1]["content_hash"]),
+                candidate_b.content_hash,
+            )
+    finally:
+        await _cleanup_user_memory(user_id)
         await MySQLDatabase.close()
 
 
