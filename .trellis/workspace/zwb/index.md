@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
-- **Last Active**: 2026-07-21
+- **Total Sessions**: 23
+- **Last Active**: 2026-07-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~740 | Active |
+| `journal-1.md` | ~773 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-07-23 | 重建 Mem0 风格长期记忆生命周期 | `fd945b2` | `refactor/mem0-memory-lifecycle-20260723` |
 | 22 | 2026-07-21 | 初始化记忆投影版本为 v1 | `1c57772` | `fix/initial-projection-version-20260721` |
 | 21 | 2026-07-20 | 修复 PR 22 CI 事件循环冲突 | `edb3012` | `fix/pr22-ci-20260720` |
 | 20 | 2026-07-20 | Trellis 任务 worktree 与分支规范 | `1b15f2c` | `chore/trellis-worktree-workflow-20260720` |

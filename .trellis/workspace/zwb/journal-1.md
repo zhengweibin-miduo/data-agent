@@ -738,3 +738,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: 重建 Mem0 风格长期记忆生命周期
+
+**Date**: 2026-07-23
+**Task**: 重建 Mem0 风格长期记忆生命周期
+**Branch**: `refactor/mem0-memory-lifecycle-20260723`
+
+### Summary
+
+以 category 和 memory_key 重建长期记忆生命周期，完成权威版本、审计、过期、检索投影、用户修正与干净资源重建，并通过 70 项非 TEI 测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fd945b2` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
