@@ -334,7 +334,7 @@ async def test_fingerprint_expiry_preserves_unsubmitted_table_scope() -> None:
             check_equal(
                 "test_fingerprint_expiry_preserves_unsubmitted_table_scope 检查点 1",
                 expired,
-                len(partial_fingerprints),
+                1,
             )
             check_equal(
                 "test_fingerprint_expiry_preserves_unsubmitted_table_scope 检查点 2",
