@@ -5,14 +5,24 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from data_agent.ddl_metadata.identifiers import memory_uid
 from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
+from data_agent.ddl_metadata.memory.domain.payloads import (
+    build_memory_text,
+    canonical_content_json,
+    memory_content_hash,
+)
 from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
-from data_agent.ddl_metadata.memory.mysql.tables import memory_index_outbox
+from data_agent.ddl_metadata.memory.mysql.tables import (
+    agent_memory,
+    memory_index_outbox,
+)
 from data_agent.ddl_metadata.models.memory import (
     MemoryEventType,
     MemoryIndexOperation,
     MemoryIndexTarget,
     MemoryStatus,
+    SemanticDecisionContent,
 )
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.infrastructure.mysql import MySQLDatabase
@@ -107,6 +117,148 @@ async def test_memory_repository() -> None:
                 "test_memory_repository 检查点 7",
                 outbox_operations,
                 {MemoryIndexOperation.DELETE.value},
+            )
+    finally:
+        await cleanup_schema(schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_superseded_content_can_become_active_again() -> None:
+    """验证 A→B→A 时为重新生效的 A 创建新版本。"""
+    await ensure_schema()
+    schema = await parse_ddl(
+        f"memory_reactivation_{uuid4().hex}",
+        "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64))",
+    )
+    candidates = build_accepted_memories(
+        schema,
+        semantic_for(schema, fact=False),
+        [],
+        [],
+        [],
+        job_id=uuid4().hex,
+    )
+    original_a = candidates[0]
+    replayed_a = original_a.model_copy(deep=True)
+    if not isinstance(original_a.content, SemanticDecisionContent):
+        raise RuntimeError("测试候选必须是语义记忆")
+    if original_a.content.table is None:
+        raise RuntimeError("测试候选必须包含表语义")
+    content_b = original_a.content.model_copy(
+        update={
+            "table": original_a.content.table.model_copy(
+                update={"description": f"修正后的客户维表-{uuid4().hex}"}
+            )
+        }
+    )
+    content_b_json = canonical_content_json(content_b)
+    candidate_b = original_a.model_copy(
+        deep=True,
+        update={
+            "uid": memory_uid(
+                original_a.source,
+                original_a.category,
+                original_a.memory_key,
+                original_a.schema_fingerprint or "",
+                content_b_json,
+            ),
+            "memory_text": build_memory_text(content_b),
+            "content": content_b,
+            "content_hash": memory_content_hash(content_b),
+            "created_job_id": uuid4().hex,
+        },
+    )
+    original_a_uid = original_a.uid
+    candidate_b_uid = candidate_b.uid
+    try:
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([original_a])
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([candidate_b])
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates([replayed_a])
+            reactivated_a_uid = replayed_a.uid
+        async with MySQLDatabase.session() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(
+                            agent_memory.c.uid,
+                            agent_memory.c.status,
+                            agent_memory.c.record_version,
+                            agent_memory.c.content_hash,
+                        )
+                        .where(
+                            agent_memory.c.source == original_a.source,
+                            agent_memory.c.category == original_a.category,
+                            agent_memory.c.memory_key == original_a.memory_key,
+                        )
+                        .order_by(agent_memory.c.record_version)
+                    )
+                ).mappings()
+            )
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 1",
+                [str(row["uid"]) for row in rows],
+                [original_a_uid, candidate_b_uid, reactivated_a_uid],
+            )
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 2",
+                [MemoryStatus(str(row["status"])) for row in rows],
+                [
+                    MemoryStatus.SUPERSEDED,
+                    MemoryStatus.SUPERSEDED,
+                    MemoryStatus.ACTIVE,
+                ],
+            )
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 3",
+                [int(row["record_version"]) for row in rows],
+                [1, 2, 3],
+            )
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 4",
+                reactivated_a_uid != original_a_uid,
+                True,
+            )
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 5",
+                str(rows[-1]["content_hash"]),
+                original_a.content_hash,
+            )
+            active_count = sum(
+                1
+                for row in rows
+                if MemoryStatus(str(row["status"])) == MemoryStatus.ACTIVE
+            )
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 6",
+                active_count,
+                1,
+            )
+            outbox_operations = {
+                str(uid): str(operation)
+                for uid, operation in (
+                    await session.execute(
+                        select(
+                            memory_index_outbox.c.memory_uid,
+                            memory_index_outbox.c.operation,
+                        ).where(
+                            memory_index_outbox.c.memory_uid.in_(
+                                {candidate_b_uid, reactivated_a_uid}
+                            )
+                        )
+                    )
+                ).all()
+            }
+            check_equal(
+                "test_superseded_content_can_become_active_again 检查点 7",
+                outbox_operations,
+                {
+                    candidate_b_uid: MemoryIndexOperation.DELETE.value,
+                    reactivated_a_uid: MemoryIndexOperation.UPSERT.value,
+                },
             )
     finally:
         await cleanup_schema(schema)

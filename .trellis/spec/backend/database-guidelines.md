@@ -133,10 +133,15 @@ configured application memory database it:
    typed links, and the database-unique active slot; and
 5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`.
 
-Stable SHA-256 IDs and the unique memory-link triple make re-execution safe
-after a worker crash. Replaying an accepted snapshot must not reactivate a UID
-that a user already soft-deleted; its DELETE projection remains the desired
-outbox state. Tables absent from the submitted DDL are outside cleanup scope.
+Stable SHA-256 content IDs and the unique memory-link triple make re-execution
+safe after a worker crash. When content whose base UID is `SUPERSEDED` or
+`EXPIRED` becomes current again, the repository derives a new UID from that base
+UID plus the next `record_version`, remaps same-batch `DERIVED_FROM` and
+`RELATED` references, supersedes the current active row, and emits normal
+DELETE/UPSERT projection work. Replaying an accepted snapshot must not
+reactivate a UID that a user already soft-deleted; its DELETE projection remains
+the desired outbox state. Tables absent from the submitted DDL are outside
+cleanup scope.
 No repository write is permitted while a graph waits for user input or before
 deterministic validation succeeds.
 
@@ -169,6 +174,7 @@ memory rows and cannot independently become current graph context.
 | Snapshot statement fails | Roll back all Meta, memory, event, link, and outbox changes |
 | Schema-qualified memory statement fails after Meta writes | Roll back the earlier Meta writes in the same transaction |
 | Same accepted snapshot is replayed | Stable IDs and unique relations produce the same state |
+| `SUPERSEDED` or `EXPIRED` content becomes current again | Create a new version UID, keep one ACTIVE row, and advance `record_version` |
 | A soft-deleted UID appears in a replayed snapshot | Keep it DELETED and retain DELETE outbox desired states |
 | Submitted table drops a column | Remove stale rows only inside submitted table IDs |
 | Update repeats identical user-confirmed content | Return `unchanged_update`; append no event |
@@ -193,7 +199,9 @@ uv run pytest tests/integration/test_ddl_metadata_flow.py
 
 Tests must assert full rollback, unrelated-table preservation, repeat
 idempotency, update no-op behavior, outbox replay, link-aware reuse, soft
-deletion, and post-commit replay safety.
+deletion, post-commit replay safety, and A→B→A reactivation with the old A and B
+both `SUPERSEDED`, the new A uniquely `ACTIVE`, and matching DELETE/UPSERT
+outbox operations.
 
 ### 7. Wrong vs Correct
 
@@ -399,6 +407,9 @@ targets.
   submitted-table snapshot. Compute cleanup scope from submitted table IDs.
 - Do not treat derived memory payload JSON as canonical meaning; rebuild it
   from the typed `content` document.
+- Do not discard a candidate only because its content-addressed UID belongs to
+  a `SUPERSEDED` or `EXPIRED` row. Reactivate the meaning as a new version UID;
+  only `DELETED` content is a non-reactivating tombstone.
 - Do not persist accepted Meta rows separately from their trusted long-term
   memories and relations.
 - Do not place application memory tables in Meta or use a second

@@ -414,14 +414,14 @@ class MemoryService:
                 await self._validate_meta_references(session, content)
             await repository.upsert_candidates([candidate])
             history = await repository.history(
-                uid,
+                candidate.uid,
                 user_id=user_id,
                 offset=0,
                 limit=100,
             )
         event_id = history.items[-1].id if history and history.items else 0
         return MemoryUpdateResponse(
-            memory_uid=uid,
+            memory_uid=candidate.uid,
             event_id=event_id,
             record_version=expected_version + 1,
             requires_reprocess=user_id is None,

@@ -77,6 +77,12 @@ def _active_key(candidate: MemoryCandidate) -> str:
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
+def _versioned_uid(base_uid: str, record_version: int) -> str:
+    """为重新生效的退役内容生成不可冲突的版本标识。"""
+    identity = "\x1f".join((base_uid, str(record_version)))
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
 def _event_type_for_decision(decision: MemoryDecision | None) -> MemoryEventType:
     """映射新版本的审计事件类型。"""
     if decision == MemoryDecision.UPDATE:
@@ -179,34 +185,44 @@ class MemoryRepository:
             for uid, status in existing_status.items()
             if status == MemoryStatus.DELETED
         }
-        retired_uids = {
-            uid
-            for uid, status in existing_status.items()
-            if status != MemoryStatus.ACTIVE
-        }
         accepted_candidates = [
-            candidate for candidate in candidates if candidate.uid not in retired_uids
+            candidate for candidate in candidates if candidate.uid not in deleted_uids
         ]
         deleted_rows: dict[int, tuple[MemoryCandidate, RowMapping]] = {}
         noop_rows: list[tuple[MemoryCandidate, RowMapping]] = []
         record_versions: dict[str, int] = {}
+        versioned_uids: dict[str, str] = {}
         for candidate in accepted_candidates:
+            base_uid = candidate.uid
             active_key = _active_key(candidate)
-            active_rows = list(
+            scope_rows = list(
                 (
                     await self._session.execute(
                     select(
                         agent_memory.c.id,
                         agent_memory.c.uid,
+                        agent_memory.c.active_key,
                         agent_memory.c.content,
                         agent_memory.c.content_hash,
                         agent_memory.c.record_version,
                     )
-                    .where(agent_memory.c.active_key == active_key)
+                    .where(
+                        agent_memory.c.source == candidate.source,
+                        (
+                            agent_memory.c.user_id.is_(None)
+                            if candidate.user_id is None
+                            else agent_memory.c.user_id == candidate.user_id
+                        ),
+                        agent_memory.c.category == candidate.category,
+                        agent_memory.c.memory_key == candidate.memory_key,
+                    )
                     .with_for_update()
                 )
                 ).mappings()
             )
+            active_rows = [
+                row for row in scope_rows if str(row["active_key"]) == active_key
+            ]
             active_uids = {str(row["uid"]) for row in active_rows}
             same_content = any(
                 str(row["content_hash"]) == candidate.content_hash
@@ -255,16 +271,31 @@ class MemoryRepository:
                 )
             else:
                 candidate.supersedes_uids = []
-            record_versions[candidate.uid] = 1 + max(
-                (int(row["record_version"]) for row in active_rows),
+            record_version = 1 + max(
+                (int(row["record_version"]) for row in scope_rows),
                 default=0,
             )
+            if existing_status.get(base_uid) in {
+                MemoryStatus.SUPERSEDED,
+                MemoryStatus.EXPIRED,
+            }:
+                candidate.uid = _versioned_uid(base_uid, record_version)
+                versioned_uids[base_uid] = candidate.uid
+            record_versions[candidate.uid] = record_version
             if candidate.supersedes_uids:
                 await self._session.execute(
                     update(agent_memory)
                     .where(agent_memory.c.uid.in_(candidate.supersedes_uids))
                     .values(active_key=None)
                 )
+
+        for candidate in accepted_candidates:
+            candidate.derived_from_uids = [
+                versioned_uids.get(uid, uid) for uid in candidate.derived_from_uids
+            ]
+            candidate.related_uids = [
+                versioned_uids.get(uid, uid) for uid in candidate.related_uids
+            ]
 
         accepted_candidates = [
             candidate
