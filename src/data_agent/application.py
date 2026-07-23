@@ -6,62 +6,23 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from loguru import logger
 from redis.exceptions import RedisError
 
 from data_agent.conversation.api import router as conversation_router
-from data_agent.conversation.service import ConversationService
 from data_agent.ddl_metadata.api.router import router as ddl_metadata_router
 from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.memory.application.service import MemoryService
-from data_agent.infrastructure.elasticsearch import ElasticsearchClient
-from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.infrastructure.qdrant import QdrantClient
-from data_agent.infrastructure.redis import RedisClient
-from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
-from data_agent.logging import setup_logging
+from data_agent.runtime import RuntimeRole, start, stop
 from data_agent.settings import app_config
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """显式管理 API 进程内的数据库与派生检索客户端。"""
-    setup_logging()
-    redis = RedisClient.initialize()
-    MySQLDatabase.initialize()
-    ElasticsearchClient.initialize()
-    QdrantClient.initialize()
-    TEIEmbeddingClient.initialize()
-    jobs = DDLJobStore(redis)
-    app.state.jobs = jobs
-    app.state.memories = MemoryService(jobs)
-    app.state.conversations = ConversationService()
-    logger.bind(
-        component="application.api",
-        event_name="application.lifecycle.started",
-        operation="serve_api",
-        outcome="started",
-        worker_role="api",
-    ).info("API 服务已启动")
+    """通过统一运行时装配管理 API 进程资源。"""
+    handle = await start(RuntimeRole.API, app.state)
     try:
         yield
     finally:
-        try:
-            await TEIEmbeddingClient.close()
-            await QdrantClient.close()
-            await ElasticsearchClient.close()
-            await MySQLDatabase.close()
-            await RedisClient.close()
-            logger.bind(
-                component="application.api",
-                event_name="application.lifecycle.stopped",
-                operation="serve_api",
-                outcome="stopped",
-                worker_role="api",
-            ).info("API 服务已停止")
-        finally:
-            await logger.complete()
+        await stop(handle)
 
 
 async def _handle_business_error(

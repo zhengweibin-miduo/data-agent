@@ -16,6 +16,7 @@ src/data_agent/
 ├── application.py
 ├── logging.py
 ├── main.py
+├── runtime.py
 ├── settings.py
 ├── infrastructure/
 │   ├── checkpoint_store.py
@@ -99,7 +100,13 @@ under `docs/docker/`.
 
 ## Ownership
 
-- `data_agent.application` is the FastAPI composition root and lifecycle owner.
+- `data_agent.application` is the FastAPI composition root and delegates process
+  assembly to `data_agent.runtime`.
+- `data_agent.runtime` owns the private ordered API/Worker resource plans,
+  shared infrastructure lifecycle, role-specific state publication, startup
+  rollback, best-effort shutdown, and lifecycle logging. Its public seam is
+  limited to `RuntimeRole`, `RuntimeHandle`, `start(role, target)`, and
+  `stop(handle)`; callers cannot register or reorder actions.
 - `data_agent.conversation` owns permanent text conversations, turn
   idempotency, bounded context, and the leased conversation-memory extraction
   outbox. It reuses the authoritative memory package instead of defining a
@@ -132,8 +139,9 @@ under `docs/docker/`.
   construction; `.nodes` owns dependency-bound node behavior, `.routing` owns
   pure conditional routing, and `.graph` only registers and compiles topology.
 - `ddl_metadata.worker.job_runner` owns one DDL execution/recovery unit,
-  `.maintenance` owns scheduled jobs, `.lifecycle` owns resources and graph
-  composition, and `.settings.WorkerSettings` is the only arq discovery class.
+  `.maintenance` owns scheduled jobs, `.lifecycle` adapts arq startup/shutdown
+  to the shared runtime handle, and `.settings.WorkerSettings` is the only arq
+  discovery class.
 - Models, parsing, validation, identifiers, errors, settings, logging, and root
   composition remain cohesive. File size alone is not a reason to split them.
 
@@ -142,10 +150,13 @@ under `docs/docker/`.
 ```text
 main/application
   -> api/router + jobs/store + memory/application
-  -> infrastructure lifecycle
+  -> runtime
+
+runtime
+  -> infrastructure lifecycle + role-specific application composition
 
 worker/settings
-  -> worker/job_runner + worker/maintenance + worker/lifecycle
+  -> worker/job_runner + worker/maintenance + worker/lifecycle -> runtime
 
 worker/job_runner
   -> jobs/store + workflow state

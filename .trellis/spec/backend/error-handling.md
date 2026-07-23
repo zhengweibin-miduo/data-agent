@@ -64,9 +64,21 @@ a later `initialize()` creates a fresh resource after close.
   closure is owned by the async context manager.
 - Live integration fixtures acquire the managed client and close it in
   `finally`; keep cleanup independent of assertion or request success.
-- `CheckpointStore.initialize()` closes its partially entered saver if
-  Redis index setup fails; API and worker lifecycles close initialized clients
-  in reverse ownership order.
+- `CheckpointStore.initialize()` closes its partially entered saver if Redis
+  index setup fails. `data_agent.runtime.start()` records each successfully
+  completed action and, if a later action fails, attempts every closeable
+  completed action in reverse order before re-raising the original startup
+  exception unchanged. Rollback failures are logged with bounded role, action,
+  and exception-type fields and never replace the startup error.
+- `data_agent.runtime.stop()` marks a valid handle closed before awaiting
+  cleanup, restores every state key published by that startup, then attempts
+  every closeable action in reverse order. Startup rollback likewise restores
+  overwritten values and removes new values before infrastructure is closed, so
+  callers never retain references to rolled-back resources. Cleanup catches
+  `BaseException`, including cancellation: one failure is re-raised unchanged;
+  multiple ordinary failures are retained in an `ExceptionGroup`, while a group
+  containing cancellation uses `BaseExceptionGroup`. An invalid, missing, or
+  already closed handle raises an actionable `RuntimeError`.
 - `MetadataSnapshotService.persist()` lets the original SQLAlchemy/asyncmy exception
   escape so the worker can classify transient failures while the managed
   Session rolls back Meta and memory together.
@@ -241,6 +253,8 @@ job = await job_store.submit_answers(job_id, request)
 - Do not skip async cleanup after a live integration assertion fails.
 - Do not add connection side effects to package `__init__.py` files; lifecycle
   remains explicit through infrastructure wrapper methods.
+- Do not open-code API or Worker resource order outside `data_agent.runtime`,
+  expose its private action plan, or suppress startup/shutdown close failures.
 - Do not catch broad exceptions in repositories or graph nodes merely to return
   `None`; preserve transaction rollback and worker classification.
 - Do not mark validation ambiguity retryable or translate it into `failed`;

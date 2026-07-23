@@ -10,8 +10,9 @@ infrastructure modules reuse the exported `logger` and must not configure their
 own sinks.
 
 Call `setup_logging()` once from the owning process lifecycle before the first
-application event. The FastAPI lifespan and arq worker startup own this call.
-Service, repository, graph, and route modules never add sinks.
+application event. `data_agent.runtime` owns this call for both the FastAPI
+lifespan and arq worker startup. Service, repository, graph, route, and entry
+adapter modules never add sinks.
 
 Every enabled console or file sink uses `enqueue=True`, so formatting,
 serialization, terminal/file writes, rotation, and retention execute on
@@ -167,7 +168,10 @@ logger.bind(event_name=f"ddl_metadata.job.{job_id}.failed").error("失败")
 | File directory cannot be created | Let the filesystem error fail startup |
 | Exception record | Remain one physical JSON line with bounded stack text |
 | API or worker shutdown succeeds | Emit the final stopped event, then await `logger.complete()` |
-| A resource close fails during shutdown | Await `logger.complete()` in `finally`, then propagate the original close error |
+| Startup fails after logging setup | Reverse-roll back completed resources, safely log rollback failures, and always await `logger.complete()` |
+| One resource close fails during shutdown | Continue all closes, await `logger.complete()`, then propagate the original close error |
+| Multiple resources fail during shutdown | Continue all closes, await `logger.complete()`, then raise an `ExceptionGroup` preserving every original error |
+| Resource close raises cancellation | Continue all closes and await `logger.complete()`; preserve one cancellation unchanged or retain it in `BaseExceptionGroup` with other failures |
 
 The logging unit tests must cover strict configuration, idempotent sink setup,
 text rendering, per-line JSON parsing, canonical fields, typed application
