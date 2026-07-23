@@ -15,7 +15,7 @@ from data_agent.ddl_metadata.models.memory import (
     MEMORY_CONTENT_ADAPTER,
     MemoryIndexOperation,
     MemoryIndexTarget,
-    MemoryKind,
+    MemoryLifecyclePolicy,
     MemoryOutboxItem,
     MemoryProjection,
     MemoryStatus,
@@ -156,9 +156,7 @@ class MemoryIndexOutboxRepository:
         return MemoryProjection(
             memory_uid=str(row["uid"]),
             source=str(row["source"]),
-            user_id=(
-                str(row["user_id"]) if row["user_id"] is not None else None
-            ),
+            user_id=(str(row["user_id"]) if row["user_id"] is not None else None),
             created_conversation_uid=(
                 str(row["created_conversation_uid"])
                 if row["created_conversation_uid"] is not None
@@ -169,14 +167,23 @@ class MemoryIndexOutboxRepository:
                 if row["created_message_uid"] is not None
                 else None
             ),
-            kind=MemoryKind(str(row["kind"])),
-            scope_key=str(row["scope_key"]),
-            schema_fingerprint=str(row["schema_fingerprint"]),
+            category=str(row["category"]),
+            memory_key=str(row["memory_key"]),
+            content_schema=str(row["content_schema"]),
+            schema_fingerprint=(
+                str(row["schema_fingerprint"])
+                if row["schema_fingerprint"] is not None
+                else None
+            ),
             memory_text=str(row["memory_text"]),
             content_hash=str(row["content_hash"]),
             object_ids=content_object_ids(content),
             trust=MemoryTrust(str(row["trust"])),
             status=MemoryStatus(str(row["status"])),
+            importance_score=float(row["importance_score"]),
+            lifecycle_policy=MemoryLifecyclePolicy(str(row["lifecycle_policy"])),
+            expires_at=row["expires_at"],
+            record_version=int(row["record_version"]),
             content_version=str(row["content_version"]),
             projection_version=str(row["projection_version"]),
             created_at=row["created_at"],

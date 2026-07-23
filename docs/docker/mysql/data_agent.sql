@@ -13,14 +13,22 @@ CREATE TABLE IF NOT EXISTS agent_memory
     uid                CHAR(64) NOT NULL UNIQUE COMMENT '基于记忆内容与作用域生成的稳定唯一标识',
     source             VARCHAR(128) NOT NULL COMMENT '记忆所属的稳定语义来源标识',
     user_id            VARCHAR(128) NULL COMMENT '对话记忆所属用户，DDL 记忆为空',
-    kind               VARCHAR(32) NOT NULL COMMENT '记忆业务类型，如 DDL 事实或跨会话用户记忆',
-    scope_key          VARCHAR(256) NOT NULL COMMENT '记忆对应表、字段或指标的稳定作用域标识',
-    schema_fingerprint CHAR(64) NOT NULL COMMENT '生成记忆时物理结构快照的 SHA-256 指纹',
+    category           VARCHAR(128) NOT NULL COMMENT '可扩展的点分语义类别，如 user.preference 或 ddl.metric',
+    memory_key         VARCHAR(256) NOT NULL COMMENT '类别策略生成的稳定逻辑事实键',
+    active_key         CHAR(64) NULL UNIQUE COMMENT '同一作用域类别事实唯一活动槽的 SHA-256 标识',
+    content_schema     VARCHAR(128) NOT NULL COMMENT '结构化内容所遵循的类别模式版本',
+    schema_fingerprint CHAR(64) NULL COMMENT '绑定 DDL 结构时使用的 SHA-256 指纹',
     memory_text        TEXT NOT NULL COMMENT '用于全文检索与向量检索的规范化记忆文本',
     content            JSON NOT NULL COMMENT '权威长期记忆的结构化业务内容',
     content_hash       CHAR(64) NOT NULL COMMENT '结构化内容的 SHA-256 哈希，用于幂等去重',
     trust              VARCHAR(32) NOT NULL COMMENT '事实可信来源，区分模型校验与用户确认',
-    status             VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' COMMENT '记忆生命周期状态，如 ACTIVE 或 DELETED',
+    status             VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' COMMENT '记忆状态，如 ACTIVE、SUPERSEDED、EXPIRED 或 DELETED',
+    importance_score   DOUBLE NOT NULL DEFAULT 0.5 COMMENT '类别策略归一化后的重要度分值',
+    lifecycle_policy   VARCHAR(32) NOT NULL COMMENT '永久、适应性、到期或结构指纹绑定策略',
+    expires_at         DATETIME NULL COMMENT '到期策略的失效时间，其他策略可为空',
+    record_version     INT NOT NULL DEFAULT 1 COMMENT '同一逻辑事实的乐观并发版本',
+    access_count       BIGINT NOT NULL DEFAULT 0 COMMENT '真正进入召回结果的累计次数',
+    last_accessed_at   DATETIME NULL COMMENT '最近一次真正进入召回结果的时间',
     content_version    VARCHAR(32) NOT NULL COMMENT '结构化记忆内容的格式版本',
     projection_version VARCHAR(32) NOT NULL COMMENT 'Elasticsearch 与 Qdrant 索引投影的格式版本',
     created_job_id     CHAR(64) NULL COMMENT '首次生成该记忆的 DDL 任务标识，对话记忆为空',
@@ -32,12 +40,11 @@ CREATE TABLE IF NOT EXISTS agent_memory
     deleted_at         DATETIME NULL COMMENT '记忆被软删除的时间，未删除时为空',
     purge_requested_at DATETIME NULL COMMENT '用户级清除请求时间，普通软删除为空',
     INDEX idx_agent_memory_exact
-        (source, kind, scope_key, schema_fingerprint, status),
+        (source, category, memory_key, schema_fingerprint, status),
     INDEX idx_agent_memory_rebuild (status, id),
     INDEX idx_agent_memory_user
-        (user_id, kind, status, updated_at),
-    UNIQUE KEY uq_agent_memory_content
-        (source, kind, scope_key, schema_fingerprint, content_hash)
+        (user_id, category, status, updated_at),
+    INDEX idx_agent_memory_expiry (status, expires_at, id)
 ) ENGINE = InnoDB COMMENT = '存储经验证的权威长期记忆及其生命周期状态';
 
 CREATE TABLE IF NOT EXISTS agent_conversation

@@ -25,10 +25,13 @@ from data_agent.ddl_metadata.memory.domain.payloads import (
     canonical_content_json,
     memory_content_hash,
 )
+from data_agent.ddl_metadata.memory.domain.policies import (
+    category_policy,
+    user_memory_category,
+)
 from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
 from data_agent.ddl_metadata.models.memory import (
     MemoryCandidate,
-    MemoryKind,
     MemoryTrust,
     UserMemoryContent,
 )
@@ -62,13 +65,14 @@ def _validated_candidates(
     accepted: list[MemoryCandidate] = []
     accepted_scopes: set[str] = set()
     for candidate in result.candidates:
+        value = candidate.value.strip()
+        memory_key = candidate.key.strip().casefold()
+        if not value or not memory_key:
+            continue
         evidence = [by_uid.get(uid) for uid in candidate.evidence_message_uids]
-        if (
-            any(message is None for message in evidence)
-            or any(
-                message is not None and message.role != MessageRole.USER
-                for message in evidence
-            )
+        if any(message is None for message in evidence) or any(
+            message is not None and message.role != MessageRole.USER
+            for message in evidence
         ):
             continue
         user_messages = [message for message in evidence if message is not None]
@@ -78,6 +82,8 @@ def _validated_candidates(
             if candidate.supporting_user_quote in message.content
         ]
         if not quoting:
+            continue
+        if value.casefold() not in candidate.supporting_user_quote.casefold():
             continue
         assistant_uid = candidate.confirmed_assistant_message_uid
         if assistant_uid is not None:
@@ -89,8 +95,7 @@ def _validated_candidates(
                 or candidate.assistant_quote not in assistant.content
                 or not any(message.id > assistant.id for message in quoting)
                 or not any(
-                    candidate.assistant_quote.casefold()
-                    in message.content.casefold()
+                    candidate.assistant_quote.casefold() in message.content.casefold()
                     for message in quoting
                 )
                 or candidate.supporting_user_quote.strip().casefold()
@@ -100,30 +105,29 @@ def _validated_candidates(
         elif candidate.assistant_quote is not None:
             continue
         content = UserMemoryContent(
-            kind=MemoryKind.USER_MEMORY,
-            category=candidate.category,
-            key=candidate.key.strip().casefold(),
-            value=candidate.value.strip(),
+            value=value,
             supporting_user_quote=candidate.supporting_user_quote,
             evidence_message_uids=candidate.evidence_message_uids,
             confirmed_assistant_message_uid=assistant_uid,
         )
-        scope_key = f"{candidate.category.value}:{content.key}"
-        if scope_key in accepted_scopes:
+        category = user_memory_category(candidate.category)
+        logical_key = f"{category}:{memory_key}"
+        if logical_key in accepted_scopes:
             continue
-        accepted_scopes.add(scope_key)
+        accepted_scopes.add(logical_key)
         fingerprint = stable_id(
             "user-memory-scope",
             claim.user_id,
-            scope_key,
+            logical_key,
         )
+        policy = category_policy(category)
         content_json = canonical_content_json(content)
         accepted.append(
             MemoryCandidate(
                 uid=memory_uid(
                     f"{CONVERSATION_MEMORY_SOURCE}:{claim.user_id}",
-                    MemoryKind.USER_MEMORY.value,
-                    scope_key,
+                    category,
+                    memory_key,
                     fingerprint,
                     content_json,
                 ),
@@ -131,15 +135,18 @@ def _validated_candidates(
                 user_id=claim.user_id,
                 created_conversation_uid=claim.conversation_uid,
                 created_message_uid=quoting[0].uid,
-                kind=MemoryKind.USER_MEMORY,
-                scope_key=scope_key,
-                schema_fingerprint=fingerprint,
+                category=category,
+                memory_key=memory_key,
+                content_schema=policy.content_schema,
+                schema_fingerprint=None,
                 memory_text=build_memory_text(content),
                 content=content,
                 content_hash=memory_content_hash(content),
                 trust=MemoryTrust.USER_CONFIRMED,
                 content_version=app_config.memory.content_version,
                 projection_version=app_config.memory.projection_version,
+                importance_score=policy.importance_score,
+                lifecycle_policy=policy.lifecycle_policy,
             )
         )
     return accepted

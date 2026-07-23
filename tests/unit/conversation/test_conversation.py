@@ -113,8 +113,7 @@ def test_conversation_route_contract() -> None:
                 ("POST",),
             ),
             (
-                "/api/v1/conversations/{conversation_uid}/turns/"
-                "{turn_uid}/assistant",
+                "/api/v1/conversations/{conversation_uid}/turns/{turn_uid}/assistant",
                 ("POST",),
             ),
             ("/api/v1/users/{user_id}/memories/search", ("GET",)),
@@ -144,9 +143,7 @@ def test_conversation_route_contract() -> None:
 
 def test_extraction_requires_exact_user_quote() -> None:
     """验证只有用户消息中的精确原文可以形成长期记忆。"""
-    claim = _claim(
-        [_message(1, MessageRole.USER, "我只使用公制单位")]
-    )
+    claim = _claim([_message(1, MessageRole.USER, "我只使用公制单位")])
     result = ExtractionResult(
         summary="用户要求使用公制单位。",
         candidates=[
@@ -168,7 +165,26 @@ def test_extraction_requires_exact_user_quote() -> None:
     )
     accepted = _validated_candidates(claim, result)
     check_equal("精确用户原文候选数量", len(accepted), 1)
-    check_equal("精确用户原文候选键", accepted[0].scope_key, "PREFERENCE:unit_system")
+    check_equal("精确用户原文候选键", accepted[0].memory_key, "unit_system")
+    check_equal("精确用户原文候选类别", accepted[0].category, "user.preference")
+
+
+def test_extraction_rejects_value_not_supported_by_quote() -> None:
+    """验证真实原文不能为模型捏造的另一项事实背书。"""
+    claim = _claim([_message(1, MessageRole.USER, "我只使用公制单位")])
+    result = ExtractionResult(
+        summary="",
+        candidates=[
+            ExtractionCandidate(
+                category=UserMemoryCategory.PREFERENCE,
+                key="unit_system",
+                value="英制",
+                supporting_user_quote="我只使用公制单位",
+                evidence_message_uids=["message-1"],
+            )
+        ],
+    )
+    check_equal("原文不支持候选值", _validated_candidates(claim, result), [])
 
 
 def test_extraction_rejects_assistant_guess_and_ambiguous_confirmation() -> None:

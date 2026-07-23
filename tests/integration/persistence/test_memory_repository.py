@@ -52,7 +52,7 @@ async def test_memory_repository() -> None:
             check_equal(
                 "test_memory_repository 检查点 2",
                 [event.event_type for event in history.items] if history else [],
-                [MemoryEventType.ADD],
+                [MemoryEventType.ADD, MemoryEventType.NOOP],
             )
             outbox_count = await session.scalar(
                 select(func.count())
@@ -79,7 +79,11 @@ async def test_memory_repository() -> None:
             check_equal(
                 "test_memory_repository 检查点 5",
                 [event.event_type for event in history.items] if history else [],
-                [MemoryEventType.ADD, MemoryEventType.DELETE],
+                [
+                    MemoryEventType.ADD,
+                    MemoryEventType.NOOP,
+                    MemoryEventType.DELETE,
+                ],
             )
             await repository.upsert_candidates(candidates)
         async with MySQLDatabase.session() as session:

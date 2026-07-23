@@ -37,14 +37,18 @@ async def _force_memory_failure(
         insert(agent_memory).values(
             uid=None,
             source="forced_failure",
-            kind="SEMANTIC_DECISION",
-            scope_key="forced_failure",
+            category="ddl.semantic",
+            memory_key="forced_failure",
+            active_key="0" * 64,
+            content_schema="ddl.semantic.v1",
             schema_fingerprint="0" * 64,
             memory_text="forced",
             content={},
             content_hash="0" * 64,
             trust="model_validated",
             status="ACTIVE",
+            importance_score=0.5,
+            lifecycle_policy="FINGERPRINT_BOUND",
             content_version=app_config.memory.content_version,
             projection_version=app_config.memory.projection_version,
             created_job_id="forced",
@@ -122,8 +126,8 @@ async def test_meta_memory_outbox_atomicity() -> None:
             )
         check_equal(
             "test_meta_memory_outbox_atomicity 检查点 3",
-            memory_count,
             event_count,
+            (memory_count or 0) * 2,
         )
 
         original = MemoryRepository.upsert_candidates

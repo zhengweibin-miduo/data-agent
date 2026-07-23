@@ -15,7 +15,7 @@ from data_agent.conversation.repository import ConversationRepository
 from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.memory.application.search import MemorySearchService
 from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
-from data_agent.ddl_metadata.models.memory import MemoryKind
+from data_agent.ddl_metadata.models.memory import BuiltinMemoryCategory
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
 
@@ -103,9 +103,9 @@ class ConversationService:
     ) -> StartTurnResponse:
         """先提交用户消息，再读取有界上下文。"""
         async with MySQLDatabase.session() as session:
-            message, conversation = await ConversationRepository(
-                session
-            ).start_turn(user_id, conversation_uid, turn_uid, content)
+            message, conversation = await ConversationRepository(session).start_turn(
+                user_id, conversation_uid, turn_uid, content
+            )
         context = await self._context(
             user_id,
             int(conversation["id"]),
@@ -156,9 +156,7 @@ class ConversationService:
                 user_id,
                 conversation_id,
                 after_id=(
-                    int(str(summary_through))
-                    if summary_through is not None
-                    else None
+                    int(str(summary_through)) if summary_through is not None else None
                 ),
                 limit=app_config.conversation.context_message_limit,
             )
@@ -166,7 +164,12 @@ class ConversationService:
             query,
             CONVERSATION_MEMORY_SOURCE,
             user_id=user_id,
-            kinds={MemoryKind.USER_MEMORY},
+            categories={
+                BuiltinMemoryCategory.USER_PROFILE.value,
+                BuiltinMemoryCategory.USER_PREFERENCE.value,
+                BuiltinMemoryCategory.USER_CONSTRAINT.value,
+                BuiltinMemoryCategory.USER_BUSINESS_RULE.value,
+            },
             limit=app_config.memory.search_limit,
         )
         remaining = app_config.conversation.context_max_chars

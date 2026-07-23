@@ -48,8 +48,10 @@ data_agent.conversation_memory_outbox
   INDEX(available_at, lease_expires_at, id)
 
 data_agent.agent_memory
+  category + memory_key identify a logical fact
+  active_key UNIQUE enforces one ACTIVE version per logical fact
   user_id NULL for DDL memory
-  user_id NOT NULL and source=data_agent_conversation for USER_MEMORY
+  user_id NOT NULL and source=data_agent_conversation for user.* categories
 ```
 
 `docs/docker/mysql/data_agent.sql` defines a fresh environment.
@@ -67,7 +69,7 @@ text bounded by `conversation.max_message_chars`.
 Starting a turn atomically inserts the user message and sets
 `active_turn_uid`. It returns the persisted message plus a bounded context:
 the current summary, recent messages after its cursor, and relevant active
-`USER_MEMORY` rows for the same `user_id`. Completing a turn atomically inserts
+`user.*` rows for the same `user_id`. Completing a turn atomically inserts
 the assistant message, inserts one extraction outbox row, releases the active
 turn, and only then reports success. Replaying the same `turn_uid` and content
 returns the existing result.
@@ -83,13 +85,17 @@ commits a short lease before calling the LLM, and bounds each claim wave by LLM
 concurrency. A candidate is accepted only when its exact user quote occurs in
 an owned evidence message. An assistant conclusion additionally requires the
 assistant quote and a later user message that repeats that conclusion.
-Summary cursors only advance.
+Summary cursors only advance. Because `available_at` is written by a MySQL
+default, claim eligibility and lease expiry also use MySQL `NOW()`; mixing the
+application clock with the database clock can hide newly created work during
+clock drift.
 
 Required YAML keys are:
 
 ```yaml
 memory:
-  projection_version: v1
+  content_version: v2
+  projection_version: v2
 conversation:
   max_message_chars: 32768
   context_message_limit: 20
@@ -123,7 +129,7 @@ the purge worker physically remove memory, links, and events.
 ### 5. Good / Base / Bad Cases
 
 - Good: a user says `I prefer concise answers`; the exact quote and message UID
-  produce one scoped `USER_MEMORY`, which is recalled in another conversation
+  produce one `user.preference` fact keyed by `answer_style`, which is recalled in another conversation
   for the same user.
 - Good: an assistant proposes a business rule and a later user message repeats
   the rule explicitly; both messages are referenced and the confirmed
@@ -150,13 +156,16 @@ the purge worker physically remove memory, links, and events.
   ambiguous-confirmation rejection, explicit later confirmation acceptance,
   unrelated-statement rejection, one candidate per user scope, oldest-turn
   claiming, bounded concurrency, lease compare-and-set, and monotonic summaries.
-- Memory tests must assert `user_id` in UID/scope/hash authority, superseding
-  corrections, soft delete, delete outbox replay, delete-before-purge ordering,
-  ES/Qdrant filters, and MySQL post-search authority checks.
-- Configuration tests must assert initial projection version `v1`. Migration
-  tests must compare SQLAlchemy MySQL DDL with bootstrap and upgrade SQL and
-  preserve DDL memory rows. Explicit ES/Qdrant recreation and rebuild is
-  required only after an incompatible change to a published projection.
+- Memory tests must assert `user_id` in UID/scope/hash authority, duplicate
+  `NOOP`, versioned corrections, `SUPERSEDED` history, expiry, soft delete,
+  delete outbox replay, delete-before-purge ordering, ES/Qdrant category
+  filters, and MySQL post-search authority checks. Raw metric questions and
+  answers remain evidence inside `ddl.metric`; they are not memory rows.
+- Configuration tests must assert content/projection version `v2`. Schema tests
+  must compare SQLAlchemy MySQL DDL with the fresh bootstrap contract. This
+  rebuild intentionally does not migrate old memory rows; an incompatible
+  environment requires exact-target MySQL reprovisioning followed by explicit
+  ES/Qdrant recreation and full projection rebuild.
 - The quality gate is `uv lock --check`, Ruff, Pyright, `compileall`, settings
   load, non-integration pytest, compose rendering, SQLAlchemy MySQL DDL
   compilation, and `git diff --check`. Run live dependency tests only when
@@ -178,14 +187,12 @@ return hits[:limit]
 candidate_uids = await qdrant.search(
     query,
     user_id=user_id,
-    kind="USER_MEMORY",
+    categories={"user.preference", "user.constraint"},
     source="data_agent_conversation",
 )
 return await memory_repository.get_many_active(
     candidate_uids,
     user_id=user_id,
-    kind="USER_MEMORY",
-    source="data_agent_conversation",
 )
 ```
 

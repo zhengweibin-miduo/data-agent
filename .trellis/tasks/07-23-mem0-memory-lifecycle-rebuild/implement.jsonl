@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/conversation-memory.md","reason":"Authoritative conversation, extraction, memory, deletion, and tenant-isolation contracts."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLAlchemy Core, MySQL bootstrap, transaction, and repository rules for the rebuilt authority schema."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Required placement and dependency boundaries for backend modules."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Elasticsearch, Qdrant, Redis, TEI, and async resource integration contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Retry, state transition, cleanup, and API error behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace the incompatible contract across models, repositories, workers, indexes, APIs, and tests."}

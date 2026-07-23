@@ -14,7 +14,7 @@ from data_agent.ddl_metadata.memory.application.snapshots import (
 )
 from data_agent.ddl_metadata.models.jobs import DDLJobRequest
 from data_agent.ddl_metadata.models.memory import (
-    MemoryKind,
+    BuiltinMemoryCategory,
     SemanticDecisionContent,
 )
 from data_agent.ddl_metadata.parsing import parse_ddl
@@ -258,7 +258,6 @@ async def test_memory_api() -> None:
     metadata = semantic_for(schema, fact=False)
     await MetadataSnapshotService().persist(schema, metadata, [], [], [])
     target = SemanticDecisionContent(
-        kind=MemoryKind.SEMANTIC_DECISION,
         table=metadata.tables[0],
     )
     app = create_app()
@@ -274,7 +273,7 @@ async def test_memory_api() -> None:
                     params={
                         "query": schema.tables[0].id,
                         "source": source,
-                        "kind": MemoryKind.SEMANTIC_DECISION.value,
+                        "category": BuiltinMemoryCategory.DDL_SEMANTIC.value,
                     },
                 )
                 check_equal("test_memory_api 检查点 1", search.status_code, 200)
@@ -282,9 +281,7 @@ async def test_memory_api() -> None:
                 check_equal("test_memory_api 检查点 2", len(items), 1)
                 memory_uid = items[0]["memory"]["uid"]
 
-                detail = await client.get(
-                    f"/api/v1/metadata/memories/{memory_uid}"
-                )
+                detail = await client.get(f"/api/v1/metadata/memories/{memory_uid}")
                 check_equal("test_memory_api 检查点 3", detail.status_code, 200)
                 history = await client.get(
                     f"/api/v1/metadata/memories/{memory_uid}/history"
@@ -306,15 +303,19 @@ async def test_memory_api() -> None:
                 )
                 patch_body = {
                     "content": corrected.model_dump(mode="json"),
+                    "expected_version": 1,
                 }
                 updated = await client.patch(
                     f"/api/v1/metadata/memories/{memory_uid}",
                     json=patch_body,
                 )
                 check_equal("test_memory_api 检查点 5", updated.status_code, 200)
+                updated_body = updated.json()
+                active_uid = updated_body["memory_uid"]
+                active_version = updated_body["record_version"]
                 repeated = await client.patch(
-                    f"/api/v1/metadata/memories/{memory_uid}",
-                    json=patch_body,
+                    f"/api/v1/metadata/memories/{active_uid}",
+                    json={**patch_body, "expected_version": active_version},
                 )
                 check_equal("test_memory_api 检查点 6", repeated.status_code, 409)
                 check_equal(
@@ -324,7 +325,8 @@ async def test_memory_api() -> None:
                 )
 
                 deleted = await client.delete(
-                    f"/api/v1/metadata/memories/{memory_uid}"
+                    f"/api/v1/metadata/memories/{active_uid}",
+                    params={"expected_version": active_version},
                 )
                 check_equal("test_memory_api 检查点 8", deleted.status_code, 200)
                 absent = await client.get(

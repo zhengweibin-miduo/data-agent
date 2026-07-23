@@ -90,8 +90,10 @@ Contracts:
 - Table and column identifiers come from
   `data_agent.ddl_metadata.persistence.tables`, never interpolated request or
   model output.
-- MySQL upserts use `sqlalchemy.dialects.mysql.insert()` with explicit update
-  columns.
+- Idempotent snapshot and outbox desired-state writes use
+  `sqlalchemy.dialects.mysql.insert()` with explicit update columns. Immutable
+  authority versions use plain inserts after lifecycle comparison; duplicates
+  become audited `NOOP` decisions instead of in-place content updates.
 - Repository methods accept and return typed application contracts or bounded
   row projections; JSON is decoded through the central memory parser.
 - Service code owns the transaction boundary. Repositories can share one
@@ -127,7 +129,8 @@ configured application memory database it:
 1. upserts submitted table, column, metric, and column/metric rows;
 2. removes stale links and columns only for submitted table IDs;
 3. removes metrics that became orphaned through that scoped cleanup;
-4. upserts accepted authoritative memories, ADD history, and typed links; and
+4. applies explicit `ADD/UPDATE/MERGE/DELETE/NOOP` decisions, version history,
+   typed links, and the database-unique active slot; and
 5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`.
 
 Stable SHA-256 IDs and the unique memory-link triple make re-execution safe
@@ -137,21 +140,26 @@ outbox state. Tables absent from the submitted DDL are outside cleanup scope.
 No repository write is permitted while a graph waits for user input or before
 deterministic validation succeeds.
 
-Memory updates use a separate managed transaction: validate kind, scope, and
-current Meta references, then append a user-confirmed UPDATE event. They do not
-patch active authoritative content or Meta; the source must pass through the
-DDL workflow again. DELETE is an audited soft delete plus two DELETE outbox rows.
+Memory updates use a separate managed transaction: validate category, stable
+memory key, expected record version, and current Meta references, then create a
+new user-confirmed ACTIVE version and mark the old row SUPERSEDED. They do not
+patch Meta directly; the next DDL workflow consumes the new authority. DELETE
+is an audited soft delete plus two DELETE outbox rows. Exact duplicate content
+records NOOP history but creates no version or projection work.
+
+`agent_memory.memory_key` is bounded to 256 characters. Its exact-lookup
+composite index also contains source, category, fingerprint, and status; a 512
+character key exceeds InnoDB's 3072-byte index limit under `utf8mb4`.
 
 Derived-index rebuilding reads at most `memory.rebuild_batch_size` ACTIVE rows
 after an explicit numeric cursor and writes two UPSERT outbox rows per UID.
 Rebuild explicitly recreates only the configured project ES index and Qdrant
 collection; MySQL content is never reconstructed from an index payload.
 
-Exact metric-memory reuse batch-loads outgoing `DERIVED_FROM` targets from active
-metric definitions and includes only the referenced question/answer audit
-records. Immutable historical answers may remain `NORMAL`, but an unrelated
-audit record must not become current graph context merely because its schema
-fingerprint matches.
+Exact metric-memory reuse batch-loads outgoing `DERIVED_FROM` semantic targets
+from active metric definitions. Raw metric questions and answers remain typed
+evidence inside the final `ddl.metric` content; they are not separate durable
+memory rows and cannot independently become current graph context.
 
 ### 4. Validation & Error Matrix
 
@@ -205,10 +213,10 @@ async with MySQLDatabase.session() as session:
 No migration tool or migration directory exists. Local MySQL bootstrap
 initializes the `dw`, `meta`, and application `data_agent` databases from
 `docs/docker/mysql/`. `meta.sql` contains only `table_info`, `column_info`,
-`metric_info`, and `column_metric`; `data_agent.sql` idempotently owns
-`agent_memory`, `agent_memory_event`, `agent_memory_link`, and
-`memory_index_outbox`. SQLAlchemy Core definitions must remain
-compatible with those bootstrap schemas. Integration fixtures may call
+`metric_info`, and `column_metric`; `data_agent.sql` defines the fresh
+conversation schema plus `agent_memory`, `agent_memory_event`,
+`agent_memory_link`, and `memory_index_outbox`. SQLAlchemy Core definitions must
+remain compatible with those bootstrap schemas. Integration fixtures may call
 `metadata.create_all()` using the default `meta` connection because the memory
 tables are schema-qualified, but they are not a production migration
 mechanism.
@@ -250,12 +258,14 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
   `COMMENT`, and every business column has a Chinese column-level `COMMENT`.
   Comments explain business meaning without changing types, constraints,
   indexes, foreign keys, seed data, or statement order.
-- Ownership: `meta.sql` owns exactly the four Meta tables.
-  `data_agent.sql` uses InnoDB and owns exactly the four application memory
-  tables and does not manage retired memory contracts.
-- Existing volume: entrypoint scripts do not rerun. Apply `data_agent.sql`
-  explicitly through the local root account when the current application
-  memory tables are missing; never touch Meta tables.
+- Ownership: `meta.sql` owns exactly the four Meta tables. `data_agent.sql` uses
+  InnoDB and owns the application conversation tables plus exactly four
+  long-term-memory lifecycle tables; it does not manage retired memory
+  contracts.
+- Existing volume: entrypoint scripts do not rerun. Applying `data_agent.sql`
+  explicitly can create missing objects but cannot upgrade an incompatible old
+  memory schema. Reprovision only the exact confirmed application-memory
+  targets in an approved environment; never touch Meta tables.
 
 ### 4. Validation & Error Matrix
 

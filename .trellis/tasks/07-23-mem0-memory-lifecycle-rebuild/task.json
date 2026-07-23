@@ -1,0 +1,29 @@
+{
+  "id": "mem0-memory-lifecycle-rebuild",
+  "name": "mem0-memory-lifecycle-rebuild",
+  "title": "重建 Mem0 风格长期记忆生命周期模型",
+  "description": "Replace fixed MemoryKind with an extensible Mem0-style category, decision, lifecycle, version-history, retrieval, and clean projection rebuild model.",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "conversation-memory",
+  "package": "backend",
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-07-23",
+  "completedAt": null,
+  "branch": "refactor/mem0-memory-lifecycle-20260723",
+  "base_branch": "master",
+  "worktree_path": "D:\\worktrees\\data-agent\\data-agent-repo\\.trellis\\worktrees\\07-23-mem0-memory-lifecycle-rebuild",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/spec/backend/conversation-memory.md",
+    "src/data_agent"
+  ],
+  "notes": "No backward compatibility or old-row migration. Destructive MySQL/ES/Qdrant recreation requires a separate exact-target approval before execution.",
+  "meta": {}
+}

@@ -72,3 +72,10 @@ async def purge_user_memories(ctx: dict[Any, Any]) -> None:
     del ctx
     async with MySQLDatabase.session() as session:
         await MemoryRepository(session).purge_ready_user_memories()
+
+
+async def expire_memories(ctx: dict[Any, Any]) -> None:
+    """周期性失效到期记忆并投递索引删除。"""
+    del ctx
+    async with MySQLDatabase.session() as session:
+        await MemoryRepository(session).expire_due()

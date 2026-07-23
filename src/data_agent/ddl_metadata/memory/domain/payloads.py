@@ -5,8 +5,10 @@ import json
 
 from data_agent.ddl_metadata.models.memory import (
     MemoryContent,
-    MemoryKind,
     MemoryProjection,
+    MetricDefinitionContent,
+    SemanticDecisionContent,
+    UserMemoryContent,
 )
 
 _MAX_MEMORY_TEXT_LENGTH = 2048
@@ -29,27 +31,25 @@ def memory_content_hash(content: MemoryContent) -> str:
 
 def content_object_ids(content: MemoryContent) -> list[str]:
     """提取规范内容引用的物理或 Meta 对象标识。"""
-    if content.kind == MemoryKind.SEMANTIC_DECISION:
+    if isinstance(content, SemanticDecisionContent):
         if content.table is not None:
             return [content.table.table_id]
         if content.column is not None:
             return [content.column.column_id]
-    elif content.kind == MemoryKind.METRIC_QUESTION:
-        return [content.question.fact_table_id, *content.question.column_ids]
-    elif content.kind == MemoryKind.METRIC_DEFINITION:
+    elif isinstance(content, MetricDefinitionContent):
         return [
             content.metric.id,
             content.metric.fact_table_id,
             *content.metric.relevant_column_ids,
         ]
-    elif content.kind == MemoryKind.USER_MEMORY:
+    elif isinstance(content, UserMemoryContent):
         return list(content.evidence_message_uids)
     return []
 
 
 def build_memory_text(content: MemoryContent) -> str:
     """从已验证内容生成自包含、有界且稳定的检索文本。"""
-    if content.kind == MemoryKind.SEMANTIC_DECISION:
+    if isinstance(content, SemanticDecisionContent):
         decision = content.table or content.column
         if decision is None:
             raise ValueError("语义决策缺少对象")
@@ -61,39 +61,25 @@ def build_memory_text(content: MemoryContent) -> str:
             raise ValueError("语义决策缺少对象")
         text = "；".join(
             (
-                f"类型：{content.kind.value}",
+                "类型：ddl.semantic",
                 f"对象：{object_id}",
                 f"角色：{decision.role.value}",
                 f"描述：{decision.description}",
                 f"别名：{'、'.join(sorted(decision.aliases))}",
             )
         )
-    elif content.kind == MemoryKind.METRIC_QUESTION:
-        question = content.question
-        text = (
-            f"类型：{content.kind.value}；问题标识：{question.question_id}；"
-            f"问题：{question.prompt}；事实表：{question.fact_table_id}；"
-            f"相关列：{'、'.join(sorted(question.column_ids))}"
-        )
-    elif content.kind == MemoryKind.USER_ANSWER:
-        answer = content.answer
-        text = (
-            f"类型：{content.kind.value}；问题标识：{answer.question_id}；"
-            f"用户确认回答：{answer.answer}"
-        )
-    elif content.kind == MemoryKind.METRIC_DEFINITION:
+    elif isinstance(content, MetricDefinitionContent):
         metric = content.metric
         text = (
-            f"类型：{content.kind.value}；指标：{metric.name}；"
+            f"类型：ddl.metric；指标：{metric.name}；"
             f"定义：{metric.definition}；事实表：{metric.fact_table_id}；"
             f"相关列：{'、'.join(sorted(metric.relevant_column_ids))}；"
             f"别名：{'、'.join(sorted(metric.aliases))}"
         )
+    elif isinstance(content, UserMemoryContent):
+        text = f"类型：user.fact；用户确认事实：{content.value}"
     else:
-        text = (
-            f"类型：{content.category.value}；键：{content.key}；"
-            f"用户确认事实：{content.value}"
-        )
+        text = json.dumps(content.data, ensure_ascii=False, sort_keys=True)
     return text[:_MAX_MEMORY_TEXT_LENGTH]
 
 

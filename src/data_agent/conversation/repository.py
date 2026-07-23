@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -399,7 +399,6 @@ class ConversationRepository:
         message_limit: int,
     ) -> list[ClaimedExtraction]:
         """短事务领取到期任务并加载同租户有界消息。"""
-        now = datetime.now(UTC).replace(tzinfo=None)
         earlier = conversation_memory_outbox.alias("earlier_extraction")
         earliest_in_conversation = (
             select(func.min(earlier.c.id))
@@ -417,10 +416,11 @@ class ConversationRepository:
                     .where(
                         conversation_memory_outbox.c.id
                         == earliest_in_conversation,
-                        conversation_memory_outbox.c.available_at <= now,
+                        conversation_memory_outbox.c.available_at <= func.now(),
                         or_(
                             conversation_memory_outbox.c.lease_token.is_(None),
-                            conversation_memory_outbox.c.lease_expires_at <= now,
+                            conversation_memory_outbox.c.lease_expires_at
+                            <= func.now(),
                         ),
                     )
                     .order_by(conversation_memory_outbox.c.id)
@@ -437,7 +437,11 @@ class ConversationRepository:
                 .where(conversation_memory_outbox.c.id == int(row["id"]))
                 .values(
                     lease_token=token,
-                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                    lease_expires_at=func.timestampadd(
+                        text("SECOND"),
+                        lease_seconds,
+                        func.now(),
+                    ),
                 )
             )
             conversation = (

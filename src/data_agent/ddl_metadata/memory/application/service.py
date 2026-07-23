@@ -13,17 +13,21 @@ from data_agent.ddl_metadata.memory.domain.payloads import (
     content_object_ids,
     memory_content_hash,
 )
+from data_agent.ddl_metadata.memory.domain.policies import category_policy
 from data_agent.ddl_metadata.memory.mysql.repository import (
     MemoryRepository,
     StoredMemory,
 )
 from data_agent.ddl_metadata.models.memory import (
+    BuiltinMemoryCategory,
+    MemoryActorType,
     MemoryCandidate,
     MemoryContent,
+    MemoryDecision,
     MemoryDeleteResponse,
     MemoryDetail,
     MemoryHistoryPage,
-    MemoryKind,
+    MemoryLinkType,
     MemorySearchResponse,
     MemoryStatus,
     MemoryTrust,
@@ -52,14 +56,14 @@ class MemoryService:
         query: str,
         source: str,
         *,
-        kinds: set[MemoryKind] | None,
+        categories: set[str] | None,
         limit: int,
     ) -> MemorySearchResponse:
         """执行有界混合检索并回查 MySQL 权威内容。"""
         return await self._search.search(
             query,
             source,
-            kinds=kinds,
+            categories=categories,
             limit=limit,
         )
 
@@ -75,7 +79,12 @@ class MemoryService:
             query,
             _CONVERSATION_SOURCE,
             user_id=user_id,
-            kinds={MemoryKind.USER_MEMORY},
+            categories={
+                BuiltinMemoryCategory.USER_PROFILE.value,
+                BuiltinMemoryCategory.USER_PREFERENCE.value,
+                BuiltinMemoryCategory.USER_CONSTRAINT.value,
+                BuiltinMemoryCategory.USER_BUSINESS_RULE.value,
+            },
             limit=limit,
         )
 
@@ -130,6 +139,7 @@ class MemoryService:
         uid: str,
         content: MemoryContent,
         *,
+        expected_version: int,
         user_id: str | None = None,
     ) -> MemoryUpdateResponse:
         """记录用户确认修正，要求完整 DDL 重处理后再成为活动事实。"""
@@ -141,6 +151,13 @@ class MemoryService:
                 "只能修正活动记忆",
                 http_status=409,
             )
+        if target.detail.record_version != expected_version:
+            raise DDLMetadataError(
+                "stale_memory",
+                "memory_update",
+                "目标记忆版本已发生变化",
+                http_status=409,
+            )
         normalized = self._normalize_content(target.detail, content)
         if memory_content_hash(normalized) == target.detail.content_hash:
             raise DDLMetadataError(
@@ -150,44 +167,36 @@ class MemoryService:
                 http_status=409,
             )
         if user_id is not None:
-            return await self._update_user_memory(target, normalized, user_id)
+            return await self._replace_memory(
+                target,
+                normalized,
+                user_id=user_id,
+                expected_version=expected_version,
+            )
         async with self._jobs.mutation_lease(target.detail.source):
-            async with MySQLDatabase.session() as session:
-                repository = MemoryRepository(session)
-                current = await repository.get_by_uid(uid, user_id=user_id)
-                if current is None or current.detail.status != MemoryStatus.ACTIVE:
-                    raise DDLMetadataError(
-                        "stale_memory",
-                        "memory_update",
-                        "目标记忆已发生变化",
-                        http_status=409,
-                    )
-                pending = await repository.latest_user_update(current.id)
-                if (
-                    pending is not None
-                    and memory_content_hash(pending) == memory_content_hash(normalized)
-                ):
-                    raise DDLMetadataError(
-                        "unchanged_update",
-                        "memory_update",
-                        "修正内容与待重处理内容相同",
-                        http_status=409,
-                    )
-                await self._validate_meta_references(session, normalized)
-                event_id = await repository.append_user_update(
-                    current,
-                    normalized,
-                )
-        return MemoryUpdateResponse(memory_uid=uid, event_id=event_id)
+            return await self._replace_memory(
+                target,
+                normalized,
+                user_id=None,
+                expected_version=expected_version,
+            )
 
     async def delete(
         self,
         uid: str,
         *,
+        expected_version: int,
         user_id: str | None = None,
     ) -> MemoryDeleteResponse:
         """在来源租约内执行可审计软删除。"""
         target = await self._get_stored(uid, user_id=user_id)
+        if target.detail.record_version != expected_version:
+            raise DDLMetadataError(
+                "stale_memory",
+                "memory_delete",
+                "目标记忆版本已发生变化",
+                http_status=409,
+            )
         if user_id is not None:
             async with MySQLDatabase.session() as session:
                 current = await MemoryRepository(session).get_by_uid(
@@ -202,18 +211,32 @@ class MemoryService:
                         "记忆不存在",
                         http_status=404,
                     )
+                if current.detail.record_version != expected_version:
+                    raise DDLMetadataError(
+                        "stale_memory",
+                        "memory_delete",
+                        "目标记忆版本已发生变化",
+                        http_status=409,
+                    )
                 await MemoryRepository(session).soft_delete(current)
             return MemoryDeleteResponse(memory_uid=uid)
         async with self._jobs.mutation_lease(target.detail.source):
             async with MySQLDatabase.session() as session:
                 repository = MemoryRepository(session)
-                current = await repository.get_by_uid(uid)
+                current = await repository.get_by_uid(uid, for_update=True)
                 if current is None:
                     raise DDLMetadataError(
                         "memory_not_found",
                         "memory_delete",
                         "记忆不存在",
                         http_status=404,
+                    )
+                if current.detail.record_version != expected_version:
+                    raise DDLMetadataError(
+                        "stale_memory",
+                        "memory_delete",
+                        "目标记忆版本已发生变化",
+                        http_status=409,
                     )
                 await repository.soft_delete(current)
         return MemoryDeleteResponse(memory_uid=uid)
@@ -244,10 +267,10 @@ class MemoryService:
         target: MemoryDetail,
         content: MemoryContent,
     ) -> MemoryContent:
-        """固定 kind 和对象身份，阻止修正越过原作用域。"""
-        if MemoryKind(content.kind) != target.kind:
+        """固定类别和对象身份，阻止修正越过原作用域。"""
+        if type(content) is not type(target.content):
             raise DDLMetadataError(
-                "memory_kind_conflict",
+                "memory_category_conflict",
                 "memory_update",
                 "修正内容类型必须与目标一致",
                 http_status=409,
@@ -255,36 +278,22 @@ class MemoryService:
         if isinstance(content, UserMemoryContent):
             if not isinstance(target.content, UserMemoryContent):
                 raise DDLMetadataError(
-                    "memory_kind_conflict",
+                    "memory_category_conflict",
                     "memory_update",
                     "目标记忆内容类型不一致",
                     http_status=409,
                 )
-            if (
-                content.category != target.content.category
-                or content.key.casefold() != target.content.key.casefold()
-            ):
-                raise DDLMetadataError(
-                    "memory_scope_conflict",
-                    "memory_update",
-                    "用户记忆修正必须保留类别和键",
-                    http_status=409,
-                )
             return content.model_copy(
                 update={
-                    "supporting_user_quote": (
-                        target.content.supporting_user_quote
-                    ),
-                    "evidence_message_uids": (
-                        target.content.evidence_message_uids
-                    ),
+                    "supporting_user_quote": (target.content.supporting_user_quote),
+                    "evidence_message_uids": (target.content.evidence_message_uids),
                     "confirmed_assistant_message_uid": (
                         target.content.confirmed_assistant_message_uid
                     ),
                 }
             )
         if isinstance(content, SemanticDecisionContent):
-            if content_object_ids(content) != [target.scope_key]:
+            if content_object_ids(content) != [target.memory_key]:
                 raise DDLMetadataError(
                     "memory_scope_conflict",
                     "memory_update",
@@ -294,17 +303,24 @@ class MemoryService:
             return content.model_copy(update={"trust": "user_confirmed"})
         if not isinstance(content, MetricDefinitionContent):
             raise DDLMetadataError(
-                "immutable_memory_kind",
+                "immutable_memory_category",
                 "memory_update",
-                "问题和回答事实不可直接修正",
+                "该记忆类别不可直接修正",
+                http_status=409,
+            )
+        if not isinstance(target.content, MetricDefinitionContent):
+            raise DDLMetadataError(
+                "memory_category_conflict",
+                "memory_update",
+                "目标记忆内容类型不一致",
                 http_status=409,
             )
         metric = content.metric
-        if (metric.id and metric.id != target.scope_key) or metric_id(
+        if (metric.id and metric.id != target.memory_key) or metric_id(
             target.source,
             metric.fact_table_id,
             metric.name,
-        ) != target.scope_key:
+        ) != target.memory_key:
             raise DDLMetadataError(
                 "memory_scope_conflict",
                 "memory_update",
@@ -314,48 +330,67 @@ class MemoryService:
         return content.model_copy(
             update={
                 "trust": "user_confirmed",
-                "metric": metric.model_copy(update={"id": target.scope_key}),
+                "metric": metric.model_copy(update={"id": target.memory_key}),
+                "questions": target.content.questions,
+                "answers": target.content.answers,
             }
         )
 
-    async def _update_user_memory(
+    async def _replace_memory(
         self,
         target: StoredMemory,
         content: MemoryContent,
-        user_id: str,
+        *,
+        user_id: str | None,
+        expected_version: int,
     ) -> MemoryUpdateResponse:
-        """用新的用户确认事实替代旧活动记忆。"""
-        if not isinstance(content, UserMemoryContent):
-            raise DDLMetadataError(
-                "immutable_memory_kind",
-                "memory_update",
-                "用户路由只允许修正跨会话用户记忆",
-                http_status=409,
-            )
+        """以新活动版本替代旧事实并保留完整历史。"""
         content_json = canonical_content_json(content)
+        policy = category_policy(target.detail.category)
+        uid_source = (
+            f"{target.detail.source}:{user_id}"
+            if user_id is not None
+            else target.detail.source
+        )
         uid = build_memory_uid(
-            f"{_CONVERSATION_SOURCE}:{user_id}",
-            MemoryKind.USER_MEMORY.value,
-            target.detail.scope_key,
-            target.detail.schema_fingerprint,
+            uid_source,
+            target.detail.category,
+            target.detail.memory_key,
+            target.detail.schema_fingerprint or "",
             content_json,
         )
         candidate = MemoryCandidate(
             uid=uid,
-            source=_CONVERSATION_SOURCE,
+            source=target.detail.source,
             user_id=user_id,
             created_conversation_uid=target.detail.created_conversation_uid,
             created_message_uid=target.detail.created_message_uid,
-            kind=MemoryKind.USER_MEMORY,
-            scope_key=target.detail.scope_key,
+            category=target.detail.category,
+            memory_key=target.detail.memory_key,
+            content_schema=policy.content_schema,
             schema_fingerprint=target.detail.schema_fingerprint,
             memory_text=build_memory_text(content),
             content=content,
             content_hash=memory_content_hash(content),
-            trust=MemoryTrust.USER_CONFIRMED,
+            trust=MemoryTrust(content.trust),
             content_version=app_config.memory.content_version,
             projection_version=app_config.memory.projection_version,
+            importance_score=policy.importance_score,
+            lifecycle_policy=policy.lifecycle_policy,
+            expires_at=target.detail.expires_at,
             supersedes_uids=[target.detail.uid],
+            derived_from_uids=[
+                link.linked_memory_uid
+                for link in target.detail.links
+                if link.link_type == MemoryLinkType.DERIVED_FROM
+            ],
+            related_uids=[
+                link.linked_memory_uid
+                for link in target.detail.links
+                if link.link_type == MemoryLinkType.RELATED
+            ],
+            decision=MemoryDecision.UPDATE,
+            actor_type=MemoryActorType.USER,
         )
         async with MySQLDatabase.session() as session:
             repository = MemoryRepository(session)
@@ -364,22 +399,33 @@ class MemoryService:
                 user_id=user_id,
                 for_update=True,
             )
-            if current is None or current.detail.status != MemoryStatus.ACTIVE:
+            if (
+                current is None
+                or current.detail.status != MemoryStatus.ACTIVE
+                or current.detail.record_version != expected_version
+            ):
                 raise DDLMetadataError(
                     "stale_memory",
                     "memory_update",
                     "目标记忆已发生变化",
                     http_status=409,
                 )
+            if user_id is None:
+                await self._validate_meta_references(session, content)
             await repository.upsert_candidates([candidate])
             history = await repository.history(
-                target.detail.uid,
+                uid,
                 user_id=user_id,
                 offset=0,
                 limit=100,
             )
         event_id = history.items[-1].id if history and history.items else 0
-        return MemoryUpdateResponse(memory_uid=uid, event_id=event_id)
+        return MemoryUpdateResponse(
+            memory_uid=uid,
+            event_id=event_id,
+            record_version=expected_version + 1,
+            requires_reprocess=user_id is None,
+        )
 
     async def _validate_meta_references(
         self,

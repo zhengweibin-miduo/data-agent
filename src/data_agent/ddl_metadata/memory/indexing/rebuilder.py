@@ -17,8 +17,22 @@ from data_agent.settings import app_config
 class MemoryIndexRebuilder:
     """从 MySQL 权威记忆重建项目专用派生索引。"""
 
-    async def reset_indexes(self) -> None:
-        """显式清空并重建配置的 ES index 与 Qdrant collection。"""
+    async def reset_indexes(
+        self,
+        *,
+        confirmed_es_index: str,
+        confirmed_qdrant_collection: str,
+    ) -> None:
+        """仅在调用方逐字确认两个配置目标后重建派生索引。"""
+        expected = (
+            app_config.elasticsearch.memory_index,
+            app_config.qdrant.memory_collection,
+        )
+        if (confirmed_es_index, confirmed_qdrant_collection) != expected:
+            raise ValueError(
+                "索引重建目标确认不匹配: "
+                f"Elasticsearch={expected[0]}, Qdrant={expected[1]}"
+            )
         await MemoryElasticsearchIndex(ElasticsearchClient.get_client()).recreate()
         await MemoryQdrantIndex(QdrantClient.get_client()).recreate()
 
