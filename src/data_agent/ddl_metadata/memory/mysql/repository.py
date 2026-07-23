@@ -9,9 +9,15 @@ from sqlalchemy import RowMapping, and_, func, or_, select, true, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from data_agent.ddl_metadata.identifiers import memory_uid
 from data_agent.ddl_metadata.memory.domain.lifecycle import (
     decide_memory,
     semantically_equivalent,
+)
+from data_agent.ddl_metadata.memory.domain.payloads import (
+    build_memory_text,
+    canonical_content_json,
+    memory_content_hash,
 )
 from data_agent.ddl_metadata.memory.domain.policies import (
     category_policy,
@@ -42,6 +48,7 @@ from data_agent.ddl_metadata.models.memory import (
     MemoryLinkType,
     MemoryStatus,
     MemoryTrust,
+    MetricDefinitionContent,
 )
 from data_agent.settings import app_config
 
@@ -81,6 +88,48 @@ def _versioned_uid(base_uid: str, record_version: int) -> str:
     """为重新生效的退役内容生成不可冲突的版本标识。"""
     identity = "\x1f".join((base_uid, str(record_version)))
     return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _merge_metric_content(
+    active_content: MemoryContent,
+    candidate_content: MemoryContent,
+) -> MetricDefinitionContent | None:
+    """按指标槽合并历史问答证据并保留候选指标定义。"""
+    if not isinstance(active_content, MetricDefinitionContent):
+        return None
+    if not isinstance(candidate_content, MetricDefinitionContent):
+        return None
+    questions = {
+        question.question_id: question for question in active_content.questions
+    }
+    questions.update(
+        {question.question_id: question for question in candidate_content.questions}
+    )
+    answers = {answer.question_id: answer for answer in active_content.answers}
+    answers.update({answer.question_id: answer for answer in candidate_content.answers})
+    return candidate_content.model_copy(
+        update={
+            "questions": list(questions.values()),
+            "answers": list(answers.values()),
+        }
+    )
+
+
+def _apply_merged_content(
+    candidate: MemoryCandidate, content: MetricDefinitionContent
+) -> None:
+    """把合并后的内容同步回候选的内容寻址字段和投影文本。"""
+    content_json = canonical_content_json(content)
+    candidate.content = content
+    candidate.content_hash = memory_content_hash(content)
+    candidate.memory_text = build_memory_text(content)
+    candidate.uid = memory_uid(
+        candidate.source,
+        candidate.category,
+        candidate.memory_key,
+        candidate.schema_fingerprint or "",
+        content_json,
+    )
 
 
 def _event_type_for_decision(decision: MemoryDecision | None) -> MemoryEventType:
@@ -266,6 +315,13 @@ class MemoryRepository:
                 candidate.supersedes_uids = []
                 continue
             if candidate.decision in {MemoryDecision.UPDATE, MemoryDecision.MERGE}:
+                if candidate.decision == MemoryDecision.MERGE and active_rows:
+                    merged_content = _merge_metric_content(
+                        _decode_content(active_rows[0]["content"]),
+                        candidate.content,
+                    )
+                    if merged_content is not None:
+                        _apply_merged_content(candidate, merged_content)
                 candidate.supersedes_uids = sorted(
                     {*candidate.supersedes_uids, *active_uids}
                 )
