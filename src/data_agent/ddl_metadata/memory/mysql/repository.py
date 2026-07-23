@@ -335,6 +335,19 @@ class MemoryRepository:
                     )
                     if merged_content is not None:
                         _apply_merged_content(candidate, merged_content)
+                        merged_same_content_row = next(
+                            (
+                                row
+                                for row in active_rows
+                                if str(row["content_hash"]) == candidate.content_hash
+                            ),
+                            None,
+                        )
+                        if merged_same_content_row is not None:
+                            candidate.decision = MemoryDecision.NOOP
+                            candidate.supersedes_uids = []
+                            noop_rows.append((candidate, merged_same_content_row))
+                            continue
                 candidate.supersedes_uids = sorted(
                     {*candidate.supersedes_uids, *active_uids}
                 )

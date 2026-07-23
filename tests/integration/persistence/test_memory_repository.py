@@ -442,7 +442,17 @@ async def test_metric_merge_preserves_complementary_evidence() -> None:
             repository = MemoryRepository(session)
             await repository.upsert_candidates(first_candidates)
             await repository.upsert_candidates(second_candidates)
-            active_metric = await repository.get_by_uid(second_candidates[-1].uid)
+            merged_uid = second_candidates[-1].uid
+            repeated_candidates = build_accepted_memories(
+                schema,
+                semantic,
+                [second_question],
+                [second_answer],
+                [second_metric],
+                job_id=uuid4().hex,
+            )
+            await repository.upsert_candidates(repeated_candidates)
+            active_metric = await repository.get_by_uid(merged_uid)
             if active_metric is None:
                 raise RuntimeError("合并后的指标记忆必须存在")
             if not isinstance(active_metric.content, MetricDefinitionContent):
@@ -476,6 +486,20 @@ async def test_metric_merge_preserves_complementary_evidence() -> None:
                 "test_metric_merge_preserves_complementary_evidence 检查点 4",
                 superseded_count,
                 1,
+            )
+            metric_rows = await session.scalar(
+                select(func.count())
+                .select_from(agent_memory)
+                .where(
+                    agent_memory.c.source == schema.source,
+                    agent_memory.c.category == "ddl.metric",
+                    agent_memory.c.memory_key == first_metric.id,
+                )
+            )
+            check_equal(
+                "test_metric_merge_preserves_complementary_evidence 检查点 5",
+                metric_rows,
+                2,
             )
     finally:
         await cleanup_schema(schema)
