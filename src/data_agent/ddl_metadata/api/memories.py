@@ -7,7 +7,6 @@ from data_agent.ddl_metadata.models.memory import (
     MemoryDeleteResponse,
     MemoryDetail,
     MemoryHistoryPage,
-    MemoryKind,
     MemorySearchResponse,
     MemoryUpdateRequest,
     MemoryUpdateResponse,
@@ -29,14 +28,14 @@ async def search_memories(
     request: Request,
     query: str = Query(min_length=1, max_length=2000),
     source: str = Query(min_length=1, max_length=128),
-    kind: list[MemoryKind] | None = Query(default=None),
+    category: list[str] | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> MemorySearchResponse:
     """按来源、查询和可选类型执行混合检索。"""
     return await _memories(request).search(
         query,
         source,
-        kinds=set(kind) if kind else None,
+        categories=set(category) if category else None,
         limit=limit,
     )
 
@@ -78,7 +77,9 @@ async def update_memory(
     request: Request,
 ) -> MemoryUpdateResponse:
     """记录结构化用户修正并要求重新处理 DDL。"""
-    return await _memories(request).update(memory_uid, body.content)
+    return await _memories(request).update(
+        memory_uid, body.content, expected_version=body.expected_version
+    )
 
 
 @router.delete(
@@ -88,6 +89,9 @@ async def update_memory(
 async def delete_memory(
     memory_uid: str,
     request: Request,
+    expected_version: int = Query(ge=1),
 ) -> MemoryDeleteResponse:
     """执行可审计软删除并排除未来召回。"""
-    return await _memories(request).delete(memory_uid)
+    return await _memories(request).delete(
+        memory_uid, expected_version=expected_version
+    )

@@ -117,6 +117,7 @@ def test_worker_discovery_contract_is_unchanged() -> None:
         [
             "cron:dispatch_pending",
             "cron:expire_waiting",
+            "cron:expire_memories",
             "cron:cleanup_checkpoints",
             "cron:dispatch_memory_index_outbox",
             "cron:extract_conversation_memory",
@@ -129,6 +130,7 @@ def test_worker_discovery_contract_is_unchanged() -> None:
         [
             {0, 10, 20, 30, 40, 50},
             0,
+            1,
             {5, 15, 25, 35, 45, 55},
             {2, 12, 22, 32, 42, 52},
             {4, 14, 24, 34, 44, 54},

@@ -95,11 +95,11 @@ Run the focused TEI test explicitly when that optional local service is
 available.
 
 Before persistence integration tests, CI applies
-`docs/docker/mysql/data_agent.sql` through the root account. Developers reusing
-an initialized Compose volume must do the same once because MySQL entrypoint
-bootstrap scripts run only for an empty volume. This command creates/grants the
-application database and its current memory tables idempotently; it must not be
-replaced with destructive cleanup of Meta tables.
+`docs/docker/mysql/data_agent.sql` through the root account. MySQL entrypoint
+bootstrap scripts run only for an empty volume. Reapplying the script can create
+missing objects but cannot upgrade an incompatible memory schema; developers
+must use a disposable volume or separately approved exact-target reprovisioning.
+Meta tables must never be included in that destructive scope.
 
 No CI test contacts a live LLM. The LLM infrastructure test mocks the
 capability probe; the real worker startup probe is a separate deployment check.

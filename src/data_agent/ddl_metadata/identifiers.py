@@ -29,8 +29,8 @@ def metric_id(source: str, fact_table_id: str, name: str) -> str:
 
 def memory_uid(
     source: str,
-    kind: str,
-    scope_key: str,
+    category: str,
+    memory_key: str,
     schema_fingerprint: str,
     content_json: str,
 ) -> str:
@@ -39,8 +39,8 @@ def memory_uid(
     return stable_id(
         "memory",
         source,
-        kind,
-        scope_key,
+        category,
+        memory_key,
         schema_fingerprint,
         content_hash,
     )

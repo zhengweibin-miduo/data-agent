@@ -172,6 +172,39 @@ class MetadataRepository:
                 )
             )
 
+    async def fingerprint_expiration_memory_keys(
+        self,
+        schema: PhysicalSchema,
+        metrics: list[MetricMetadata],
+    ) -> set[str]:
+        """查询本次提交范围内所有可能需要指纹失效的记忆键。"""
+        submitted_table_ids = {table.id for table in schema.tables}
+        current_column_ids = {
+            column.id for table in schema.tables for column in table.columns
+        }
+        existing_column_ids = set(
+            (
+                await self._session.scalars(
+                    select(column_info.c.id).where(
+                        column_info.c.table_id.in_(submitted_table_ids)
+                    )
+                )
+            ).all()
+        )
+        scoped_column_ids = existing_column_ids | current_column_ids
+        impacted_metric_ids = {metric.id for metric in metrics}
+        if scoped_column_ids:
+            impacted_metric_ids.update(
+                (
+                    await self._session.scalars(
+                        select(column_metric.c.metric_id).where(
+                            column_metric.c.column_id.in_(scoped_column_ids)
+                        )
+                    )
+                ).all()
+            )
+        return submitted_table_ids | scoped_column_ids | impacted_metric_ids
+
     async def existing_object_ids(
         self,
         table_ids: set[str],

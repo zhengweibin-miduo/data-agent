@@ -189,6 +189,7 @@ async def update_user_memory(
     return await _memories(request).update(
         memory_uid,
         body.content,
+        expected_version=body.expected_version,
         user_id=user_id,
     )
 
@@ -201,9 +202,14 @@ async def delete_user_memory(
     user_id: str,
     memory_uid: str,
     request: Request,
+    expected_version: int = Query(ge=1),
 ) -> MemoryDeleteResponse:
     """软删除指定用户的跨会话记忆。"""
-    return await _memories(request).delete(memory_uid, user_id=user_id)
+    return await _memories(request).delete(
+        memory_uid,
+        expected_version=expected_version,
+        user_id=user_id,
+    )
 
 
 @router.delete(

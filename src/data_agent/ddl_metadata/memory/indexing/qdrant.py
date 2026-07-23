@@ -20,7 +20,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from data_agent.ddl_metadata.models.memory import MemoryKind, MemoryProjection
+from data_agent.ddl_metadata.models.memory import MemoryProjection
 from data_agent.settings import app_config
 
 
@@ -31,7 +31,7 @@ def _qdrant_point_id(memory_uid: str) -> str:
 
 def _filter_conditions(
     source: str,
-    kinds: set[MemoryKind] | None,
+    categories: set[str] | None,
     user_id: str | None,
 ) -> list[Condition]:
     """构造两个索引共享的严格作用域条件。"""
@@ -52,11 +52,11 @@ def _filter_conditions(
         if user_id is None
         else FieldCondition(key="user_id", match=MatchValue(value=user_id))
     )
-    if kinds:
+    if categories:
         conditions.append(
             FieldCondition(
-                key="kind",
-                match=MatchAny(any=[kind.value for kind in sorted(kinds)]),
+                key="category",
+                match=MatchAny(any=sorted(categories)),
             )
         )
     return conditions
@@ -83,8 +83,9 @@ class MemoryQdrantIndex:
         for field in (
             "source",
             "user_id",
-            "kind",
+            "category",
             "status",
+            "lifecycle_policy",
             "content_version",
             "projection_version",
         ):
@@ -133,7 +134,7 @@ class MemoryQdrantIndex:
         self,
         vector: list[float],
         source: str,
-        kinds: set[MemoryKind] | None,
+        categories: set[str] | None,
         limit: int,
         *,
         user_id: str | None = None,
@@ -144,7 +145,7 @@ class MemoryQdrantIndex:
         result = await self._client.query_points(
             collection_name=self._collection,
             query=vector,
-            query_filter=Filter(must=_filter_conditions(source, kinds, user_id)),
+            query_filter=Filter(must=_filter_conditions(source, categories, user_id)),
             limit=limit,
             with_payload=["memory_uid"],
         )

@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/conversation-memory.md","reason":"Verify lifecycle behavior, evidence safety, recall isolation, deletion, and index authority checks."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify schema parity, transactions, concurrency invariants, and bootstrap contracts."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Verify projection filters, retries, cleanup, and service degradation behavior."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify stale writes, retry boundaries, and terminal cleanup."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Run the repository-defined lint, type, test, configuration, and integration quality gates."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check end-to-end propagation of renamed and rebuilt memory contracts."}

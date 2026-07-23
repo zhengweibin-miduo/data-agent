@@ -2,7 +2,7 @@
 
 from elasticsearch import AsyncElasticsearch, NotFoundError
 
-from data_agent.ddl_metadata.models.memory import MemoryKind, MemoryProjection
+from data_agent.ddl_metadata.models.memory import MemoryProjection
 from data_agent.settings import app_config
 
 
@@ -42,12 +42,14 @@ class MemoryElasticsearchIndex:
                             "user_id",
                             "created_conversation_uid",
                             "created_message_uid",
-                            "kind",
-                            "scope_key",
+                            "category",
+                            "memory_key",
+                            "content_schema",
                             "schema_fingerprint",
                             "object_ids",
                             "trust",
                             "status",
+                            "lifecycle_policy",
                             "content_hash",
                             "content_version",
                             "projection_version",
@@ -55,6 +57,9 @@ class MemoryElasticsearchIndex:
                     },
                     "created_at": {"type": "date"},
                     "updated_at": {"type": "date"},
+                    "expires_at": {"type": "date"},
+                    "importance_score": {"type": "float"},
+                    "record_version": {"type": "integer"},
                 },
             },
         )
@@ -89,7 +94,7 @@ class MemoryElasticsearchIndex:
         self,
         query: str,
         source: str,
-        kinds: set[MemoryKind] | None,
+        categories: set[str] | None,
         limit: int,
         *,
         user_id: str | None = None,
@@ -106,8 +111,8 @@ class MemoryElasticsearchIndex:
             if user_id is None
             else {"term": {"user_id": user_id}}
         )
-        if kinds:
-            filters.append({"terms": {"kind": [kind.value for kind in kinds]}})
+        if categories:
+            filters.append({"terms": {"category": sorted(categories)}})
         response = await self._client.search(
             index=self._index,
             size=limit,

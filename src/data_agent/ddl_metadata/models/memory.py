@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Any, Literal
 
 from pydantic import Field, TypeAdapter, model_validator
 
@@ -18,14 +18,15 @@ from data_agent.ddl_metadata.models.semantic import (
 )
 
 
-class MemoryKind(StrEnum):
-    """长期记忆类型。"""
+class BuiltinMemoryCategory(StrEnum):
+    """内置记忆类别常量；持久化字段允许扩展的点分字符串。"""
 
-    SEMANTIC_DECISION = "SEMANTIC_DECISION"
-    METRIC_QUESTION = "METRIC_QUESTION"
-    USER_ANSWER = "USER_ANSWER"
-    METRIC_DEFINITION = "METRIC_DEFINITION"
-    USER_MEMORY = "USER_MEMORY"
+    DDL_SEMANTIC = "ddl.semantic"
+    DDL_METRIC = "ddl.metric"
+    USER_PROFILE = "user.profile"
+    USER_PREFERENCE = "user.preference"
+    USER_CONSTRAINT = "user.constraint"
+    USER_BUSINESS_RULE = "user.business_rule"
 
 
 class UserMemoryCategory(StrEnum):
@@ -41,7 +42,35 @@ class MemoryStatus(StrEnum):
     """权威记忆状态。"""
 
     ACTIVE = "ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    EXPIRED = "EXPIRED"
     DELETED = "DELETED"
+
+
+class MemoryLifecyclePolicy(StrEnum):
+    """长期记忆生命周期策略。"""
+
+    PERMANENT = "PERMANENT"
+    ADAPTIVE = "ADAPTIVE"
+    EXPIRING = "EXPIRING"
+    FINGERPRINT_BOUND = "FINGERPRINT_BOUND"
+
+
+class MemoryDecision(StrEnum):
+    """候选与当前权威事实比较后的写入决策。"""
+
+    ADD = "ADD"
+    UPDATE = "UPDATE"
+    MERGE = "MERGE"
+    DELETE = "DELETE"
+    NOOP = "NOOP"
+
+
+class MemoryScopeType(StrEnum):
+    """记忆权威作用域。"""
+
+    USER = "USER"
+    DDL_SCHEMA = "DDL_SCHEMA"
 
 
 class MemoryTrust(StrEnum):
@@ -56,7 +85,10 @@ class MemoryEventType(StrEnum):
 
     ADD = "ADD"
     UPDATE = "UPDATE"
+    MERGE = "MERGE"
     DELETE = "DELETE"
+    NOOP = "NOOP"
+    EXPIRE = "EXPIRE"
     LINK = "LINK"
 
 
@@ -93,7 +125,6 @@ class MemoryIndexOperation(StrEnum):
 class SemanticDecisionContent(ContractModel):
     """表列语义长期记忆的规范内容。"""
 
-    kind: Literal[MemoryKind.SEMANTIC_DECISION]
     trust: Literal["model_validated", "user_confirmed"] = "model_validated"
     table: SemanticTable | None = None
     column: SemanticColumn | None = None
@@ -106,51 +137,38 @@ class SemanticDecisionContent(ContractModel):
         return self
 
 
-class MetricQuestionContent(ContractModel):
-    """指标问题长期记忆的规范内容。"""
-
-    kind: Literal[MemoryKind.METRIC_QUESTION]
-    trust: Literal["model_validated"] = "model_validated"
-    question: MetricQuestion
-
-
-class UserAnswerContent(ContractModel):
-    """用户回答长期记忆的规范内容。"""
-
-    kind: Literal[MemoryKind.USER_ANSWER]
-    trust: Literal["user_confirmed"] = "user_confirmed"
-    answer: MetricAnswer
-
-
 class MetricDefinitionContent(ContractModel):
     """指标定义长期记忆的规范内容。"""
 
-    kind: Literal[MemoryKind.METRIC_DEFINITION]
     trust: Literal["model_validated", "user_confirmed"] = "model_validated"
     metric: MetricMetadata
+    questions: list[MetricQuestion] = Field(default_factory=list)
+    answers: list[MetricAnswer] = Field(default_factory=list)
 
 
 class UserMemoryContent(ContractModel):
     """由用户原文证据支持的跨会话长期记忆。"""
 
-    kind: Literal[MemoryKind.USER_MEMORY]
     trust: Literal["user_confirmed"] = "user_confirmed"
-    category: UserMemoryCategory
-    key: str = Field(min_length=1, max_length=256)
     value: str = Field(min_length=1, max_length=4096)
     supporting_user_quote: str = Field(min_length=1, max_length=4096)
     evidence_message_uids: list[str] = Field(min_length=1, max_length=20)
     confirmed_assistant_message_uid: str | None = None
 
 
-MemoryContent = Annotated[
+class GenericMemoryContent(ContractModel):
+    """由类别策略验证的扩展记忆内容。"""
+
+    trust: Literal["model_validated", "user_confirmed"]
+    data: dict[str, Any]
+
+
+MemoryContent = (
     SemanticDecisionContent
-    | MetricQuestionContent
-    | UserAnswerContent
     | MetricDefinitionContent
-    | UserMemoryContent,
-    Field(discriminator="kind"),
-]
+    | UserMemoryContent
+    | GenericMemoryContent
+)
 MEMORY_CONTENT_ADAPTER = TypeAdapter(MemoryContent)
 
 
@@ -162,14 +180,19 @@ class MemoryProjection(ContractModel):
     user_id: str | None = None
     created_conversation_uid: str | None = None
     created_message_uid: str | None = None
-    kind: MemoryKind
-    scope_key: str
-    schema_fingerprint: str
+    category: str = Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+    memory_key: str = Field(min_length=1, max_length=256)
+    content_schema: str = Field(min_length=1, max_length=128)
+    schema_fingerprint: str | None = None
     memory_text: str
     content_hash: str
     object_ids: list[str]
     trust: MemoryTrust
     status: MemoryStatus
+    importance_score: float = Field(ge=0, le=1)
+    lifecycle_policy: MemoryLifecyclePolicy
+    expires_at: datetime | None = None
+    record_version: int = Field(ge=1)
     content_version: str
     projection_version: str
     created_at: datetime
@@ -184,15 +207,21 @@ class MemoryCandidate(ContractModel):
     user_id: str | None = None
     created_conversation_uid: str | None = None
     created_message_uid: str | None = None
-    kind: MemoryKind
-    scope_key: str
-    schema_fingerprint: str
+    category: str = Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+    memory_key: str = Field(min_length=1, max_length=256)
+    content_schema: str = Field(min_length=1, max_length=128)
+    schema_fingerprint: str | None = None
     memory_text: str
     content: MemoryContent
     content_hash: str
     trust: MemoryTrust
     content_version: str
     projection_version: str
+    importance_score: float = Field(default=0.5, ge=0, le=1)
+    lifecycle_policy: MemoryLifecyclePolicy = MemoryLifecyclePolicy.ADAPTIVE
+    expires_at: datetime | None = None
+    decision: MemoryDecision | None = None
+    actor_type: MemoryActorType = MemoryActorType.WORKFLOW
     created_job_id: str | None = None
     derived_from_uids: list[str] = Field(default_factory=list)
     related_uids: list[str] = Field(default_factory=list)
@@ -215,14 +244,21 @@ class MemoryDetail(ContractModel):
     user_id: str | None = None
     created_conversation_uid: str | None = None
     created_message_uid: str | None = None
-    kind: MemoryKind
-    scope_key: str
-    schema_fingerprint: str
+    category: str = Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+    memory_key: str = Field(min_length=1, max_length=256)
+    content_schema: str = Field(min_length=1, max_length=128)
+    schema_fingerprint: str | None = None
     memory_text: str
     content: MemoryContent
     content_hash: str
     trust: MemoryTrust
     status: MemoryStatus
+    importance_score: float = Field(ge=0, le=1)
+    lifecycle_policy: MemoryLifecyclePolicy
+    expires_at: datetime | None = None
+    record_version: int = Field(ge=1)
+    access_count: int = Field(ge=0)
+    last_accessed_at: datetime | None = None
     content_version: str
     projection_version: str
     created_job_id: str | None = None
@@ -274,6 +310,7 @@ class MemoryUpdateRequest(ContractModel):
     """同种类、同作用域的结构化用户修正。"""
 
     content: MemoryContent
+    expected_version: int = Field(ge=1)
 
 
 class MemoryUpdateResponse(ContractModel):
@@ -281,7 +318,8 @@ class MemoryUpdateResponse(ContractModel):
 
     memory_uid: str
     event_id: int
-    requires_reprocess: Literal[True] = True
+    record_version: int = Field(ge=1)
+    requires_reprocess: bool
 
 
 class MemoryDeleteResponse(ContractModel):

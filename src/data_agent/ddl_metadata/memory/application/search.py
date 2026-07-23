@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -11,6 +12,7 @@ from data_agent.ddl_metadata.memory.domain.payloads import (
     content_object_ids,
     memory_content_hash,
 )
+from data_agent.ddl_metadata.memory.domain.policies import category_policy
 from data_agent.ddl_metadata.memory.domain.ranking import reciprocal_rank_fusion
 from data_agent.ddl_metadata.memory.indexing.elasticsearch import (
     MemoryElasticsearchIndex,
@@ -22,7 +24,6 @@ from data_agent.ddl_metadata.memory.mysql.index_outbox import (
 from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
 from data_agent.ddl_metadata.models.memory import (
     MemoryIndexTarget,
-    MemoryKind,
     MemorySearchHit,
     MemorySearchResponse,
     MemoryStatus,
@@ -43,7 +44,7 @@ class MemorySearchService:
         source: str,
         *,
         user_id: str | None = None,
-        kinds: set[MemoryKind] | None = None,
+        categories: set[str] | None = None,
         limit: int | None = None,
         exact_uids: Sequence[str] = (),
         allowed_object_ids: set[str] | None = None,
@@ -62,7 +63,7 @@ class MemorySearchService:
                 baseline_uids = await MemoryRepository(session).find_exact_query(
                     source,
                     query,
-                    kinds,
+                    categories,
                     user_id=user_id,
                     limit=bounded_limit,
                 )
@@ -72,7 +73,7 @@ class MemorySearchService:
             return await index.search(
                 query,
                 source,
-                kinds,
+                categories,
                 app_config.elasticsearch.top_k,
                 user_id=user_id,
             )
@@ -83,7 +84,7 @@ class MemorySearchService:
             return await index.search(
                 vector,
                 source,
-                kinds,
+                categories,
                 app_config.qdrant.top_k,
                 user_id=user_id,
             )
@@ -142,14 +143,13 @@ class MemorySearchService:
                 [
                     uid
                     for uid in uids
-                    if target_by_signal[signal]
-                    not in pending_targets.get(uid, set())
+                    if target_by_signal[signal] not in pending_targets.get(uid, set())
                 ],
             )
             for signal, uids in rankings
         ]
         fused = reciprocal_rank_fusion(
-            confirmed_rankings,
+            [("mysql_exact", baseline_uids), *confirmed_rankings],
             constant=app_config.memory.rrf_constant,
             exact_uids=set(baseline_uids),
         )
@@ -167,7 +167,11 @@ class MemorySearchService:
                 or memory_content_hash(detail.content) != detail.content_hash
             ):
                 continue
-            if kinds and detail.kind not in kinds:
+            if categories and detail.category not in categories:
+                continue
+            if detail.expires_at is not None and detail.expires_at <= datetime.now(
+                UTC
+            ).replace(tzinfo=None):
                 continue
             object_ids = set(content_object_ids(detail.content))
             if (
@@ -179,10 +183,30 @@ class MemorySearchService:
             items.append(
                 MemorySearchHit(
                     memory=detail,
-                    score=score,
+                    score=(
+                        score * category_policy(detail.category).retrieval_weight
+                        + detail.importance_score * 0.01
+                    ),
                     signals=signals,
                 )
             )
-            if len(items) >= bounded_limit:
-                break
+        items.sort(key=lambda item: (-item.score, item.memory.uid))
+        items = items[:bounded_limit]
+        if items:
+            try:
+                async with MySQLDatabase.session() as session:
+                    await MemoryRepository(session).record_access(
+                        {item.memory.uid for item in items},
+                        source=source,
+                        user_id=user_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.bind(trace_id="-").warning(
+                    "记忆访问统计写入失败，搜索结果已按 best-effort 返回 "
+                    "source={} user_id={} item_count={} error_type={}",
+                    source,
+                    user_id,
+                    len(items),
+                    type(exc).__name__,
+                )
         return MemorySearchResponse(items=items, degraded_targets=degraded)

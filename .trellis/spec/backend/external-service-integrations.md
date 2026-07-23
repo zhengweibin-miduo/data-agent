@@ -91,21 +91,24 @@ payload, outbox dispatch/rebuild, hybrid ranking, or search degradation.
 await MemoryElasticsearchIndex.setup() -> None
 await MemoryElasticsearchIndex.upsert(projection) -> None
 await MemoryElasticsearchIndex.delete(memory_uid) -> None
-await MemoryElasticsearchIndex.search(query, source, kinds, limit) -> list[str]
+await MemoryElasticsearchIndex.search(query, source, categories, limit) -> list[str]
 
 await MemoryQdrantIndex.setup() -> None
 await MemoryQdrantIndex.upsert(projection, vector) -> None
 await MemoryQdrantIndex.delete(memory_uid) -> None
-await MemoryQdrantIndex.search(vector, source, kinds, limit) -> list[str]
+await MemoryQdrantIndex.search(vector, source, categories, limit) -> list[str]
 
 await MemoryIndexDispatcher.dispatch() -> int
-await MemoryIndexRebuilder.reset_indexes() -> None
+await MemoryIndexRebuilder.reset_indexes(
+    confirmed_es_index,
+    confirmed_qdrant_collection,
+) -> None
 await MemoryIndexRebuilder.enqueue_batch(after_id=0) -> MemoryRebuildResult
 await MemorySearchService.search(
     query,
     source,
     *,
-    kinds=None,
+    categories=None,
     limit=None,
     exact_uids=(),
     allowed_object_ids=None,
@@ -118,19 +121,20 @@ await MemorySearchService.search(
   projections and may return only candidate UIDs.
 - Elasticsearch stores deterministic `memory_text` for BM25. Qdrant stores TEI
   document embeddings under a stable point ID and the same bounded metadata.
-- Both indexes filter `source`, optional `kind`, `ACTIVE`, `content_version`,
+- Both indexes filter `source`, optional `category`, `ACTIVE`, `content_version`,
   and `projection_version` before ranking.
 - The outbox has one desired state per `(memory_uid, target)`. A target is
   acknowledged independently only after its idempotent upsert/delete succeeds.
   Failures retain the row with bounded exponential retry and a safe exception
   type.
-- Full rebuild may recreate only the configured project index/collection, then
+- Full rebuild may recreate only the configured project index/collection after
+  the caller supplies exact matching target names, then
   scans ACTIVE MySQL rows by primary-key cursor and enqueues both targets.
 - Search runs ES BM25 and TEI/Qdrant concurrently with the configured timeout,
   excludes target signals that still have pending outbox work, and combines
   the remaining ranks with stable RRF.
 - Before returning, search batch-loads MySQL and rejects missing, deleted,
-  wrong-source, wrong-kind, wrong-version, content-hash-mismatched, or
+  wrong-source, wrong-category, wrong-version, content-hash-mismatched, expired, or
   structurally incompatible rows. Index payload content is never returned.
 - One failed target degrades independently. If both fail, the MySQL exact
   baseline remains available.
@@ -182,7 +186,7 @@ available.
 return elasticsearch_hit["_source"]
 
 # Correct: indexes contribute only UIDs; MySQL content is reloaded and checked.
-candidate_uids = await index.search(query, source, kinds, limit)
+candidate_uids = await index.search(query, source, categories, limit)
 memories = await repository.get_many_active(candidate_uids)
 return validate_and_rank(memories)
 ```

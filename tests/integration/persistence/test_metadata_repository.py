@@ -16,7 +16,7 @@ from data_agent.ddl_metadata.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.ddl_metadata.models.memory import MemoryCandidate
+from data_agent.ddl_metadata.models.memory import MemoryCandidate, MemoryStatus
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.persistence.tables import (
     table_info,
@@ -24,7 +24,12 @@ from data_agent.ddl_metadata.persistence.tables import (
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
 from tests.helpers.checks import check_equal, check_exception, fail_check
-from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
+from tests.helpers.factories import (
+    cleanup_schema,
+    ensure_schema,
+    metric_bundle,
+    semantic_for,
+)
 
 
 async def _force_memory_failure(
@@ -37,14 +42,18 @@ async def _force_memory_failure(
         insert(agent_memory).values(
             uid=None,
             source="forced_failure",
-            kind="SEMANTIC_DECISION",
-            scope_key="forced_failure",
+            category="ddl.semantic",
+            memory_key="forced_failure",
+            active_key="0" * 64,
+            content_schema="ddl.semantic.v1",
             schema_fingerprint="0" * 64,
             memory_text="forced",
             content={},
             content_hash="0" * 64,
             trust="model_validated",
             status="ACTIVE",
+            importance_score=0.5,
+            lifecycle_policy="FINGERPRINT_BOUND",
             content_version=app_config.memory.content_version,
             projection_version=app_config.memory.projection_version,
             created_job_id="forced",
@@ -122,8 +131,8 @@ async def test_meta_memory_outbox_atomicity() -> None:
             )
         check_equal(
             "test_meta_memory_outbox_atomicity 检查点 3",
-            memory_count,
             event_count,
+            (memory_count or 0) * 2,
         )
 
         original = MemoryRepository.upsert_candidates
@@ -165,4 +174,141 @@ async def test_meta_memory_outbox_atomicity() -> None:
     finally:
         await cleanup_schema(schema)
         await cleanup_schema(rollback_schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> None:
+    """验证快照事务失败不会提前撤销上一版指纹记忆。"""
+    await ensure_schema()
+    source = f"expire_rollback_{uuid4().hex}"
+    original_schema = await parse_ddl(
+        source,
+        "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64))",
+    )
+    changed_schema = await parse_ddl(
+        source,
+        "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, full_name VARCHAR(128))",
+    )
+    service = MetadataSnapshotService()
+    try:
+        await service.persist(
+            original_schema,
+            semantic_for(original_schema, fact=False),
+            [],
+            [],
+            [],
+        )
+        original_table_id = original_schema.tables[0].id
+        original = MemoryRepository.upsert_candidates
+        MemoryRepository.upsert_candidates = _force_memory_failure
+        try:
+            try:
+                await service.persist(
+                    changed_schema,
+                    semantic_for(changed_schema, fact=False),
+                    [],
+                    [],
+                    [],
+                )
+            except IntegrityError as error:
+                check_exception(
+                    (
+                        "test_snapshot_failure_keeps_previous_fingerprint_memory_"
+                        "active "
+                        "捕获预期异常"
+                    ),
+                    error,
+                    IntegrityError,
+                )
+            else:
+                fail_check(
+                    "test_snapshot_failure_keeps_previous_fingerprint_memory_active",
+                    actual="未抛出异常",
+                    expected="记忆写入失败必须回滚指纹过期",
+                )
+        finally:
+            MemoryRepository.upsert_candidates = original
+        async with MySQLDatabase.session() as session:
+            status = await session.scalar(
+                select(agent_memory.c.status).where(
+                    agent_memory.c.source == source,
+                    agent_memory.c.memory_key == original_table_id,
+                )
+            )
+        check_equal(
+            "test_snapshot_failure_keeps_previous_fingerprint_memory_active 检查点 1",
+            MemoryStatus(str(status)),
+            MemoryStatus.ACTIVE,
+        )
+    finally:
+        await cleanup_schema(original_schema)
+        await cleanup_schema(changed_schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_snapshot_expires_removed_column_and_metric_memories() -> None:
+    """验证提交范围内被删除列和孤儿指标的旧记忆会随指纹失效。"""
+    await ensure_schema()
+    source = f"expire_removed_{uuid4().hex}"
+    original_schema = await parse_ddl(
+        source,
+        "CREATE TABLE fact_order (id BIGINT PRIMARY KEY, amount DECIMAL(10, 2))",
+    )
+    changed_schema = await parse_ddl(
+        source,
+        "CREATE TABLE fact_order (id BIGINT PRIMARY KEY)",
+    )
+    questions, answers, metrics = metric_bundle(original_schema)
+    removed_column_id = next(
+        column.id
+        for table in original_schema.tables
+        for column in table.columns
+        if column.name == "amount"
+    )
+    metric_id = metrics[0].id
+    service = MetadataSnapshotService()
+    try:
+        await service.persist(
+            original_schema,
+            semantic_for(original_schema, fact=True),
+            questions,
+            answers,
+            metrics,
+        )
+        await service.persist(
+            changed_schema,
+            semantic_for(changed_schema, fact=True),
+            [],
+            [],
+            [],
+        )
+        async with MySQLDatabase.session() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(agent_memory.c.memory_key, agent_memory.c.status).where(
+                            agent_memory.c.source == source,
+                            agent_memory.c.memory_key.in_(
+                                {removed_column_id, metric_id}
+                            ),
+                        )
+                    )
+                ).all()
+            )
+        status_by_key = {str(key): MemoryStatus(str(status)) for key, status in rows}
+        check_equal(
+            "test_snapshot_expires_removed_column_and_metric_memories 检查点 1",
+            status_by_key[removed_column_id],
+            MemoryStatus.EXPIRED,
+        )
+        check_equal(
+            "test_snapshot_expires_removed_column_and_metric_memories 检查点 2",
+            status_by_key[metric_id],
+            MemoryStatus.EXPIRED,
+        )
+    finally:
+        await cleanup_schema(original_schema)
+        await cleanup_schema(changed_schema)
         await MySQLDatabase.close()

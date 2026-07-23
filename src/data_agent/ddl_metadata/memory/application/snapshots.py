@@ -1,5 +1,6 @@
 """权威元数据与记忆快照的原子提交。"""
 
+from data_agent.ddl_metadata.identifiers import scope_fingerprint
 from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
 from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
 from data_agent.ddl_metadata.models.memory import MemoryCandidate
@@ -34,6 +35,27 @@ class MetadataSnapshotService:
             answers,
             metrics,
         )
+        fingerprints = {
+            object_id: scope_fingerprint(schema, object_id)
+            for object_id in (
+                *[table.id for table in schema.tables],
+                *[column.id for table in schema.tables for column in table.columns],
+            )
+        }
+        valid_fingerprints = set(fingerprints.values()) | {schema.schema_fingerprint}
         async with MySQLDatabase.session() as session:
-            await MetadataRepository(session).synchronize(schema, metadata, metrics)
-            await MemoryRepository(session).upsert_candidates(accepted)
+            metadata_repository = MetadataRepository(session)
+            expiration_memory_keys = (
+                await metadata_repository.fingerprint_expiration_memory_keys(
+                    schema,
+                    metrics,
+                )
+            )
+            memory_repository = MemoryRepository(session)
+            await memory_repository.expire_fingerprint_bound(
+                schema.source,
+                valid_fingerprints,
+                memory_keys=expiration_memory_keys,
+            )
+            await metadata_repository.synchronize(schema, metadata, metrics)
+            await memory_repository.upsert_candidates(accepted)

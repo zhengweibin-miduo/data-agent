@@ -192,18 +192,14 @@ async def _test_flow() -> None:
                 ),
                 1,
             )
-            check_condition(
+            check_equal(
                 "_test_flow 检查点 11",
-                (
-                    await session.scalar(
-                        select(func.count())
-                        .select_from(agent_memory)
-                        .where(agent_memory.c.source == source)
-                    )
-                    or 0
-                )
-                >= 6,
-                expected="原断言条件成立",
+                await session.scalar(
+                    select(func.count())
+                    .select_from(agent_memory)
+                    .where(agent_memory.c.source == source)
+                ),
+                4,
             )
 
         reuse_model = FakeMetadataGenerator()

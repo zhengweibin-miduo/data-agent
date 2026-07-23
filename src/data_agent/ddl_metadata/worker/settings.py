@@ -9,6 +9,7 @@ from data_agent.ddl_metadata.worker.maintenance import (
     cleanup_checkpoints,
     dispatch_memory_index_outbox,
     dispatch_pending,
+    expire_memories,
     expire_waiting,
     extract_conversation_memory,
     purge_user_memories,
@@ -34,6 +35,7 @@ class WorkerSettings:
             run_at_startup=True,
         ),
         cron(expire_waiting, minute=None, second=0),
+        cron(expire_memories, minute=None, second=1),
         cron(
             cleanup_checkpoints,
             second={5, 15, 25, 35, 45, 55},
