@@ -22,7 +22,13 @@ from data_agent.ddl_metadata.models.memory import (
     MemoryIndexOperation,
     MemoryIndexTarget,
     MemoryStatus,
+    MetricDefinitionContent,
     SemanticDecisionContent,
+)
+from data_agent.ddl_metadata.models.semantic import (
+    MetricAnswer,
+    MetricMetadata,
+    MetricQuestion,
 )
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.infrastructure.mysql import MySQLDatabase
@@ -259,6 +265,114 @@ async def test_superseded_content_can_become_active_again() -> None:
                     candidate_b_uid: MemoryIndexOperation.DELETE.value,
                     reactivated_a_uid: MemoryIndexOperation.UPSERT.value,
                 },
+            )
+    finally:
+        await cleanup_schema(schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_metric_merge_preserves_complementary_evidence() -> None:
+    """验证 MERGE 策略写新版本前保留既有指标问答证据。"""
+    await ensure_schema()
+    schema = await parse_ddl(
+        f"memory_metric_merge_{uuid4().hex}",
+        "CREATE TABLE fact_order (id BIGINT PRIMARY KEY, amount DECIMAL(12,2))",
+    )
+    semantic = semantic_for(schema, fact=True)
+    fact_id = schema.tables[0].id
+    amount_id = next(
+        column.id for column in schema.tables[0].columns if column.name == "amount"
+    )
+    first_question = MetricQuestion(
+        question_id="total_amount.scope",
+        prompt="指标统计范围是什么？",
+        fact_table_id=fact_id,
+        column_ids=[amount_id],
+    )
+    first_answer = MetricAnswer(
+        question_id=first_question.question_id,
+        answer="统计所有已支付订单。",
+    )
+    second_question = MetricQuestion(
+        question_id="total_amount.currency",
+        prompt="指标金额单位是什么？",
+        fact_table_id=fact_id,
+        column_ids=[amount_id],
+    )
+    second_answer = MetricAnswer(
+        question_id=second_question.question_id,
+        answer="金额单位为人民币元。",
+    )
+    first_metric = MetricMetadata(
+        id=f"metric_{uuid4().hex}",
+        name="total_amount",
+        fact_table_id=fact_id,
+        definition="统计所有已支付订单的 amount 总和。",
+        relevant_column_ids=[amount_id],
+        answer_question_ids=[first_question.question_id],
+    )
+    second_metric = first_metric.model_copy(
+        update={
+            "definition": "统计所有已支付订单的 amount 总和，金额单位为人民币元。",
+            "answer_question_ids": [second_question.question_id],
+        }
+    )
+    first_candidates = build_accepted_memories(
+        schema,
+        semantic,
+        [first_question],
+        [first_answer],
+        [first_metric],
+        job_id=uuid4().hex,
+    )
+    second_candidates = build_accepted_memories(
+        schema,
+        semantic,
+        [second_question],
+        [second_answer],
+        [second_metric],
+        job_id=uuid4().hex,
+    )
+    try:
+        async with MySQLDatabase.session() as session:
+            repository = MemoryRepository(session)
+            await repository.upsert_candidates(first_candidates)
+            await repository.upsert_candidates(second_candidates)
+            active_metric = await repository.get_by_uid(second_candidates[-1].uid)
+            if active_metric is None:
+                raise RuntimeError("合并后的指标记忆必须存在")
+            if not isinstance(active_metric.content, MetricDefinitionContent):
+                raise RuntimeError("合并后的指标记忆必须是指标内容")
+            check_equal(
+                "test_metric_merge_preserves_complementary_evidence 检查点 1",
+                active_metric.detail.status,
+                MemoryStatus.ACTIVE,
+            )
+            check_equal(
+                "test_metric_merge_preserves_complementary_evidence 检查点 2",
+                [question.question_id for question in active_metric.content.questions],
+                [first_question.question_id, second_question.question_id],
+            )
+            check_equal(
+                "test_metric_merge_preserves_complementary_evidence 检查点 3",
+                [answer.question_id for answer in active_metric.content.answers],
+                [first_answer.question_id, second_answer.question_id],
+            )
+            superseded_count = await session.scalar(
+                select(func.count())
+                .select_from(agent_memory)
+                .where(
+                    agent_memory.c.source == schema.source,
+                    agent_memory.c.category == "ddl.metric",
+                    agent_memory.c.memory_key == first_metric.id,
+                    agent_memory.c.status == MemoryStatus.SUPERSEDED.value,
+                )
+            )
+            check_equal(
+                "test_metric_merge_preserves_complementary_evidence 检查点 4",
+                superseded_count,
+                1,
             )
     finally:
         await cleanup_schema(schema)
