@@ -37,4 +37,3 @@
 - The selected design uses a private ordered action registry, a public
   `start(role, target)` / `stop(handle)` interface, and an explicit
   `RuntimeHandle`.
-

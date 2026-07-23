@@ -57,4 +57,3 @@ unavailable services instead of claiming success.
   accepting `ExceptionGroup` behavior.
 - If entry-point integration regresses, restore both old lifecycle bodies and
   remove `runtime.py`; no data rollback is required.
-
