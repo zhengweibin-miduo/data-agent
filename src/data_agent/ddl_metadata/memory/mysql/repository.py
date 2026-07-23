@@ -198,26 +198,26 @@ class MemoryRepository:
             scope_rows = list(
                 (
                     await self._session.execute(
-                    select(
-                        agent_memory.c.id,
-                        agent_memory.c.uid,
-                        agent_memory.c.active_key,
-                        agent_memory.c.content,
-                        agent_memory.c.content_hash,
-                        agent_memory.c.record_version,
+                        select(
+                            agent_memory.c.id,
+                            agent_memory.c.uid,
+                            agent_memory.c.active_key,
+                            agent_memory.c.content,
+                            agent_memory.c.content_hash,
+                            agent_memory.c.record_version,
+                        )
+                        .where(
+                            agent_memory.c.source == candidate.source,
+                            (
+                                agent_memory.c.user_id.is_(None)
+                                if candidate.user_id is None
+                                else agent_memory.c.user_id == candidate.user_id
+                            ),
+                            agent_memory.c.category == candidate.category,
+                            agent_memory.c.memory_key == candidate.memory_key,
+                        )
+                        .with_for_update()
                     )
-                    .where(
-                        agent_memory.c.source == candidate.source,
-                        (
-                            agent_memory.c.user_id.is_(None)
-                            if candidate.user_id is None
-                            else agent_memory.c.user_id == candidate.user_id
-                        ),
-                        agent_memory.c.category == candidate.category,
-                        agent_memory.c.memory_key == candidate.memory_key,
-                    )
-                    .with_for_update()
-                )
                 ).mappings()
             )
             active_rows = [
@@ -300,8 +300,7 @@ class MemoryRepository:
         accepted_candidates = [
             candidate
             for candidate in accepted_candidates
-            if candidate.decision
-            not in {MemoryDecision.DELETE, MemoryDecision.NOOP}
+            if candidate.decision not in {MemoryDecision.DELETE, MemoryDecision.NOOP}
         ]
 
         if noop_rows:
@@ -502,9 +501,7 @@ class MemoryRepository:
                         str(row["uid"])
                     ].content.model_dump(mode="json"),
                     "job_id": replacement_by_uid[str(row["uid"])].created_job_id,
-                    "actor_type": replacement_by_uid[
-                        str(row["uid"])
-                    ].actor_type.value,
+                    "actor_type": replacement_by_uid[str(row["uid"])].actor_type.value,
                 }
                 for row in superseded_rows
             ]
@@ -913,9 +910,12 @@ class MemoryRepository:
         source: str,
         valid_fingerprints: set[str],
         *,
+        memory_keys: set[str] | None = None,
         limit: int = 500,
     ) -> int:
-        """失效与当前 DDL 指纹集合不再匹配的活动记忆。"""
+        """失效指定作用域内与当前 DDL 指纹集合不再匹配的活动记忆。"""
+        if memory_keys is not None and not memory_keys:
+            return 0
         fingerprint_filter = true()
         if valid_fingerprints:
             fingerprint_filter = or_(
@@ -935,6 +935,11 @@ class MemoryRepository:
                         agent_memory.c.status == MemoryStatus.ACTIVE.value,
                         agent_memory.c.lifecycle_policy
                         == MemoryLifecyclePolicy.FINGERPRINT_BOUND.value,
+                        *(
+                            (agent_memory.c.memory_key.in_(memory_keys),)
+                            if memory_keys is not None
+                            else ()
+                        ),
                         fingerprint_filter,
                     )
                     .order_by(agent_memory.c.id)

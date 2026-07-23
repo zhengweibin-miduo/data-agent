@@ -88,7 +88,8 @@ class MemoryContextLoader:
             repository = MemoryRepository(session)
             await repository.expire_fingerprint_bound(
                 schema.source,
-                {*fingerprints.values(), schema.schema_fingerprint},
+                set(fingerprints.values()),
+                memory_keys=set(fingerprints),
             )
             grouped = await repository.find_compatible_scopes(
                 schema.source,

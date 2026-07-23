@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.identifiers import memory_uid
+from data_agent.ddl_metadata.identifiers import memory_uid, scope_fingerprint
 from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
 from data_agent.ddl_metadata.memory.domain.payloads import (
     build_memory_text,
@@ -259,6 +259,92 @@ async def test_superseded_content_can_become_active_again() -> None:
                     candidate_b_uid: MemoryIndexOperation.DELETE.value,
                     reactivated_a_uid: MemoryIndexOperation.UPSERT.value,
                 },
+            )
+    finally:
+        await cleanup_schema(schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_fingerprint_expiry_preserves_unsubmitted_table_scope() -> None:
+    """验证局部 DDL 重跑只过期本次提交作用域内的旧指纹记忆。"""
+    await ensure_schema()
+    source = f"memory_partial_{uuid4().hex}"
+    schema = await parse_ddl(
+        source,
+        """
+        CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64));
+        CREATE TABLE dim_product (id BIGINT PRIMARY KEY, name VARCHAR(64));
+        """,
+    )
+    candidates = build_accepted_memories(
+        schema,
+        semantic_for(schema, fact=False),
+        [],
+        [],
+        [],
+        job_id=uuid4().hex,
+    )
+    customer_table = next(
+        table for table in schema.tables if table.name == "dim_customer"
+    )
+    product_table = next(
+        table for table in schema.tables if table.name == "dim_product"
+    )
+    try:
+        async with MySQLDatabase.session() as session:
+            await MemoryRepository(session).upsert_candidates(candidates)
+
+        partial_schema = await parse_ddl(
+            source,
+            "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, full_name VARCHAR(128))",
+        )
+        partial_fingerprints = {
+            object_id: scope_fingerprint(partial_schema, object_id)
+            for object_id in (
+                *[table.id for table in partial_schema.tables],
+                *[
+                    column.id
+                    for table in partial_schema.tables
+                    for column in table.columns
+                ],
+            )
+        }
+        async with MySQLDatabase.session() as session:
+            expired = await MemoryRepository(session).expire_fingerprint_bound(
+                source,
+                set(partial_fingerprints.values()),
+                memory_keys=set(partial_fingerprints),
+            )
+            rows = list(
+                (
+                    await session.execute(
+                        select(agent_memory.c.memory_key, agent_memory.c.status).where(
+                            agent_memory.c.source == source,
+                            agent_memory.c.memory_key.in_(
+                                {customer_table.id, product_table.id}
+                            ),
+                        )
+                    )
+                ).all()
+            )
+            status_by_key = {
+                str(key): MemoryStatus(str(status)) for key, status in rows
+            }
+            check_equal(
+                "test_fingerprint_expiry_preserves_unsubmitted_table_scope 检查点 1",
+                expired,
+                len(partial_fingerprints),
+            )
+            check_equal(
+                "test_fingerprint_expiry_preserves_unsubmitted_table_scope 检查点 2",
+                status_by_key[customer_table.id],
+                MemoryStatus.EXPIRED,
+            )
+            check_equal(
+                "test_fingerprint_expiry_preserves_unsubmitted_table_scope 检查点 3",
+                status_by_key[product_table.id],
+                MemoryStatus.ACTIVE,
             )
     finally:
         await cleanup_schema(schema)
