@@ -16,7 +16,7 @@ from data_agent.ddl_metadata.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.ddl_metadata.models.memory import MemoryCandidate
+from data_agent.ddl_metadata.models.memory import MemoryCandidate, MemoryStatus
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.persistence.tables import (
     table_info,
@@ -169,4 +169,74 @@ async def test_meta_memory_outbox_atomicity() -> None:
     finally:
         await cleanup_schema(schema)
         await cleanup_schema(rollback_schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> None:
+    """验证快照事务失败不会提前撤销上一版指纹记忆。"""
+    await ensure_schema()
+    source = f"expire_rollback_{uuid4().hex}"
+    original_schema = await parse_ddl(
+        source,
+        "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, name VARCHAR(64))",
+    )
+    changed_schema = await parse_ddl(
+        source,
+        "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, full_name VARCHAR(128))",
+    )
+    service = MetadataSnapshotService()
+    try:
+        await service.persist(
+            original_schema,
+            semantic_for(original_schema, fact=False),
+            [],
+            [],
+            [],
+        )
+        original_table_id = original_schema.tables[0].id
+        original = MemoryRepository.upsert_candidates
+        MemoryRepository.upsert_candidates = _force_memory_failure
+        try:
+            try:
+                await service.persist(
+                    changed_schema,
+                    semantic_for(changed_schema, fact=False),
+                    [],
+                    [],
+                    [],
+                )
+            except IntegrityError as error:
+                check_exception(
+                    (
+                        "test_snapshot_failure_keeps_previous_fingerprint_memory_"
+                        "active "
+                        "捕获预期异常"
+                    ),
+                    error,
+                    IntegrityError,
+                )
+            else:
+                fail_check(
+                    "test_snapshot_failure_keeps_previous_fingerprint_memory_active",
+                    actual="未抛出异常",
+                    expected="记忆写入失败必须回滚指纹过期",
+                )
+        finally:
+            MemoryRepository.upsert_candidates = original
+        async with MySQLDatabase.session() as session:
+            status = await session.scalar(
+                select(agent_memory.c.status).where(
+                    agent_memory.c.source == source,
+                    agent_memory.c.memory_key == original_table_id,
+                )
+            )
+        check_equal(
+            "test_snapshot_failure_keeps_previous_fingerprint_memory_active 检查点 1",
+            MemoryStatus(str(status)),
+            MemoryStatus.ACTIVE,
+        )
+    finally:
+        await cleanup_schema(original_schema)
+        await cleanup_schema(changed_schema)
         await MySQLDatabase.close()

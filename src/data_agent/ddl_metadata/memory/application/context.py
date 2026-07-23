@@ -86,11 +86,6 @@ class MemoryContextLoader:
         }
         async with MySQLDatabase.session() as session:
             repository = MemoryRepository(session)
-            await repository.expire_fingerprint_bound(
-                schema.source,
-                set(fingerprints.values()),
-                memory_keys=set(fingerprints),
-            )
             grouped = await repository.find_compatible_scopes(
                 schema.source,
                 fingerprints,
