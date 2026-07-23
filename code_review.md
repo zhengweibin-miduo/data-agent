@@ -41,9 +41,7 @@
 
 ## GitHub 审查问题修复回复模板
 
-当 Codex 因 GitHub inline review comment 被要求修复问题时（包括收到 `@codex address that feedback`），完成修改后的 GitHub 回复必须在原 review thread 中严格使用本节对应模板，避免另开评论导致上下文丢失。根据实际处理结果选择且只选择一种状态。
-
-不得使用 `Summary`、`Testing` 等默认结构代替本节模板，不得重命名或省略模板字段，也不得另行组织回复结构。
+修复者应在原 GitHub review thread 中回复，避免另开评论导致上下文丢失。根据实际处理结果选择且只选择一种状态。
 
 | 处理状态 | 选择条件 |
 | --- | --- |
