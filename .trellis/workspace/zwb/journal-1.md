@@ -838,3 +838,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: 统一核心流程与 CRUD 中文步骤注释
+
+**Date**: 2026-07-26
+**Task**: 统一核心流程与 CRUD 中文步骤注释
+**Branch**: `chore/add-core-flow-comments-20260726`
+
+### Summary
+
+为生产代码业务流程、CRUD、资源生命周期和持久化阶段补充连续中文编号注释，清理独立未编号说明，并增加注释规范与行为不变校验。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b57a54` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
