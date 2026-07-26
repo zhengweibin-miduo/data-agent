@@ -120,7 +120,6 @@ def _running_record() -> JobRecord:
         attempt=1,
         created_at=now,
         updated_at=now,
-        graph_version=app_config.llm.graph_version,
     )
 
 
@@ -141,6 +140,11 @@ class _Jobs:
         """模拟成功续租。"""
         del source, job_id
         return True
+
+    async def graph_version(self, job_id: str) -> str:
+        """按 worker 内部读取路径返回与当前配置一致的图版本。"""
+        del job_id
+        return app_config.llm.graph_version
 
     async def mark_terminal(self, *args: object, **kwargs: object) -> None:
         """记录不应发生的终态写入。"""

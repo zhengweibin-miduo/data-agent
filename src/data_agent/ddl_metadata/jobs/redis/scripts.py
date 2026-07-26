@@ -29,6 +29,9 @@ local field_count = tonumber(ARGV[8])
 for index = 0, field_count - 1 do
   redis.call('HSET', KEYS[1], ARGV[9 + index * 2], ARGV[10 + index * 2])
 end
+if ARGV[8 + field_count * 2 + 2] == '1' then
+  redis.call('HINCRBY', KEYS[1], 'attempt', 1)
+end
 redis.call('ZREM', KEYS[2], ARGV[5])
 if ARGV[2] == 'waiting_input' then
   redis.call('ZADD', KEYS[2], ARGV[6], ARGV[5])
@@ -51,6 +54,9 @@ end
 return 1
 """
 
+    # 受理回答后清除 questions_json 与等待截止时间，使 pending 状态下的读取不再
+    # 返回上一轮问题；question_set_id 与 answer_hash 必须保留，重复提交的幂等判定
+    # （返回码 2）依赖它们，清除会把合法重试误判为 stale_answer。
     ANSWER: ClassVar[str] = """
 local status = redis.call('HGET', KEYS[1], 'status')
 local revision = redis.call('HGET', KEYS[1], 'revision')
@@ -82,6 +88,7 @@ end
 redis.call('HSET', KEYS[1],
   'status', 'pending', 'revision', ARGV[5], 'updated_at', ARGV[6],
   'answer_hash', ARGV[4], 'answer_json', ARGV[7])
+redis.call('HDEL', KEYS[1], 'questions_json', 'expires_at', 'expires_at_epoch')
 redis.call('ZREM', KEYS[2], ARGV[8])
 redis.call('ZADD', KEYS[3], ARGV[3], ARGV[9])
 local answer_time = redis.call('TIME')

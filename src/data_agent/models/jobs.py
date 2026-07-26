@@ -91,7 +91,8 @@ class JobRecord(ContractModel):
     created_at: datetime = Field(description="创建时间。")
     updated_at: datetime = Field(description="最近更新时间。")
     expires_at: datetime | None = Field(default=None, description="过期时间。")
-    graph_version: str = Field(description="工作流图版本。")
+    # graph_version 是 worker 判断"任务是否由当前图版本继续解释"的内部兼容字段，
+    # 调用方无从使用，因此不进入公开投影；worker 通过内部读取路径获取。
 
 
 class JobEventData(ContractModel):

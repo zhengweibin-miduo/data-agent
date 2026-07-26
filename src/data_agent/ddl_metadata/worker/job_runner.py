@@ -217,8 +217,9 @@ async def run_ddl_job(
     if record.revision != revision:
         return
     # 步骤三：任务绑定的 graph_version 不允许由新图继续解释；PENDING 任务先通过
-    # 修订保护进入 RUNNING，再按统一终态路径记录 attempt 并安排清理。
-    if record.graph_version != app_config.llm.graph_version:
+    # 修订保护进入 RUNNING，再按统一终态路径记录 attempt 并安排清理。该字段只对
+    # worker 有意义，因此走内部读取路径而不是公开投影。
+    if await jobs.graph_version(job_id) != app_config.llm.graph_version:
         if record.status == JobStatus.PENDING:
             await jobs.mark_running(job_id, revision)
             record = record.model_copy(
