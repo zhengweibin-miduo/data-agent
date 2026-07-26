@@ -958,3 +958,235 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: 补齐领域模型字段描述
+
+**Date**: 2026-07-27
+**Task**: 补齐领域模型字段描述
+**Branch**: `fix/model-field-descriptions-20260726`
+
+### Summary
+
+为领域模型补齐字段描述并加回归测试锁定
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b4c487` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 32: 修复配置文件路径解析与加载入口
+
+**Date**: 2026-07-27
+**Task**: 修复配置文件路径解析与加载入口
+**Branch**: `fix/config-path-resolution-20260726`
+
+### Summary
+
+修复 wheel 安装后配置路径无法解析导致入口启动失败
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `582510b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 33: 校验记忆索引分析器绑定
+
+**Date**: 2026-07-27
+**Task**: 校验记忆索引分析器绑定
+**Branch**: `fix/memory-index-analyzer-verification-20260727`
+
+### Summary
+
+补齐既有记忆索引的分析器绑定校验与可重试判定
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fca09a0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 34: 清理记忆检索排序与索引效率问题
+
+**Date**: 2026-07-27
+**Task**: 清理记忆检索排序与索引效率问题
+**Branch**: `fix/memory-search-hygiene-20260726`
+
+### Summary
+
+修正记忆检索排序口径并消除全表扫描
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9b2b2e` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 35: 为精确基线检索建立文本哈希索引
+
+**Date**: 2026-07-27
+**Task**: 为精确基线检索建立文本哈希索引
+**Branch**: `perf/exact-query-text-hash-20260727`
+
+### Summary
+
+以文本哈希列替代文本比较并加建表一致性守卫
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `57d2f8f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 36: 修复架构审查发现的可靠性与一致性缺陷
+
+**Date**: 2026-07-27
+**Task**: 修复架构审查发现的可靠性与一致性缺陷
+**Branch**: `fix/arch-review-reliability-20260726`
+
+### Summary
+
+修复任务活动索引、租约与索引 outbox 的可靠性缺陷
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7c67f06` | (see git log) |
+| `bd80e72` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 37: 补齐外部服务超时与会话轮次租约
+
+**Date**: 2026-07-27
+**Task**: 补齐外部服务超时与会话轮次租约
+**Branch**: `fix/service-timeouts-turn-lease-20260726`
+
+### Summary
+
+为全部外部客户端注入显式超时并修正 arq 队列池的连接重试语义
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `75e07e9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
