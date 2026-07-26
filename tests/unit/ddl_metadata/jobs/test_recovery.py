@@ -51,7 +51,6 @@ def _record(
         attempt=attempt,
         created_at=moment,
         updated_at=moment,
-        graph_version=app_config.llm.graph_version,
     )
 
 
@@ -62,6 +61,7 @@ class _FakeStateStore:
         """绑定预置的权威投影集合。"""
         self._records = records
         self.transitions: list[tuple[str, JobStatus, JobStatus, dict[str, str]]] = []
+        self.incremented: list[bool] = []
 
     async def get(self, job_id: str) -> JobRecord:
         """返回预置投影，缺失时抛出稳定的任务不存在错误。"""
@@ -83,9 +83,11 @@ class _FakeStateStore:
         target: JobStatus,
         *,
         fields: Mapping[str, str] | None = None,
+        increment_attempt: bool = False,
     ) -> bool:
         """记录转换请求并统一报告 CAS 胜出。"""
         self.transitions.append((job_id, expected, target, dict(fields or {})))
+        self.incremented.append(increment_attempt)
         self._records[job_id] = _record(
             job_id,
             target,

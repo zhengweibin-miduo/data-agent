@@ -64,7 +64,6 @@ class JobCodec:
                 if values.get("expires_at")
                 else None
             ),
-            graph_version=values["graph_version"],
         )
 
     @staticmethod

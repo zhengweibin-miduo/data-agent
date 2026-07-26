@@ -3,10 +3,12 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from arq.connections import ArqRedis
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
+from redis.asyncio import ConnectionPool
 from redis.exceptions import RedisError
 
 from data_agent.conversation.api import router as conversation_router
@@ -45,22 +47,31 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     ElasticsearchClient.initialize()
     QdrantClient.initialize()
     TEIEmbeddingClient.initialize()
-    # 步骤三：把已就绪资源依赖的业务服务集中挂载到应用状态，供路由复用。
-    jobs = DDLJobStore(redis)
+    # 步骤三：构造 arq 队列客户端，使受理路径能立即调度激活而不必等待 worker 的
+    # dispatch 周期；dispatch outbox 仍是崩溃兜底，入队失败时自动退回周期调度。
+    # 这里直接构造而不用 arq.create_pool：后者在启动时就发起连接并带重试退避，
+    # 会把"Redis 暂时不可达"从按请求失败升级为 API 无法启动，也让生命周期无法在
+    # 没有 Redis 的环境下测试。arq 需要字节响应，因此不能复用应用的解码客户端。
+    queue = ArqRedis(
+        connection_pool=ConnectionPool.from_url(app_config.redis.url),
+    )
+    # 步骤四：把已就绪资源依赖的业务服务集中挂载到应用状态，供路由复用。
+    jobs = DDLJobStore(redis, queue)
     app.state.jobs = jobs
     app.state.memories = MemoryService(jobs, MetadataMemoryReferenceValidator())
     app.state.conversations = ConversationService()
-    # 步骤四：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
+    # 步骤五：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
     logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")
     try:
         yield
     finally:
-        # 步骤五：按初始化逆序关闭外部资源，避免先释放仍被下游客户端依赖的资源。
+        # 步骤六：按初始化逆序关闭外部资源，避免先释放仍被下游客户端依赖的资源。
         try:
             await TEIEmbeddingClient.close()
             await QdrantClient.close()
             await ElasticsearchClient.close()
             await MySQLDatabase.close()
+            await queue.aclose()
             await RedisClient.close()
             logger.info("API 服务已停止，进程内共享资源已经关闭")
         finally:

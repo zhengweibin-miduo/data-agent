@@ -44,15 +44,37 @@ class DDLJobStore:
 
     _prefix: ClassVar[str] = app_config.redis.key_prefix
 
-    def __init__(self, redis: Redis) -> None:
-        """绑定已初始化的应用 Redis 客户端。"""
+    def __init__(self, redis: Redis, queue: ArqRedis | None = None) -> None:
+        """绑定已初始化的应用 Redis 客户端与可选的 arq 队列。
+
+        Args:
+            redis: 应用共享的 Redis 客户端。
+            queue: 可选 arq 队列。提供时受理路径会立即调度激活，把等待 dispatch
+                cron 的时延降到零；不提供时完全退回 outbox + cron 的既有行为。
+        """
         self._redis = redis
+        self._queue = queue
         self._keys = JobKeys(self._prefix)
         self._state = RedisJobStateStore(redis, self._keys)
         self._leases = SourceLeaseStore(redis, self._keys)
         self._outbox = JobOutboxStore(redis, self._keys)
         self._events = JobEventStore(redis, self._keys)
         self._activity = JobActivityStore(redis, self._keys)
+
+    async def _activate_now_safely(self, job_id: str, revision: int) -> None:
+        """尽力立即调度一个激活请求，失败不影响已成立的受理承诺。
+
+        outbox 成员仍然是崩溃兜底与唯一的可恢复调度请求，因此这里的失败只会让
+        激活退回到 cron 周期，不需要撤销受理，也不应向调用方暴露。
+        """
+        # 步骤一：未注入队列时保持既有 outbox + cron 行为。
+        if self._queue is None:
+            return
+        # 步骤二：立即调度失败只记录告警；outbox 成员未被移除，cron 会重放。
+        try:
+            await self._outbox.dispatch_one(self._queue, job_id, revision)
+        except (RedisError, OSError):
+            _log_immediate_dispatch_deferred(job_id)
 
     @property
     def dispatch_key(self) -> str:
@@ -114,7 +136,9 @@ class DDLJobStore:
             JobEventType.PROGRESS,
             JobEventStage.QUEUED,
         )
-        # 步骤五：返回已持久化的公开记录，由 API 层据此报告 HTTP 202。
+        # 步骤五：受理成立后尽力立即调度，避免交互流程白等一个 cron 周期。
+        await self._activate_now_safely(record.job_id, record.revision)
+        # 步骤六：返回已持久化的公开记录，由 API 层据此报告 HTTP 202。
         return record
 
     async def get(self, job_id: str) -> JobRecord:
@@ -171,6 +195,10 @@ class DDLJobStore:
         """读取当前修订的内部回答 JSON。"""
         return await self._state.stored_answers(job_id)
 
+    async def graph_version(self, job_id: str) -> str | None:
+        """读取仅供 worker 使用的图版本兼容字段。"""
+        return await self._state.graph_version(job_id)
+
     async def transition(
         self,
         job_id: str,
@@ -179,6 +207,7 @@ class DDLJobStore:
         target: JobStatus,
         *,
         fields: Mapping[str, str] | None = None,
+        increment_attempt: bool = False,
     ) -> bool:
         """按集中状态表执行修订感知的原子转换。"""
         # 步骤一：先用集中状态表拒绝非法边，避免不同调用方各自解释生命周期。
@@ -192,6 +221,7 @@ class DDLJobStore:
             expected,
             target,
             fields=fields,
+            increment_attempt=increment_attempt,
         )
         # 步骤三：只有原子转换胜出的调用方才回读并尽力发布新的公开投影。
         if changed and target in _STATUS_EVENT_TYPES:
@@ -204,16 +234,15 @@ class DDLJobStore:
         return changed
 
     async def mark_running(self, job_id: str, revision: int) -> bool:
-        """Pending -> running，并增加尝试次数。"""
-        # 步骤一：读取当前尝试次数，确保公开计数基于权威记录递增。
-        record = await self.get(job_id)
-        # 步骤二：通过统一转换入口原子进入 running，并携带新的尝试次数。
+        """Pending -> running，并原子增加尝试次数。"""
+        # 步骤一：尝试次数由转换脚本内的 HINCRBY 完成，不再先读旧值再写回——
+        # 读改写之间若有其他推进者插入，计数会被覆盖为陈旧值。
         return await self.transition(
             job_id,
             revision,
             JobStatus.PENDING,
             JobStatus.RUNNING,
-            fields={"attempt": str(record.attempt + 1)},
+            increment_attempt=True,
         )
 
     async def mark_waiting(
@@ -298,7 +327,8 @@ class DDLJobStore:
                 "回答修订或问题集合已过期",
                 http_status=409,
             )
-        # 步骤五：回读脚本更新后的权威投影，仅对首次受理尽力发布排队通知。
+        # 步骤五：回读脚本更新后的权威投影，仅对首次受理尽力发布排队通知，
+        # 并立即调度新修订的激活，使人工回答后不再白等一个 cron 周期。
         updated = await self.get(job_id)
         if result == 1:
             await self._publish_safely(
@@ -306,6 +336,7 @@ class DDLJobStore:
                 JobEventType.PROGRESS,
                 JobEventStage.QUEUED,
             )
+            await self._activate_now_safely(job_id, updated.revision)
         # 步骤六：返回最新投影及首次受理标志，让 API 区分幂等重放。
         return updated, result == 1
 
@@ -650,3 +681,9 @@ def _log_stalled_job_failed(job_id: str) -> None:
     """记录一个超过激活上限而被判定失败的停滞任务。"""
     del job_id
     logger.warning("停滞任务已超过累计激活上限，已判定为失败终态")
+
+
+def _log_immediate_dispatch_deferred(job_id: str) -> None:
+    """记录一次退回周期调度的立即激活尝试。"""
+    del job_id
+    logger.warning("立即调度激活失败，调度请求保留在 outbox 并由周期任务重放")
