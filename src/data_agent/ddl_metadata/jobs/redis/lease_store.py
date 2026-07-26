@@ -6,10 +6,10 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.redis.scripts import JobScripts
+from data_agent.errors import DataAgentError
 from data_agent.settings import app_config
 
 
@@ -49,7 +49,7 @@ class SourceLeaseStore:
             )
         )
         if not acquired:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "source_busy",
                 "memory_mutation",
                 "该逻辑数据源有活动任务",

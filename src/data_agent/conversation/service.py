@@ -12,14 +12,13 @@ from data_agent.conversation.models import (
     StartTurnResponse,
 )
 from data_agent.conversation.repository import ConversationRepository
-from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.memory.application.search import MemorySearchService
-from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
-from data_agent.ddl_metadata.models.memory import BuiltinMemoryCategory
+from data_agent.errors import DataAgentError
+from data_agent.identifiers import CONVERSATION_MEMORY_SOURCE
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.memory.application.search import MemorySearchService
+from data_agent.memory.mysql.repository import MemoryRepository
+from data_agent.models.memory import BuiltinMemoryCategory
 from data_agent.settings import app_config
-
-CONVERSATION_MEMORY_SOURCE = "data_agent_conversation"
 
 
 class ConversationService:
@@ -66,7 +65,7 @@ class ConversationService:
                 limit=limit,
             )
         if page is None:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "conversation_not_found",
                 "conversation_history",
                 "会话不存在",
@@ -86,7 +85,7 @@ class ConversationService:
                 conversation_uid,
             )
         if not deleted:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "conversation_not_found",
                 "conversation_delete",
                 "会话不存在",

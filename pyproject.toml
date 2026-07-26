@@ -26,6 +26,9 @@ dependencies = [
     "uvicorn>=0.51,<0.52",
 ]
 
+[project.scripts]
+data-agent-api = "data_agent.main:main"
+
 [build-system]
 requires = ["uv_build>=0.8.15,<0.9"]
 build-backend = "uv_build"

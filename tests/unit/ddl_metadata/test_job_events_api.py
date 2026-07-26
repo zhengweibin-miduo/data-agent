@@ -8,9 +8,9 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from data_agent.application import create_app
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import JobRecord, JobStatus
+from data_agent.errors import DataAgentError
+from data_agent.models.jobs import JobRecord, JobStatus
 from tests.helpers.checks import check_condition, check_equal
 
 
@@ -49,7 +49,7 @@ class _MissingJobs:
     async def get(self, job_id: str) -> JobRecord:
         """抛出既有 404 业务错误。"""
         del job_id
-        raise DDLMetadataError(
+        raise DataAgentError(
             "job_not_found",
             "job_status",
             "missing",

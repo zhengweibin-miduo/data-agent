@@ -8,7 +8,7 @@ from sqlalchemy import (
     Text,
 )
 
-from data_agent.ddl_metadata.persistence.schema import metadata
+from data_agent.persistence.schema import metadata
 
 table_info = Table(
     "table_info",

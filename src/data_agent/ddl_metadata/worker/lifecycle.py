@@ -6,14 +6,9 @@ from loguru import logger
 
 from data_agent.conversation.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.memory.application.context import MemoryContextLoader
-from data_agent.ddl_metadata.memory.application.snapshots import (
+from data_agent.ddl_metadata.persistence.snapshots import (
     MetadataSnapshotService,
 )
-from data_agent.ddl_metadata.memory.indexing.elasticsearch import (
-    MemoryElasticsearchIndex,
-)
-from data_agent.ddl_metadata.memory.indexing.qdrant import MemoryQdrantIndex
 from data_agent.ddl_metadata.worker.maintenance import (
     cleanup_checkpoints,
     dispatch_pending,
@@ -23,6 +18,7 @@ from data_agent.ddl_metadata.workflow.graph import build_ddl_metadata_graph
 from data_agent.ddl_metadata.workflow.llm_metadata_generator import (
     LLMMetadataGenerator,
 )
+from data_agent.ddl_metadata.workflow.memory_context import MemoryContextLoader
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.llm_client import LLMClient
@@ -31,6 +27,10 @@ from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.logging import setup_logging
+from data_agent.memory.indexing.elasticsearch import (
+    MemoryElasticsearchIndex,
+)
+from data_agent.memory.indexing.qdrant import MemoryQdrantIndex
 
 
 async def startup(ctx: dict[Any, Any]) -> None:

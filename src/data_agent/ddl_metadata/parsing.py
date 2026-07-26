@@ -11,9 +11,9 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.identifiers import column_id, table_id
-from data_agent.ddl_metadata.models.physical import (
+from data_agent.errors import DataAgentError
+from data_agent.identifiers import column_id, table_id
+from data_agent.models.physical import (
     PhysicalColumn,
     PhysicalSchema,
     PhysicalTable,
@@ -88,7 +88,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     """把单个 CREATE TABLE AST 转为物理表。"""
     schema = create.this
     if not isinstance(schema, exp.Schema) or not isinstance(schema.this, exp.Table):
-        raise DDLMetadataError(
+        raise DataAgentError(
             "invalid_create_table",
             "parse_ddl",
             "CREATE TABLE 缺少有效列定义",
@@ -110,7 +110,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
         column_name = item.name
         normalized_name = column_name.casefold()
         if normalized_name in seen_columns:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "duplicate_column",
                 "parse_ddl",
                 f"表 {qualified_name} 存在重复列 {column_name}",
@@ -123,7 +123,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
             role = "foreign_key"
         data_type = item.args.get("kind")
         if not isinstance(data_type, exp.DataType):
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "missing_column_type",
                 "parse_ddl",
                 f"列 {qualified_name}.{column_name} 缺少数据类型",
@@ -138,14 +138,14 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
             )
         )
     if not columns:
-        raise DDLMetadataError(
+        raise DataAgentError(
             "empty_table",
             "parse_ddl",
             f"表 {qualified_name} 未定义列",
         )
     unknown_keys = (table_primary | table_foreign) - seen_columns
     if unknown_keys:
-        raise DDLMetadataError(
+        raise DataAgentError(
             "unknown_constraint_column",
             "parse_ddl",
             "约束引用了未定义列",
@@ -169,7 +169,7 @@ def _parse_ddl_sync(
     """在线程中解析并规范化有界 MySQL CREATE TABLE DDL。"""
     encoded_size = len(ddl.encode("utf-8"))
     if encoded_size > limits.max_ddl_bytes:
-        raise DDLMetadataError(
+        raise DataAgentError(
             "ddl_too_large",
             "parse_ddl",
             "DDL 超过配置的字节限制",
@@ -181,13 +181,13 @@ def _parse_ddl_sync(
     try:
         statements = sqlglot.parse(ddl, read="mysql")
     except ParseError as error:
-        raise DDLMetadataError(
+        raise DataAgentError(
             "malformed_ddl",
             "parse_ddl",
             "DDL 语法无效",
         ) from error
     if not statements:
-        raise DDLMetadataError("empty_ddl", "parse_ddl", "DDL 不能为空")
+        raise DataAgentError("empty_ddl", "parse_ddl", "DDL 不能为空")
 
     creates: list[exp.Create] = []
     for statement in statements:
@@ -195,14 +195,14 @@ def _parse_ddl_sync(
             not isinstance(statement, exp.Create)
             or statement.args.get("kind") != "TABLE"
         ):
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "unsupported_statement",
                 "parse_ddl",
                 "仅支持 MySQL CREATE TABLE 语句",
             )
         creates.append(statement)
     if len(creates) > limits.max_tables:
-        raise DDLMetadataError(
+        raise DataAgentError(
             "too_many_tables",
             "parse_ddl",
             "表数量超过配置限制",
@@ -215,14 +215,14 @@ def _parse_ddl_sync(
     tables = [_parse_table(source, create) for create in creates]
     normalized_tables = [table.qualified_name.casefold() for table in tables]
     if len(set(normalized_tables)) != len(normalized_tables):
-        raise DDLMetadataError(
+        raise DataAgentError(
             "duplicate_table",
             "parse_ddl",
             "DDL 存在重复表",
         )
     column_count = sum(len(table.columns) for table in tables)
     if column_count > limits.max_columns:
-        raise DDLMetadataError(
+        raise DataAgentError(
             "too_many_columns",
             "parse_ddl",
             "列数量超过配置限制",

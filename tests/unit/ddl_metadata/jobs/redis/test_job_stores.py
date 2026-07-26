@@ -4,13 +4,13 @@ from typing import cast
 
 from redis.asyncio import Redis
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import DDLJobRequest, JobStatus
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.errors import DataAgentError
+from data_agent.models.jobs import DDLJobRequest, JobStatus
+from data_agent.models.semantic import (
     MetricAnswer,
     MetricQuestion,
 )
@@ -175,8 +175,8 @@ async def test_ddl_job_store_bounds_size_before_redis() -> None:
                     ddl=ddl,
                 )
             )
-        except DDLMetadataError as error:
-            check_exception(f"{label} 捕获预期异常", error, DDLMetadataError)
+        except DataAgentError as error:
+            check_exception(f"{label} 捕获预期异常", error, DataAgentError)
             check_equal(f"{label} 错误码", error.code, "ddl_too_large")
             check_equal(f"{label} 阶段", error.stage, "submit")
             check_equal(f"{label} HTTP 状态", error.http_status, 422)

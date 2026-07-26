@@ -9,16 +9,16 @@ from redis.exceptions import RedisError
 
 from data_agent.application import create_app
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.memory.application.snapshots import (
+from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.ddl_metadata.persistence.snapshots import (
     MetadataSnapshotService,
 )
-from data_agent.ddl_metadata.models.jobs import DDLJobRequest
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.models.jobs import DDLJobRequest
+from data_agent.models.memory import (
     BuiltinMemoryCategory,
     SemanticDecisionContent,
 )
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import APISettings, AppSettings, app_config
 from tests.helpers.checks import (
     check_condition,

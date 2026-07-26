@@ -6,7 +6,7 @@ from redis.asyncio import Redis
 
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
-from data_agent.ddl_metadata.models.jobs import JobEvent, JobEventData, JobEventType
+from data_agent.models.jobs import JobEvent, JobEventData, JobEventType
 from data_agent.settings import app_config
 
 

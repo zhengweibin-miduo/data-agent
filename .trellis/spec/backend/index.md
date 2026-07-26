@@ -33,8 +33,11 @@ relational schema.
 ## Pre-Development Checklist
 
 - Identify the concrete files involved: configuration belongs in
-  `src/data_agent/settings.py` and `conf/app_config.yaml`, shared async
-  resources in `src/data_agent/infrastructure/`, DDL contracts and behavior in
+  `src/data_agent/settings.py` and `conf/app_config.yaml`, cross-feature
+  contracts in `src/data_agent/models/`, long-term memory in
+  `src/data_agent/memory/`, shared SQLAlchemy metadata in
+  `src/data_agent/persistence/schema.py`, shared async resources in
+  `src/data_agent/infrastructure/`, DDL-specific behavior in
   `src/data_agent/ddl_metadata/`, application composition in
   `src/data_agent/application.py`, logging setup in
   `src/data_agent/logging.py`, pytest checks in `tests/`, and local
@@ -60,11 +63,12 @@ relational schema.
   when the corresponding service is available, and report an unavailable
   dependency instead of claiming the check passed.
 - Trace renamed package and configuration paths end to end. Current references
-  use `data_agent.infrastructure`, `data_agent.ddl_metadata`, `tests`, and
-  `conf/app_config.yaml`; retired `app`, `app_test`, and root `main.py` paths
-  must not remain in active code, CI, or current specs. Archived task and
-  journal records may keep names that were accurate when those records were
-  written.
+  use `data_agent.models`, `data_agent.memory`, `data_agent.persistence`,
+  `data_agent.infrastructure`, `data_agent.ddl_metadata`, `tests`, and
+  `conf/app_config.yaml`. Retired `app`, `app_test`, root `main.py`, and
+  feature-nested shared-contract paths must not remain in active code, CI, or
+  current specs. Archived task and journal records may keep names that were
+  accurate when those records were written.
 - Re-read every changed guide and verify that its examples, commands, and links
   resolve to current repository files.
 

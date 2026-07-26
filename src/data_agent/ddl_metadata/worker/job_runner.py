@@ -27,18 +27,18 @@ from redis.exceptions import (
 )
 from sqlalchemy.exc import OperationalError
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.ddl_metadata.worker.maintenance import cleanup_checkpoints
+from data_agent.ddl_metadata.workflow.state import DDLGraphState
+from data_agent.errors import DataAgentError
+from data_agent.models.jobs import (
     JobError,
     JobEventStage,
     JobRecord,
     JobResult,
     JobStatus,
 )
-from data_agent.ddl_metadata.models.semantic import MetricQuestion
-from data_agent.ddl_metadata.worker.maintenance import cleanup_checkpoints
-from data_agent.ddl_metadata.workflow.state import DDLGraphState
+from data_agent.models.semantic import MetricQuestion
 from data_agent.settings import app_config
 
 _RETRYABLE = (
@@ -118,7 +118,7 @@ def _log_execution_outcome(
         event_logger.info("DDL 元数据任务执行完成")
     elif record.status == JobStatus.REJECTED:
         event_logger.warning("DDL 元数据任务已拒绝")
-    elif error is not None and not isinstance(error, DDLMetadataError):
+    elif error is not None and not isinstance(error, DataAgentError):
         event_logger.opt(exception=error).error("DDL 元数据任务执行失败")
     else:
         event_logger.error("DDL 元数据任务执行失败")
@@ -438,14 +438,14 @@ async def run_ddl_job(
             raise Retry(defer=(2**latest.attempt) + random.uniform(0, 1)) from error
         job_error = JobError(
             code=(
-                error.code if isinstance(error, DDLMetadataError) else "worker_failed"
+                error.code if isinstance(error, DataAgentError) else "worker_failed"
             ),
-            stage=(error.stage if isinstance(error, DDLMetadataError) else "worker"),
+            stage=(error.stage if isinstance(error, DataAgentError) else "worker"),
             retryable=False,
             attempt=latest.attempt,
             details=(
                 error.details
-                if isinstance(error, DDLMetadataError)
+                if isinstance(error, DataAgentError)
                 else {"error_type": type(error).__name__}
             ),
         )

@@ -3,13 +3,13 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from data_agent.ddl_metadata.memory.application.context import LoadedMemoryContext
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.ddl_metadata.workflow.memory_context import LoadedMemoryContext
+from data_agent.models.memory import (
     MemoryCandidate,
     MemoryContent,
 )
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
     MetricAnswer,
     MetricMetadata,
     MetricOutput,

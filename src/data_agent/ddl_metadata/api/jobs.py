@@ -6,7 +6,7 @@ from loguru import logger
 
 from data_agent.ddl_metadata.api.job_events import stream_job_events
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.models.jobs import (
     AnswerRequest,
     DDLJobAccepted,
     DDLJobRequest,
