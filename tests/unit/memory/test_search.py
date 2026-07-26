@@ -223,3 +223,108 @@ async def test_search_returns_items_when_record_access_fails(
     check_equal(
         "访问统计失败后返回原始记忆 UID", response.items[0].memory.uid, detail.uid
     )
+
+
+@pytest.mark.asyncio
+async def test_search_returns_baseline_hit_with_stale_projection_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """投影版本落后不得否决 MySQL 权威回查结果。"""
+    content = SemanticDecisionContent(
+        table=SemanticTable(
+            table_id="orders",
+            role=TableRole.FACT,
+            description="订单事实表",
+            confidence=0.9,
+        )
+    )
+    # 权威行仍是当前内容版本，但投影版本落后于配置——重建任务尚未给它打上新版本。
+    detail = MemoryDetail(
+        uid="memory-stale-projection",
+        source="dw",
+        category=BuiltinMemoryCategory.DDL_SEMANTIC.value,
+        memory_key="orders",
+        content_schema="semantic.v1",
+        memory_text="订单事实表",
+        content=content,
+        content_hash=memory_content_hash(content),
+        trust=MemoryTrust.MODEL_VALIDATED,
+        status=MemoryStatus.ACTIVE,
+        importance_score=0.5,
+        lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
+        record_version=1,
+        access_count=0,
+        content_version=app_config.memory.content_version,
+        projection_version="stale-projection-version",
+        created_at=datetime.now(UTC).replace(tzinfo=None),
+        updated_at=datetime.now(UTC).replace(tzinfo=None),
+    )
+
+    class FakeMemoryRepository:
+        """只提供精确基线命中的权威仓储替身。"""
+
+        def __init__(self, session: _FakeSession) -> None:
+            """记录测试 Session。"""
+            self._session = session
+
+        async def find_exact_query(
+            self,
+            source: str,
+            query: str,
+            categories: set[str] | None,
+            *,
+            user_id: str | None,
+            limit: int,
+        ) -> list[str]:
+            """返回基线精确候选。"""
+            return [detail.uid]
+
+        async def get_many_active(
+            self,
+            uids: list[str],
+            *,
+            user_id: str | None,
+        ) -> list[object]:
+            """返回 MySQL 权威复核结果。"""
+
+            class Row:
+                """模拟仓储返回对象。"""
+
+                def __init__(self, memory_detail: MemoryDetail) -> None:
+                    """保存详情。"""
+                    self.detail = memory_detail
+
+            return [Row(detail)]
+
+        async def record_access(
+            self,
+            uids: set[str],
+            *,
+            source: str,
+            user_id: str | None,
+        ) -> None:
+            """访问统计成功但不产生可观察副作用。"""
+
+    monkeypatch.setattr(search_module, "MySQLDatabase", _FakeMySQLDatabase)
+    monkeypatch.setattr(search_module, "MemoryRepository", FakeMemoryRepository)
+    monkeypatch.setattr(
+        search_module,
+        "MemoryIndexOutboxRepository",
+        _FakeMemoryIndexOutboxRepository,
+    )
+    monkeypatch.setattr(search_module, "ElasticsearchClient", _FakeClientProvider)
+    monkeypatch.setattr(search_module, "QdrantClient", _FakeClientProvider)
+    monkeypatch.setattr(search_module, "TEIEmbeddingClient", _FakeClientProvider)
+    monkeypatch.setattr(
+        search_module, "MemoryElasticsearchIndex", _FakeElasticsearchIndex
+    )
+    monkeypatch.setattr(search_module, "MemoryQdrantIndex", _FakeQdrantIndex)
+
+    response = await MemorySearchService().search("订单", "dw")
+
+    check_equal("投影版本落后仍返回基线命中数量", len(response.items), 1)
+    check_equal(
+        "投影版本落后仍返回原始记忆 UID",
+        response.items[0].memory.uid,
+        detail.uid,
+    )
