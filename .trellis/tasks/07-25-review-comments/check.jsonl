@@ -1,0 +1,12 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "code_review.md", "reason": "复核报告格式和严重程度"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核 Docstring 与注释契约"}
+{"file": ".trellis/tasks/07-25-review-comments/research/source-test-comment-inventory.md", "reason": "复核源码和测试覆盖范围"}
+{"file": ".trellis/tasks/07-25-review-comments/research/config-doc-notes-inventory.md", "reason": "复核配置和文档边界"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "复核对话与长期记忆注释准确性"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核事务和 outbox 注释"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核重试与终态注释"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "复核 checkpoint 与投影注释"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-plan-ddl.md", "reason": "复核 DDL 注释覆盖"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-plan-conversation.md", "reason": "复核 conversation 注释覆盖"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-plan-memory.md", "reason": "复核记忆注释覆盖"}
