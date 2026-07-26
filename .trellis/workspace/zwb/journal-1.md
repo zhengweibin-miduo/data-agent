@@ -938,3 +938,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: 清理 DDL 任务契约与激活时延
+
+**Date**: 2026-07-26
+**Task**: 清理 DDL 任务契约与激活时延
+**Branch**: `fix/job-contract-cleanups-20260726`
+
+### Summary
+
+JobRecord 移除内部 graph_version 并改走内部读取路径；受理回答后清除 questions_json 但保留幂等判定键；attempt 改由 HINCRBY 原子递增；受理后立即 dispatch_one 消除最坏 10 秒激活时延，arq 客户端惰性构造避免启动期连接。新增 4 个单元测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cc7df84` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

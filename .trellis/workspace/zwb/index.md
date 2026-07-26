@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~940 | Active |
+| `journal-1.md` | ~973 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-07-26 | 清理 DDL 任务契约与激活时延 | `cc7df84` | `fix/job-contract-cleanups-20260726` |
 | 28 | 2026-07-26 | 修复架构审查发现的可靠性与一致性缺陷 | `b17ca1e` | `fix/arch-review-reliability-20260726` |
 | 27 | 2026-07-26 | 项目日志 AOP 上下文改造 | `ccbe542`, `5470f01` | `refactor/logger-aop-context-20260726` |
 | 26 | 2026-07-26 | 统一核心流程与 CRUD 中文步骤注释 | `3b57a54` | `chore/add-core-flow-comments-20260726` |
