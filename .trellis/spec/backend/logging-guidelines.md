@@ -85,11 +85,12 @@ Never mutate per-request or per-job data through global
 
 `logging_boundary()` preserves the original callable behavior while applying
 context for the real execution lifetime. Its `component`, `operation`, and
-`context_factory` arguments are all optional. With no arguments, component and
-operation come from the wrapped callable module and qualified name. Context
-comes from `inspect.signature()` binding plus an exact field allowlist read only
-from direct parameters, mappings, declared Pydantic fields, and dataclass
-fields. Reflection must not inspect the call stack, local variables, arbitrary
+`context_factory` arguments are all optional. With no arguments, component
+comes from the wrapped callable module after removing the project root-package
+prefix, and operation comes from its qualified name. Context comes from
+`inspect.signature()` binding plus an exact field allowlist read only from
+direct parameters, mappings, declared Pydantic fields, and dataclass fields.
+Reflection must not inspect the call stack, local variables, arbitrary
 attributes, or properties.
 
 Business classes, functions, and route handlers never carry
@@ -97,7 +98,7 @@ Business classes, functions, and route handlers never carry
 only where the application registers execution with a framework:
 
 - FastAPI middleware covers the complete request and streamed response.
-- application composition wraps process lifespans and SSE generators;
+- application composition wraps process lifespans;
 - `WorkerSettings` wraps arq functions, cron callbacks, and lifecycle hooks;
 - LangGraph nodes are wrapped at each `graph.add_node()` registration;
 - Async-generator context is active during iteration, not only when the

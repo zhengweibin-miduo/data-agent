@@ -363,10 +363,10 @@ async def run_ddl_job(
             _log_execution_outcome(projected)
         await cleanup_checkpoints(ctx)
     except Retry:
-        # 图节点显式请求的 arq 重试属于 worker 控制流，必须原样交还调度器。
+        # 步骤七：图节点显式请求的 arq 重试属于 worker 控制流，原样交还调度器。
         raise
     except Exception as error:
-        # 步骤七：重新读取权威 attempt；仅显式瞬态异常在预算内回到 PENDING。
+        # 步骤八：重新读取权威 attempt；仅显式瞬态异常在预算内回到 PENDING。
         try:
             latest = await jobs.get(job_id)
         except (
@@ -377,7 +377,7 @@ async def run_ddl_job(
         ) as redis_error:
             _log_retry_scheduled()
             raise Retry(defer=2) from redis_error
-        # 步骤八：可重试异常使用指数退避，并复用 checkpoint 避免重复已完成的模型节点。
+        # 步骤九：可重试异常使用指数退避，并复用 checkpoint 避免重复已完成的模型节点。
         if isinstance(error, _RETRYABLE) and latest.attempt < 3:
             await jobs.transition(
                 job_id,
@@ -387,7 +387,7 @@ async def run_ddl_job(
             )
             _log_retry_scheduled()
             raise Retry(defer=(2**latest.attempt) + random.uniform(0, 1)) from error
-        # 步骤九：不可重试或预算耗尽时写入安全失败终态，并安排 checkpoint 清理。
+        # 步骤十：不可重试或预算耗尽时写入安全失败终态，并安排 checkpoint 清理。
         job_error = JobError(
             code=(
                 error.code if isinstance(error, DataAgentError) else "worker_failed"

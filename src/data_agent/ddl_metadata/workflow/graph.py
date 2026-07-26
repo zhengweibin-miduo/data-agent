@@ -79,9 +79,8 @@ def build_ddl_metadata_graph(
         "persist_snapshot",
         _observed_node(nodes.persist_node),
     )
-    # 步骤二：按确定性解析、模型生成、确定性校验和人工问答边界连接条件路由。
-    # 路由把模型输出夹在确定性校验之间，route 只由当前节点写入；只有完成语义、
-    # 问答和指标校验的 finalized 数据才能构建记忆并抵达唯一持久化出口。
+    # 步骤二：按解析、模型生成、确定性校验和人工问答边界连接条件路由；route
+    # 只由当前节点写入，完成问答和指标校验的 finalized 数据才能进入记忆构建。
     graph.add_edge(START, "parse_ddl")
     graph.add_conditional_edges("parse_ddl", after_terminal_guard)
     graph.add_conditional_edges("load_and_validate_memory", after_memory)

@@ -26,9 +26,9 @@ logger.warning("对话长期记忆提炼延后")
 `logging_context()` 或 `@logging_boundary`。
 
 `logging_boundary()` 的 `component`、`operation` 和 `context_factory` 均为可选。
-默认从 callable 的 module、qualified name、签名绑定参数，以及参数中允许的
-Mapping/Pydantic/dataclass 字段反射提取。反射严格使用字段白名单，不遍历任意
-对象、不读取 property、不检查调用栈或局部变量。
+默认从 callable 去除项目根包前缀后的 module、qualified name、签名绑定参数，
+以及参数中允许的 Mapping/Pydantic/dataclass 字段反射提取。反射严格使用字段
+白名单，不遍历任意对象、不读取 property、不检查调用栈或局部变量。
 
 ## AOP 接入点
 
@@ -37,8 +37,8 @@ Mapping/Pydantic/dataclass 字段反射提取。反射严格使用字段白名�
 - arq：只在 `WorkerSettings` 注册函数、cron 和生命周期 hook 时包装 callable。
 - LangGraph：只在 `graph.add_node()` 的构图 seam 包装节点 callable；节点实现
   不标注日志装饰器。
-- SSE：包装 async generator 的实际迭代期，而不是只包装返回
-  `StreamingResponse` 的路由函数。
+- SSE：请求 middleware 的 ContextVar 生命周期覆盖完整 ASGI 调用，包括
+  `StreamingResponse` 对 async generator 的实际迭代期。
 - 后台维护、长期记忆索引和对话提炼：在 worker/composition root 注册时包装，
   运行期间继承统一上下文。
 

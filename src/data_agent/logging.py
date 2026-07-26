@@ -150,7 +150,6 @@ def _reflected_context(value: object) -> dict[str, object]:
                 for target in _CONTEXT_ALIASES.get(field.name, (field.name,)):
                     reflected[target] = field_value
     except Exception:
-        # 反射只增强可观测性；不可信 Mapping 或字段访问失败时忽略整个参数。
         return {}
     return reflected
 
@@ -184,7 +183,6 @@ def _boundary_context(
         try:
             extracted = dict(factory(*args, **kwargs))
         except Exception:
-            # 上下文提取只是可观测性增强，失败不得阻止业务函数执行。
             extracted = {}
     context.update(extracted)
     correlation_id = context.get("job_id") or context.get("task_id")
@@ -360,7 +358,6 @@ def _patch_record(record: Any) -> None:
                 exception_traceback,
             )
     except Exception:
-        # patcher 自身故障不得改变业务返回、异常或日志调用路径。
         return
 
 
