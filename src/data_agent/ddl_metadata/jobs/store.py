@@ -443,6 +443,18 @@ class DDLJobStore:
         """
         await self._activity.touch(job_id, await self._activity.now())
 
+    async def backfill_active_index(self) -> int:
+        """把升级前遗留的非终态任务补录进活动索引。
+
+        活动索引只由本版本的原子脚本维护，因此升级前已经停在 pending/running 的
+        任务不在其中；非终态任务 Hash 不设 TTL，不补录就永远不会被停滞巡检发现。
+        worker 启动时执行一次，幂等。
+
+        Returns:
+            本次补录的任务数量。
+        """
+        return await self._activity.backfill(await self._activity.now())
+
     async def reap_stalled(self, limit: int = 100) -> list[str]:
         """回收被基础设施重试预算耗尽后遗留的停滞任务。
 

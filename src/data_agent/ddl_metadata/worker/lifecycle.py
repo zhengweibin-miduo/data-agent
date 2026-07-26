@@ -114,7 +114,13 @@ async def startup(ctx: dict[Any, Any]) -> None:
     model = LLMClient.initialize()
     await LLMClient.check_structured_output_capability()
     checkpointer = await CheckpointStore.initialize()
-    ctx["jobs"] = DDLJobStore(redis)
+    jobs = DDLJobStore(redis)
+    # 活动索引只由本版本的原子脚本维护，升级前停在 pending/running 的任务不在其中，
+    # 而非终态 Hash 不设 TTL 不会自行消失；启动补录一次使停滞巡检能覆盖它们。
+    backfilled = await jobs.backfill_active_index()
+    if backfilled:
+        logger.info("已把遗留非终态任务补录进活动索引，停滞巡检将覆盖它们")
+    ctx["jobs"] = jobs
     ctx["conversation_extractor"] = ConversationMemoryExtractor(model)
     ctx["graph"] = build_ddl_metadata_graph(
         DDLGraphDependencies(

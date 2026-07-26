@@ -17,6 +17,7 @@ from data_agent.ddl_metadata.worker.maintenance import (
     extract_conversation_memory,
     purge_user_memories,
     reap_stalled_jobs,
+    report_memory_index_dead_letters,
 )
 from data_agent.infrastructure.job_queue import (
     build_queue_pool,
@@ -82,6 +83,9 @@ class WorkerSettings:
             _observed(purge_user_memories),
             second={7, 17, 27, 37, 47, 57},
         ),
+        # 死信告警独立成低频 cron：挂在 dispatch 上时，队列持续饱和会让
+        # "批次未满才统计"永不成立，积压完全没有信号。
+        cron(_observed(report_memory_index_dead_letters), minute=None, second=9),
     ]
     on_startup = _observed(startup)
     on_shutdown = _observed(shutdown)

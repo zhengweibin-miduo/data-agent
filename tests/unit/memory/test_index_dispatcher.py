@@ -128,6 +128,7 @@ def _install(
     acknowledged_hashes: list[str | None] | None = None,
     converged_out: list[tuple[str, str]] | None = None,
     broken_projections: set[str] | None = None,
+    lost_claims: set[str] | None = None,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """安装记录型替身并返回确认与退避轨迹。"""
     acknowledged: list[tuple[str, str]] = []
@@ -155,6 +156,11 @@ def _install(
             """返回预置的已领取期望状态。"""
             recorder.record("claim")
             return items
+
+        async def renew_claim(self, item: MemoryOutboxItem) -> bool:
+            """记录逐项续租，并按预置结果决定是否仍持有领取代次。"""
+            recorder.record("renew")
+            return item.memory_uid not in (lost_claims or set())
 
         async def projection(self, uid: str) -> MemoryProjection | None:
             """返回预置的权威投影；指定 UID 模拟确定性解码失败。"""
@@ -518,3 +524,48 @@ async def test_dispatch_registers_durable_convergence_after_purge(
         ],
     )
     check_equal("不再执行一次性远程补偿删除", recorder.events.count("es_delete"), 0)
+
+
+async def test_dispatch_renews_claim_before_processing_each_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """每项在处理前续租，使租约覆盖它自己的处理窗口。"""
+    # 整批共用一个到期时间时，靠前项目的累计耗时会让尾部行在尚未处理前重新可领取，
+    # 后续 cron 会与本 dispatcher 重复调用外部服务。
+    recorder = _Recorder()
+    _install(
+        monkeypatch,
+        recorder,
+        items=_items("memory-8", MemoryIndexOperation.UPSERT),
+        projections={"memory-8": _projection("memory-8", MemoryStatus.ACTIVE)},
+    )
+
+    await MemoryIndexDispatcher().dispatch()
+
+    check_equal("两个目标各自续租一次", recorder.depths_for("renew"), [1, 1])
+    check_condition(
+        "续租发生在外部写入之前",
+        recorder.events.index("renew") < recorder.events.index("es_upsert"),
+        actual=str(recorder.events),
+        expected="renew 先于首次外部调用",
+    )
+
+
+async def test_dispatch_skips_item_whose_claim_was_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """领取代次已失效的项目必须放弃，不得再执行外部写入。"""
+    recorder = _Recorder()
+    acknowledged, retried = _install(
+        monkeypatch,
+        recorder,
+        items=_items("memory-9", MemoryIndexOperation.UPSERT),
+        projections={"memory-9": _projection("memory-9", MemoryStatus.ACTIVE)},
+        lost_claims={"memory-9"},
+    )
+
+    processed = await MemoryIndexDispatcher().dispatch()
+
+    check_equal("代次失效不计入已处理", processed, 0)
+    check_equal("不执行任何外部写入", recorder.external_depths, [])
+    check_equal("不确认也不退避", (acknowledged, retried), ([], []))
