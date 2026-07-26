@@ -1,0 +1,91 @@
+name: Triage Codex Review
+
+on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+# 同一个 PR 只跑一个，防止 Codex 多轮评审时并发打架。
+# 不取消进行中的任务：裁决过程中会逐条回帖，中途取消会留下只回了一半的线程。
+concurrency:
+  group: codex-triage-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    # 只对 Codex 的发言做响应，且必须是非草稿 PR。
+    # draft 判断对两种事件取不同字段；字段缺失时为 null（!= true 成立），即失败时放行而非静默跳过。
+    if: >
+      github.event.pull_request.draft != true &&
+      github.event.issue.draft != true &&
+      ((github.event_name == 'pull_request_review' &&
+        github.event.review.user.login == 'chatgpt-codex-connector[bot]') ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        github.event.comment.user.login == 'chatgpt-codex-connector[bot]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # 纯裁决模式：只读代码、只写评论。
+      # 若将来要让 Claude 直接提交修复，需改为 contents: write，
+      # 并在 claude_args 补 Edit,Bash(git commit:*),Bash(git push:*)。
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Pro/Max 订阅认证。token 由 `claude setup-token` 生成，
+          # 登出 Claude Code 会使其失效，届时重新生成并更新该 secret。
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Codex（chatgpt-codex-connector[bot]）刚刚对这个 PR 提出了评审意见。
+            你的任务不是重新评审代码，而是**裁决 Codex 的每一条意见是否真的需要修复**。
+
+            开始前必须先完整读取根目录 `code_review.md`，裁决分类、项目既定事实、
+            优先级口径和回复格式全部以该文件为准，不要另立标准。
+
+            步骤：
+            1. 拉取本 PR 的所有 review thread（含行号与上下文）：
+               gh api graphql -f query='
+                 query($owner:String!,$repo:String!,$pr:Int!){
+                   repository(owner:$owner,name:$repo){
+                     pullRequest(number:$pr){
+                       reviewThreads(first:100){ nodes{
+                         id isResolved isOutdated path line
+                         comments(first:10){ nodes{ databaseId author{login} body } }
+                       }}
+                     }}}' \
+                 -f owner='${{ github.repository_owner }}' \
+                 -f repo='${{ github.event.repository.name }}' \
+                 -F pr=${{ github.event.pull_request.number || github.event.issue.number }}
+               只处理 isResolved == false 且首条评论作者为 chatgpt-codex-connector[bot] 的线程。
+               本仓库可由人工重复发起 Codex 评审，同一线程可能被多次触发裁决：
+               若线程内已存在以 `**[裁决]` 开头的回复，说明上一轮已处理，直接跳过，
+               除非 Codex 在该线程里追加了新的反驳论据。全部线程都已裁决过时，
+               不要发汇总评论，直接结束。
+            2. 对每一条意见，**必须实际打开对应文件读取上下文**再判断，不要只凭 Codex 的描述下结论。
+               同时检查 diff 确认该问题是否由本 PR 引入：
+               gh pr diff ${{ github.event.pull_request.number || github.event.issue.number }}
+            3. 按 `code_review.md` 的《审查意见裁决标准》给出裁决与一句话依据。
+            4. 逐条回复到对应的 review thread（COMMENT_ID 用第 1 步取到的 databaseId）：
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number || github.event.issue.number }}/comments/COMMENT_ID/replies \
+                 -f body='**[裁决] MUST_FIX** — 理由...'
+            5. 最后发一条汇总表格（列：文件:行 / Codex 意见摘要 / 裁决 / 理由），
+               开头写明 "需修复 N 条，误报 M 条"：
+               gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body-file <file>
+
+            只通过 GitHub 评论输出结论，不要把裁决正文当作普通消息返回。
+
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),Write"
