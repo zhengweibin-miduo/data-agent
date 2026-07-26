@@ -29,6 +29,22 @@ def memory_content_hash(content: MemoryContent) -> str:
     return hashlib.sha256(canonical_content_json(content).encode()).hexdigest()
 
 
+def memory_text_hash(memory_text: str) -> str:
+    """计算检索文本的 SHA-256，使精确基线检索能走等值索引。
+
+    `memory_text` 是 TEXT 列，直接做全等比较无法走索引，数据量增长后精确基线查询
+    会退化为按 source 范围扫描并成为检索延迟主项。比较定长哈希则可用普通 B-Tree
+    索引。哈希只用于加速等值查找，权威内容与去重仍以 `content_hash` 为准。
+
+    Args:
+        memory_text: `build_memory_text` 生成的规范检索文本。
+
+    Returns:
+        64 位十六进制 SHA-256。
+    """
+    return hashlib.sha256(memory_text.encode()).hexdigest()
+
+
 def content_object_ids(content: MemoryContent) -> list[str]:
     """提取规范内容引用的物理或 Meta 对象标识。"""
     if isinstance(content, SemanticDecisionContent):

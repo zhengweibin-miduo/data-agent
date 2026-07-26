@@ -200,6 +200,32 @@ await MemorySearchService.search(
   event id in the logical-fact scope, never the last item of an ascending
   `history()` page. Once a fact accumulates more events than one page, the page's
   last item is an old event and the reported id becomes permanently wrong.
+- `record_access` must not advance `agent_memory.updated_at`. Both
+  `find_exact_query` and `find_compatible_scopes` order candidates by
+  `updated_at desc`, so letting access accounting touch it makes a retrieved
+  memory promote itself in later retrievals — the read path rewriting the read
+  path's own ordering. Suppress the column's `onupdate` by assigning `updated_at`
+  to itself in the SET clause; access recency already lives in `access_count` and
+  `last_accessed_at`.
+- The exact-hit bonus in `reciprocal_rank_fusion` is deliberately out of scale
+  with the RRF terms and is **not** double counting. The 1.0 bonus places exact
+  hits ahead of purely semantic hits; the ranking entry for the same UID list
+  orders exact hits *among themselves*. Passing only `exact_uids` would tie every
+  exact hit and degrade to UID-string order, discarding the baseline query's
+  relevance order. Keep both contributions, and keep the tests that lock it.
+- `find_exact_query` compares a fixed-length `memory_text_hash` rather than the
+  `memory_text` TEXT column. Equality on a TEXT column cannot use an index, so the
+  baseline query degraded into a scan of the whole `source` range and became the
+  dominant search latency as data grew. `idx_agent_memory_text_hash`
+  (`source`, `memory_text_hash`, `status`) serves it. The hash only accelerates
+  equality lookup — content identity and deduplication still belong to
+  `content_hash`.
+- `agent_memory` is defined twice: SQLAlchemy Core in `memory/mysql/tables.py` and
+  the bootstrap DDL in `docs/docker/mysql/data_agent.sql`. There is no upgrade
+  migration, so the bootstrap script is the only thing that creates a new
+  environment's tables and both must be edited together. A unit test parses the
+  bootstrap block and compares its column set against the Core metadata, because
+  drift between them otherwise surfaces only when something actually connects.
 - Search runs ES BM25 and TEI/Qdrant concurrently with the configured timeout,
   excludes target signals that still have pending outbox work, and combines
   the remaining ranks with stable RRF.

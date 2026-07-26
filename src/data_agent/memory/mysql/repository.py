@@ -18,6 +18,7 @@ from data_agent.memory.domain.payloads import (
     build_memory_text,
     canonical_content_json,
     memory_content_hash,
+    memory_text_hash,
 )
 from data_agent.memory.domain.policies import (
     category_policy,
@@ -466,6 +467,7 @@ class MemoryRepository:
                         "content_schema": candidate.content_schema,
                         "schema_fingerprint": candidate.schema_fingerprint,
                         "memory_text": candidate.memory_text,
+                        "memory_text_hash": memory_text_hash(candidate.memory_text),
                         "content": candidate.content.model_dump(mode="json"),
                         "content_hash": candidate.content_hash,
                         "trust": candidate.trust.value,
@@ -884,9 +886,12 @@ class MemoryRepository:
                 agent_memory.c.expires_at > func.now(),
             ),
             agent_memory.c.content_version == app_config.memory.content_version,
+            # 两侧都是可走索引的等值比较：memory_key 有前缀索引，检索文本改比定长
+            # 哈希（memory_text 是 TEXT 列，全等比较无法走索引，会退化为按 source
+            # 范围扫描并成为检索延迟主项）。
             or_(
                 agent_memory.c.memory_key == query,
-                agent_memory.c.memory_text == query,
+                agent_memory.c.memory_text_hash == memory_text_hash(query),
             ),
         ]
         if categories:
@@ -1050,6 +1055,12 @@ class MemoryRepository:
             .values(
                 access_count=agent_memory.c.access_count + 1,
                 last_accessed_at=func.now(),
+                # 显式写回原值以抑制列上的 onupdate：updated_at 表示"内容何时被更新"，
+                # 而 find_exact_query 与 find_compatible_scopes 都按它倒序取候选。
+                # 若让访问统计推进它，被检索命中的记忆会把自己顶到后续检索的前面，
+                # 形成读路径改变读路径排序的反馈。访问热度另有 access_count 与
+                # last_accessed_at 表达。
+                updated_at=agent_memory.c.updated_at,
             )
         )
 
