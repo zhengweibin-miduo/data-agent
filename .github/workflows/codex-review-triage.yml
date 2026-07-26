@@ -27,14 +27,14 @@ jobs:
     # 限定 PR 来源，否则外部 PR 的文件内容即构成 prompt injection 面。
     #
     # 两道约束：
-    # 1. PR 作者必须在白名单内 —— 默认为仓库所有者、Codex、Claude 三方；需要放行其他
-    #    人时设仓库变量 PR_AUTHORS 覆盖（逗号分隔，覆盖时须把默认三项一并写入）。
+    # 1. PR 作者必须在白名单内 —— 默认为仓库所有者的两个账号、Codex 和 Claude；需要
+    #    放行其他人时设仓库变量 PR_AUTHORS 覆盖（逗号分隔，覆盖时须把默认项一并写入）。
     # 2. pull_request_review 另行校验 head.repo，确保分支来自本仓库而非 fork。
     #    issue_comment 的事件载荷没有 head.repo，仅靠第 1 条约束。
     if: >
       github.event.pull_request.draft != true &&
       github.event.issue.draft != true &&
-      contains(format(',{0},', vars.PR_AUTHORS || 'zhengweibin-miduo,chatgpt-codex-connector[bot],claude[bot]'),
+      contains(format(',{0},', vars.PR_AUTHORS || 'zhengweibin-miduo,iuiiui,chatgpt-codex-connector[bot],claude[bot]'),
                format(',{0},', github.event.pull_request.user.login || github.event.issue.user.login)) &&
       ((github.event_name == 'pull_request_review' &&
         contains(format(',{0},', vars.REVIEW_BOTS || 'chatgpt-codex-connector[bot]'),
