@@ -35,6 +35,12 @@ def _log_index_sync_superseded(task_id: str) -> None:
     logger.warning("权威内容在派生索引写入期间已变更，本次同步不确认并等待重新处理")
 
 
+def _log_index_claim_lost(task_id: str) -> None:
+    """记录一次因领取代次失效而放弃的同步。"""
+    del task_id
+    logger.warning("记忆索引领取代次已失效，本项目交由重新领取者处理")
+
+
 def _log_index_dead_letters(count: int) -> None:
     """记录已达死信阈值、需要人工介入的期望状态积压。"""
     logger.warning(
@@ -78,7 +84,6 @@ class MemoryIndexDispatcher:
         async with MySQLDatabase.session() as session:
             items = await MemoryIndexOutboxRepository(session).claim_outbox(batch_size)
         if not items:
-            await self._report_dead_letters()
             return 0
         # 步骤二：逐项处理，投影读取也在逐项隔离边界之内。投影会解码历史 JSON，
         # 一条无法解码的权威行若在批次级读取，异常会逃出 dispatch 并中止整批：
@@ -88,14 +93,15 @@ class MemoryIndexDispatcher:
         for item in items:
             if await self._synchronize(item):
                 processed += 1
-        # 步骤四：批次未被填满说明可领取队列已排空，此时才统计死信积压，
-        # 避免在饱和运行时对 outbox 反复做全表计数。
-        if len(items) < batch_size:
-            await self._report_dead_letters()
         return processed
 
-    async def _report_dead_letters(self) -> None:
-        """统计并暴露已停止重试的期望状态积压。"""
+    async def report_dead_letters(self) -> None:
+        """统计并暴露已停止重试的期望状态积压。
+
+        由独立的低频 cron 调用，而不是挂在 dispatch 上：死信行已被 claim_outbox
+        排除，不占用批次，因此队列持续饱和时"批次未满才统计"的条件永远不成立，
+        积压会完全没有告警——而这恰恰是最需要人工介入的状态。
+        """
         # 步骤一：死信行不再参与领取，只能通过日志暴露，避免静默积压。
         async with MySQLDatabase.session() as session:
             dead_letters = await MemoryIndexOutboxRepository(
@@ -107,12 +113,16 @@ class MemoryIndexDispatcher:
     async def _synchronize(self, item: MemoryOutboxItem) -> bool:
         """执行单项投影读取、外部写入，并在独立短事务中确认或退避。"""
         try:
-            # 步骤一：读取权威投影并完成外部写入。投影解码失败与外部调用失败共用
-            # 同一个退避出口，任一确定性错误都只影响本项，不会中止整批。
+            # 步骤一：在同一短事务内续租并读取权威投影。续租使本行的租约覆盖它自己
+            # 的处理窗口——整批共用一个到期时间时，靠前项目的累计耗时会让尾部行在
+            # 尚未处理前就重新可领取，后续 cron 会与本 dispatcher 重复调用外部服务。
+            # 令牌已变说明该行已被覆盖或被其他 worker 重新领取，必须放弃。
             async with MySQLDatabase.session() as session:
-                projection = await MemoryIndexOutboxRepository(session).projection(
-                    item.memory_uid
-                )
+                repository = MemoryIndexOutboxRepository(session)
+                if not await repository.renew_claim(item):
+                    _log_index_claim_lost(item.memory_uid)
+                    return False
+                projection = await repository.projection(item.memory_uid)
             writable = _writable_projection(item, projection)
             await self._apply(item, writable)
         except Exception as error:
