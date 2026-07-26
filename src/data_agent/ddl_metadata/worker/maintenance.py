@@ -73,6 +73,12 @@ async def dispatch_memory_index_outbox(ctx: dict[Any, Any]) -> None:
     await MemoryIndexDispatcher().dispatch()
 
 
+async def report_memory_index_dead_letters(ctx: dict[Any, Any]) -> None:
+    """周期性暴露已停止重试的记忆索引期望状态积压。"""
+    del ctx
+    await MemoryIndexDispatcher().report_dead_letters()
+
+
 async def extract_conversation_memory(ctx: dict[Any, Any]) -> None:
     """周期性提炼完成对话轮次的用户长期记忆。"""
     extractor = cast(

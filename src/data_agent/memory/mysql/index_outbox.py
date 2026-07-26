@@ -160,6 +160,41 @@ class MemoryIndexOutboxRepository:
         )
         return items
 
+    async def renew_claim(self, item: MemoryOutboxItem) -> bool:
+        """在开始处理该项前把它的领取租约续到当前时刻之后。
+
+        领取时整批共用同一个到期时间，而处理是逐项顺序进行的：批次靠前的项目一旦
+        累计耗时超过租约，尚未开始处理的尾部行就会重新变为可领取，后续 cron 会与本
+        dispatcher 并发对同一行调用 TEI/ES/Qdrant，造成重复调用与负载放大。逐项续租
+        使每一行的租约覆盖它自己的处理窗口。
+
+        续租按领取代次令牌匹配：令牌已变说明该行已被覆盖或被其他 worker 重新领取，
+        本 dispatcher 必须放弃它，不得再执行外部写入。
+
+        Args:
+            item: 即将处理的期望状态。
+
+        Returns:
+            是否仍持有该行的领取代次。
+        """
+        # 步骤一：按代次令牌续租；令牌不匹配时不更新任何行。
+        result = await self._session.execute(
+            update(memory_index_outbox)
+            .where(
+                memory_index_outbox.c.memory_uid == item.memory_uid,
+                memory_index_outbox.c.target == item.target.value,
+                memory_index_outbox.c.lease_token == item.lease_token,
+            )
+            .values(
+                available_at=func.timestampadd(
+                    text("SECOND"),
+                    app_config.memory.outbox_claim_lease_seconds,
+                    func.now(),
+                )
+            )
+        )
+        return bool(getattr(result, "rowcount", 0))
+
     async def dead_letter_count(self) -> int:
         """统计已达死信阈值、不再参与领取的期望状态行数。"""
         # 步骤一：只做计数，供调度器暴露需要人工介入的积压规模。

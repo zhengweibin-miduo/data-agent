@@ -123,6 +123,7 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             "cron:dispatch_memory_index_outbox",
             "cron:extract_conversation_memory",
             "cron:purge_user_memories",
+            "cron:report_memory_index_dead_letters",
         ],
     )
     check_equal(
@@ -137,6 +138,7 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             {2, 12, 22, 32, 42, 52},
             {4, 14, 24, 34, 44, 54},
             {7, 17, 27, 37, 47, 57},
+            9,
         ],
     )
     check_equal(
