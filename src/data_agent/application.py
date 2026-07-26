@@ -3,12 +3,10 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from arq.connections import ArqRedis
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
-from redis.asyncio import ConnectionPool
 from redis.exceptions import RedisError
 
 from data_agent.conversation.api import router as conversation_router
@@ -20,6 +18,7 @@ from data_agent.ddl_metadata.persistence.memory_references import (
 )
 from data_agent.errors import DataAgentError
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
+from data_agent.infrastructure.job_queue import build_queue_pool
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
@@ -49,12 +48,13 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     TEIEmbeddingClient.initialize()
     # 步骤三：构造 arq 队列客户端，使受理路径能立即调度激活而不必等待 worker 的
     # dispatch 周期；dispatch outbox 仍是崩溃兜底，入队失败时自动退回周期调度。
-    # 这里直接构造而不用 arq.create_pool：后者在启动时就发起连接并带重试退避，
+    # 这里走共享构造器而不用 arq.create_pool：后者在启动时就发起连接并带重试退避，
     # 会把"Redis 暂时不可达"从按请求失败升级为 API 无法启动，也让生命周期无法在
-    # 没有 Redis 的环境下测试。arq 需要字节响应，因此不能复用应用的解码客户端。
-    queue = ArqRedis(
-        connection_pool=ConnectionPool.from_url(app_config.redis.url),
-    )
+    # 没有 Redis 的环境下测试；而它同时漏掉读取超时。这是本进程族的第四个 Redis
+    # 客户端，缺少读取超时时半开连接会让 submit 停在 queue.enqueue_job() 上永不
+    # 返回，异常处理器也无法兜住"永不返回"的调用、退回 cron 调度。arq 需要字节
+    # 响应，因此不能复用应用的解码客户端。
+    queue = build_queue_pool()
     # 步骤四：把已就绪资源依赖的业务服务集中挂载到应用状态，供路由复用。
     jobs = DDLJobStore(redis, queue)
     app.state.jobs = jobs

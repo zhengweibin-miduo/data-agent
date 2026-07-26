@@ -14,6 +14,10 @@ from data_agent.settings import app_config
 from tests.helpers.checks import check_condition, check_equal
 
 
+async def _noop_close() -> None:
+    """生命周期关闭替身，不触碰真实外部资源。"""
+
+
 async def test_redis_client_declares_socket_timeouts() -> None:
     """Redis 必须声明读取与连接超时，避免半开连接让调用方永久挂起。"""
     await RedisClient.close()
@@ -220,3 +224,112 @@ async def test_worker_queue_pool_uses_unix_socket_when_dsn_requires_it(
         )
     finally:
         await pool.aclose()
+
+
+async def test_api_queue_pool_declares_socket_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API 自己的 arq 队列池是本进程族的第四个 Redis 客户端，同样要带读取超时。"""
+    # 缺少读取超时时，半开的队列连接会让 submit 停在 _activate_now_safely() ->
+    # dispatch_one() -> queue.enqueue_job() 上永不返回：既没有 HTTP 响应，异常处理
+    # 器也无法退回 cron 调度，因为"永不返回"的调用不会抛出任何异常。
+    from fastapi import FastAPI
+
+    from data_agent import application
+
+    monkeypatch.setattr(application, "setup_logging", lambda: None)
+    for manager in (
+        application.RedisClient,
+        application.MySQLDatabase,
+        application.ElasticsearchClient,
+        application.QdrantClient,
+        application.TEIEmbeddingClient,
+    ):
+        monkeypatch.setattr(manager, "initialize", lambda: object())
+        monkeypatch.setattr(manager, "close", _noop_close)
+
+    app = FastAPI()
+    async with application._lifespan(app):
+        # 从真实装配结果读取队列，确保断言的是生命周期实际交给 DDLJobStore 的那个池。
+        kwargs = app.state.jobs._queue.connection_pool.connection_kwargs
+        check_equal(
+            "API 队列读取超时",
+            kwargs.get("socket_timeout"),
+            app_config.redis.socket_timeout_seconds,
+        )
+        check_equal(
+            "API 队列连接超时",
+            kwargs.get("socket_connect_timeout"),
+            app_config.redis.socket_connect_timeout_seconds,
+        )
+        check_equal(
+            "API 队列健康检查间隔",
+            kwargs.get("health_check_interval"),
+            app_config.redis.health_check_interval_seconds,
+        )
+
+
+async def test_queue_pool_retries_connection_within_bounded_budget() -> None:
+    """队列池必须自带有界连接重试，覆盖 arq 的首次 Redis 命令。"""
+    # 提供 redis_pool 后 arq 跳过 create_pool，连带跳过它唯一的启动重试；worker 生命
+    # 周期里的连通性等待发生在 arq 首次命令之后，来不及生效。redis-py 把 connect()
+    # 与命令执行都包在连接级 Retry 里，因此重试预算必须落在池上。
+    from arq.connections import RedisSettings
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from data_agent.infrastructure.job_queue import build_queue_pool
+
+    expected = RedisSettings.from_dsn(app_config.redis.url)
+    pool = build_queue_pool()
+    try:
+        retry = pool.connection_pool.connection_kwargs.get("retry")
+        check_condition(
+            "队列池配置了连接重试",
+            retry is not None,
+            actual=retry,
+            expected="非 None 的 Retry",
+        )
+        assert retry is not None
+        check_equal("重试次数沿用 conn_retries", retry._retries, expected.conn_retries)
+        check_equal(
+            "退避间隔沿用 conn_retry_delay",
+            retry._backoff.compute(1),
+            float(expected.conn_retry_delay),
+        )
+        # 连接失败要重试；读取超时不重试，否则只是把单次挂起变成多次挂起。
+        check_condition(
+            "连接失败进入重试",
+            RedisConnectionError in retry._supported_errors,
+            actual=retry._supported_errors,
+            expected="包含 ConnectionError",
+        )
+        check_equal(
+            "读取超时不进入重试",
+            pool.connection_pool.connection_kwargs.get("retry_on_error"),
+            [RedisConnectionError],
+        )
+    finally:
+        await pool.aclose()
+
+
+async def test_arq_worker_issues_redis_command_before_on_startup() -> None:
+    """锁定 arq 启动顺序：首次 Redis 命令早于 on_startup。"""
+    # 这是上一条测试的存在理由。若 arq 升级后改成先调用 on_startup，连通性等待就能
+    # 重新兜住首次命令，本组约束可以放宽；在那之前重试预算必须留在池上。
+    import inspect
+
+    from arq.worker import Worker
+
+    source = inspect.getsource(Worker.main)
+    check_condition(
+        "create_pool 仅在未提供 redis_pool 时执行",
+        "if self._pool is None:" in source and "create_pool(" in source,
+        actual=source,
+        expected="create_pool 被 _pool is None 守卫",
+    )
+    check_condition(
+        "log_redis_info 早于 on_startup",
+        source.index("log_redis_info") < source.index("self.on_startup"),
+        actual=source,
+        expected="首次 Redis 命令在 on_startup 之前",
+    )

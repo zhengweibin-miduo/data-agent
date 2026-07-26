@@ -5,7 +5,6 @@ from typing import Any
 
 from arq import cron, func
 from arq.connections import ArqRedis, RedisSettings
-from arq.constants import default_queue_name, expires_extra_ms
 
 from data_agent.ddl_metadata.worker.job_runner import run_ddl_job
 from data_agent.ddl_metadata.worker.lifecycle import shutdown, startup
@@ -19,6 +18,7 @@ from data_agent.ddl_metadata.worker.maintenance import (
     purge_user_memories,
     reap_stalled_jobs,
 )
+from data_agent.infrastructure.job_queue import build_queue_pool
 from data_agent.logging import logging_boundary
 from data_agent.settings import app_config
 
@@ -29,51 +29,15 @@ def _observed(function: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _queue_pool() -> ArqRedis:
-    """构造带显式读取超时的 arq 队列客户端。
+    """构造 worker 侧的 arq 队列客户端。
 
-    `arq.create_pool` 只把 `RedisSettings.conn_timeout` 映射到
-    `socket_connect_timeout`，从不设置 `socket_timeout`。因此既有连接半开、或 Redis
-    收下命令后不再响应时，worker 的队列轮询会无限等待，整个 worker 停止领取任务与
-    运行维护循环——这正是本次超时改动要消除的故障，却唯独漏掉了 worker 自己的队列
-    客户端（`RedisClient` 与 `AsyncRedisSaver` 都已单独注入）。
-
-    这里按 arq 自身的构造方式建池并补上读取超时。arq worker 的队列轮询是非阻塞的
-    （`poll_delay` 默认 0.5 秒，源码中没有 BLPOP/XREAD 之类的阻塞读取），因此统一的
-    读取超时不会误伤正常空闲等待。
+    构造逻辑与 API 共用 `build_queue_pool`，避免其中一侧补了超时另一侧漏掉。保留这
+    层薄封装是为了让 `WorkerSettings` 的读者在此处就能看到队列池的来源。
 
     Returns:
         已设置 arq 运行期属性的队列客户端。
     """
-    # 步骤一：沿用 DSN 解析出的连接参数，只补上 arq 不会设置的读取与健康检查配置。
-    settings = RedisSettings.from_dsn(app_config.redis.url)
-    # `unix://` DSN 会被解析进 unix_socket_path；漏传它会让 worker 连回 TCP
-    # localhost:6379，与 API 客户端连到不同实例，全部任务领取与维护 cron 失效。
-    connection: dict[str, Any] = (
-        {"unix_socket_path": settings.unix_socket_path}
-        if settings.unix_socket_path
-        else {"host": settings.host, "port": settings.port}
-    )
-    pool = ArqRedis(
-        **connection,
-        db=settings.database,
-        username=settings.username,
-        password=settings.password,
-        ssl=settings.ssl,
-        encoding="utf8",
-        max_connections=settings.max_connections,
-        retry=settings.retry,
-        retry_on_timeout=settings.retry_on_timeout,
-        retry_on_error=settings.retry_on_error,
-        socket_connect_timeout=app_config.redis.socket_connect_timeout_seconds,
-        socket_timeout=app_config.redis.socket_timeout_seconds,
-        health_check_interval=app_config.redis.health_check_interval_seconds,
-    )
-    # 步骤二：补齐 create_pool 会设置的运行期属性，保持队列语义与 arq 默认一致。
-    pool.job_serializer = None
-    pool.job_deserializer = None
-    pool.default_queue_name = default_queue_name
-    pool.expires_extra_ms = expires_extra_ms
-    return pool
+    return build_queue_pool()
 
 
 class WorkerSettings:

@@ -21,16 +21,35 @@ across major versions:
 | `AsyncInferenceClient` (TEI) | `timeout` |
 | `ChatOpenAI` | `timeout`, `max_retries` |
 | `AsyncRedisSaver` (LangGraph checkpoint) | `connection_args`: `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
-| arq queue pool (`WorkerSettings.redis_pool`) | `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+| arq queue pool (`infrastructure/job_queue.py`) | `socket_timeout`, `socket_connect_timeout`, `health_check_interval`, bounded `retry` |
 
-Three Redis clients exist in this process family and each needs the timeouts
-injected separately: `RedisClient`, the LangGraph checkpoint saver, and arq's own
-queue pool. `arq.create_pool` maps `RedisSettings.conn_timeout` only to
+Four Redis clients exist in this process family and each needs the timeouts
+injected separately: `RedisClient`, the LangGraph checkpoint saver, the worker's
+arq queue pool (`WorkerSettings.redis_pool`), and the API's own arq queue pool
+(`application.py`). `arq.create_pool` maps `RedisSettings.conn_timeout` only to
 `socket_connect_timeout` and never sets `socket_timeout`, so the worker's queue
 polling would wait forever on a half-open connection and stop claiming jobs and
-running maintenance entirely. Build the pool the way arq does and add the read
-timeout, then hand it to the worker through `redis_pool`. arq's polling is
-non-blocking (`poll_delay`, no BLPOP/XREAD), so a shared read timeout is safe here.
+running maintenance entirely, while the API's `submit` would hang inside
+`_activate_now_safely()` -> `dispatch_one()` -> `queue.enqueue_job()` with no
+HTTP response and no fallback to cron dispatch. Both pools are therefore built by
+the single `build_queue_pool()` in `infrastructure/job_queue.py` — a per-side
+construction is how one of them ends up without the read timeout. arq's polling is
+non-blocking (`poll_delay`, no BLPOP/XREAD) and the API only enqueues, so a shared
+read timeout is safe on both sides.
+
+#### Supplying `redis_pool` removes arq's startup retry
+
+`Worker.main()` calls `create_pool()` — the only path with a bounded startup
+retry — solely when `redis_pool` was **not** supplied. It then runs
+`log_redis_info(self.pool)` *before* setting `ctx['redis']` and calling
+`on_startup`. So a connectivity wait inside the worker lifecycle can never guard
+arq's first Redis command, and a worker that boots alongside a not-yet-ready Redis
+exits before consuming any job or running any maintenance cron. `build_queue_pool()`
+therefore configures a connection-level `Retry` mirroring `conn_retries` /
+`conn_retry_delay`: redis-py wraps both `connect()` and command execution in it, so
+the bounded retry applies to arq's first command without depending on arq's
+internal startup order. Connection failures retry; read timeouts do not — a
+service that accepted the command and went silent would only be re-hung.
 
 The checkpoint saver builds its own connection pool instead of reusing
 `RedisClient`, so it needs the same socket timeouts injected separately. Without
