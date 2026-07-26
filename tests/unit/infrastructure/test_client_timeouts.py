@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
+from redis.asyncio.connection import AbstractConnection
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from data_agent.infrastructure import checkpoint_store as checkpoint_module
@@ -287,26 +290,43 @@ async def test_queue_pool_retry_covers_connect_phase_only() -> None:
 
     from data_agent.infrastructure import job_queue
 
-    supported = job_queue._CONNECT_PHASE_ERRORS
-    for label, error in (
-        ("连接被拒", ConnectionRefusedError()),
-        ("连接超时", TimeoutError()),
-        ("套接字超时", socket.timeout()),
-        ("重连失败", RedisConnectionError()),
-    ):
-        check_condition(
-            f"{label} 进入连接重试",
-            isinstance(error, supported),
-            actual=type(error),
-            expected=f"属于 {supported}",
-        )
-    # 读取超时是"服务收下命令后静默"，重试只会把一次挂起变成多次挂起。
-    check_condition(
-        "读取超时不进入连接重试",
-        isinstance(RedisTimeoutError(), supported) is False,
-        actual=supported,
-        expected="不含 redis TimeoutError",
+    pool = job_queue.build_queue_pool(
+        connect_retries=job_queue.worker_connect_retries()
     )
+    try:
+        # 断言必须落在**连接实例**上，而不是构造时传入的 Retry 或模块常量：
+        # `Connection.__init__` 会 deepcopy 该 Retry 再执行
+        # `update_supported_errors(retry_on_error)`，这是并集追加、不做剔除。只断言传入
+        # 值的测试挡不住"有人往 retry_on_error 里补了 TimeoutError"——那会让读取超时重新
+        # 进入重试，把一次挂起放大成多次。
+        # make_connection 的声明返回类型是 ConnectionInterface，重试策略挂在具体实现
+        # AbstractConnection 上，因此按真实类型收窄后再读取。
+        connection = cast(
+            AbstractConnection,
+            pool.connection_pool.make_connection(),
+        )
+        supported = connection.retry._supported_errors
+        for label, error in (
+            ("连接被拒", ConnectionRefusedError()),
+            ("连接超时", TimeoutError()),
+            ("套接字超时", socket.timeout()),
+            ("重连失败", RedisConnectionError()),
+        ):
+            check_condition(
+                f"{label} 进入连接重试",
+                isinstance(error, supported),
+                actual=type(error),
+                expected=f"属于 {supported}",
+            )
+        # 读取超时是"服务收下命令后静默"，重试只会把一次挂起变成多次挂起。
+        check_condition(
+            "读取超时不进入连接重试",
+            isinstance(RedisTimeoutError(), supported) is False,
+            actual=supported,
+            expected="不含 redis TimeoutError",
+        )
+    finally:
+        await pool.aclose()
 
 
 async def test_queue_pool_retries_unready_connection_within_budget() -> None:
