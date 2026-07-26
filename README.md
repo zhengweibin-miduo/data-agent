@@ -30,8 +30,25 @@ MySQL 官方镜像只会在全新的 `mysql_data` 卷上运行
 数据库。已有卷不会重新执行脚本；这些 SQL 是空白环境 bootstrap，不是升级
 迁移，手工重放可能覆盖本地表，不要对包含有用数据的共享卷执行。
 
-应用连接、索引名称和服务地址位于 `conf/app_config.yaml`。worker 启动前还需
-在当前终端设置模型密钥：
+应用连接、索引名称和服务地址位于 `conf/app_config.yaml`。配置文件位置按以下顺序
+解析，命中即停止：
+
+1. `DATA_AGENT_CONFIG` 环境变量指定的文件；
+2. 当前工作目录下的 `conf/app_config.yaml`；
+3. 源码树相对位置（仓库根的 `conf/app_config.yaml`）。
+
+`conf/` 不随 wheel 一起打包，因此以已安装包运行时必须用 `DATA_AGENT_CONFIG`
+指定配置，或从包含 `conf/` 的部署目录启动：
+
+```powershell
+$env:DATA_AGENT_CONFIG = "D:\deploy\data-agent\conf\app_config.yaml"
+```
+
+`DATA_AGENT_CONFIG` 指向的文件不存在时启动会直接失败，不会回退到其它候选位置——
+显式指定被静默忽略比启动失败更难排查。全部候选都缺失时，报错会列出实际查找过的
+绝对路径。
+
+worker 启动前还需在当前终端设置模型密钥：
 
 ```powershell
 $env:DATA_AGENT_LLM_API_KEY = "your-api-key"
