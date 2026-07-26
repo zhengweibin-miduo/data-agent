@@ -21,6 +21,16 @@ across major versions:
 | `AsyncInferenceClient` (TEI) | `timeout` |
 | `ChatOpenAI` | `timeout`, `max_retries` |
 | `AsyncRedisSaver` (LangGraph checkpoint) | `connection_args`: `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+| arq queue pool (`WorkerSettings.redis_pool`) | `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+
+Three Redis clients exist in this process family and each needs the timeouts
+injected separately: `RedisClient`, the LangGraph checkpoint saver, and arq's own
+queue pool. `arq.create_pool` maps `RedisSettings.conn_timeout` only to
+`socket_connect_timeout` and never sets `socket_timeout`, so the worker's queue
+polling would wait forever on a half-open connection and stop claiming jobs and
+running maintenance entirely. Build the pool the way arq does and add the read
+timeout, then hand it to the worker through `redis_pool`. arq's polling is
+non-blocking (`poll_delay`, no BLPOP/XREAD), so a shared read timeout is safe here.
 
 The checkpoint saver builds its own connection pool instead of reusing
 `RedisClient`, so it needs the same socket timeouts injected separately. Without

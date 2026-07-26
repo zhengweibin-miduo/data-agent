@@ -145,3 +145,32 @@ async def test_checkpoint_saver_receives_socket_timeouts(
         )
     finally:
         await CheckpointStore.close()
+
+
+async def test_worker_queue_pool_declares_socket_timeouts() -> None:
+    """Worker 自己的 arq 队列客户端也必须带读取超时。"""
+    # arq.create_pool 只把 conn_timeout 映射为 socket_connect_timeout，从不设置
+    # socket_timeout；半开连接会让队列轮询无限等待，整个 worker 停止领取任务。
+    from data_agent.ddl_metadata.worker.settings import WorkerSettings
+
+    kwargs = WorkerSettings.redis_pool.connection_pool.connection_kwargs
+    check_equal(
+        "队列读取超时",
+        kwargs.get("socket_timeout"),
+        app_config.redis.socket_timeout_seconds,
+    )
+    check_equal(
+        "队列连接超时",
+        kwargs.get("socket_connect_timeout"),
+        app_config.redis.socket_connect_timeout_seconds,
+    )
+    check_equal(
+        "队列健康检查间隔",
+        kwargs.get("health_check_interval"),
+        app_config.redis.health_check_interval_seconds,
+    )
+    # 队列语义必须与 arq 默认一致，否则 worker 会去轮询另一个队列。
+    check_equal(
+        "沿用 arq 默认队列名", WorkerSettings.redis_pool.default_queue_name, "arq:queue"
+    )
+    check_equal("沿用 DSN 解析出的库编号", kwargs.get("db"), 0)
