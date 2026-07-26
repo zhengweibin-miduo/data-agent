@@ -54,7 +54,9 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     # 客户端，缺少读取超时时半开连接会让 submit 停在 queue.enqueue_job() 上永不
     # 返回，异常处理器也无法兜住"永不返回"的调用、退回 cron 调度。arq 需要字节
     # 响应，因此不能复用应用的解码客户端。
-    queue = build_queue_pool()
+    # 连接重试预算取 0：立即调度失败由 _activate_now_safely() 退回 dispatch cron，
+    # 在请求路径上耗尽整个连接预算只会把 HTTP 请求先挂死一遍，严格更差。
+    queue = build_queue_pool(connect_retries=0)
     # 步骤四：把已就绪资源依赖的业务服务集中挂载到应用状态，供路由复用。
     jobs = DDLJobStore(redis, queue)
     app.state.jobs = jobs

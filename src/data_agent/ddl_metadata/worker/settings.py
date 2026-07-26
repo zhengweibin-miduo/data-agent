@@ -18,7 +18,10 @@ from data_agent.ddl_metadata.worker.maintenance import (
     purge_user_memories,
     reap_stalled_jobs,
 )
-from data_agent.infrastructure.job_queue import build_queue_pool
+from data_agent.infrastructure.job_queue import (
+    build_queue_pool,
+    worker_connect_retries,
+)
 from data_agent.logging import logging_boundary
 from data_agent.settings import app_config
 
@@ -31,13 +34,14 @@ def _observed(function: Callable[..., Any]) -> Callable[..., Any]:
 def _queue_pool() -> ArqRedis:
     """构造 worker 侧的 arq 队列客户端。
 
-    构造逻辑与 API 共用 `build_queue_pool`，避免其中一侧补了超时另一侧漏掉。保留这
-    层薄封装是为了让 `WorkerSettings` 的读者在此处就能看到队列池的来源。
+    构造逻辑与 API 共用 `build_queue_pool`，避免其中一侧补了超时另一侧漏掉。worker
+    这一侧用满 `create_pool` 的启动重试预算：arq 的首条 Redis 命令早于 `on_startup`，
+    连接失败没有任何兜底，进程会直接退出并带走全部维护 cron。
 
     Returns:
         已设置 arq 运行期属性的队列客户端。
     """
-    return build_queue_pool()
+    return build_queue_pool(connect_retries=worker_connect_retries())
 
 
 class WorkerSettings:

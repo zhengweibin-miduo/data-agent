@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from data_agent.infrastructure import checkpoint_store as checkpoint_module
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
@@ -11,7 +12,12 @@ from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.settings import app_config
-from tests.helpers.checks import check_condition, check_equal
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 
 async def _noop_close() -> None:
@@ -269,47 +275,148 @@ async def test_api_queue_pool_declares_socket_timeouts(
         )
 
 
-async def test_queue_pool_retries_connection_within_bounded_budget() -> None:
-    """队列池必须自带有界连接重试，覆盖 arq 的首次 Redis 命令。"""
-    # 提供 redis_pool 后 arq 跳过 create_pool，连带跳过它唯一的启动重试；worker 生命
-    # 周期里的连通性等待发生在 arq 首次命令之后，来不及生效。redis-py 把 connect()
-    # 与命令执行都包在连接级 Retry 里，因此重试预算必须落在池上。
-    from arq.connections import RedisSettings
-    from redis.exceptions import ConnectionError as RedisConnectionError
+async def test_queue_pool_retry_covers_connect_phase_only() -> None:
+    """连接重试判定必须覆盖原始套接字异常，且排除读取超时。"""
+    # redis-py 的 connect() 把 _connect() 包在 retry 里，但 OSError -> ConnectionError
+    # 与 asyncio.TimeoutError -> TimeoutError 两处转换都在 call_with_retry **之外**，
+    # 因此重试判定看到的是原始 OSError。Retry 默认 supported_errors 只有 redis 自己的
+    # ConnectionError/TimeoutError，连接阶段一次都不会重试——这正是要修的缺陷。
+    import socket
 
-    from data_agent.infrastructure.job_queue import build_queue_pool
+    from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    expected = RedisSettings.from_dsn(app_config.redis.url)
-    pool = build_queue_pool()
+    from data_agent.infrastructure import job_queue
+
+    supported = job_queue._CONNECT_PHASE_ERRORS
+    for label, error in (
+        ("连接被拒", ConnectionRefusedError()),
+        ("连接超时", TimeoutError()),
+        ("套接字超时", socket.timeout()),
+        ("重连失败", RedisConnectionError()),
+    ):
+        check_condition(
+            f"{label} 进入连接重试",
+            isinstance(error, supported),
+            actual=type(error),
+            expected=f"属于 {supported}",
+        )
+    # 读取超时是"服务收下命令后静默"，重试只会把一次挂起变成多次挂起。
+    check_condition(
+        "读取超时不进入连接重试",
+        isinstance(RedisTimeoutError(), supported) is False,
+        actual=supported,
+        expected="不含 redis TimeoutError",
+    )
+
+
+async def test_queue_pool_retries_unready_connection_within_budget() -> None:
+    """未就绪的连接目标必须按预算重试，而不是首次失败即放弃。"""
+    from redis.backoff import NoBackoff
+
+    from data_agent.infrastructure.job_queue import (
+        build_queue_pool,
+        worker_connect_retries,
+    )
+
+    retries = worker_connect_retries()
+    pool = build_queue_pool(connect_retries=retries)
     try:
-        retry = pool.connection_pool.connection_kwargs.get("retry")
-        check_condition(
-            "队列池配置了连接重试",
-            retry is not None,
-            actual=retry,
-            expected="非 None 的 Retry",
-        )
-        assert retry is not None
-        check_equal("重试次数沿用 conn_retries", retry._retries, expected.conn_retries)
+        retry = pool.connection_pool.connection_kwargs["retry"]
+        check_equal("重试次数沿用 conn_retries", retry._retries, retries)
+        # 退避改为零延迟只为让断言快速收敛，重试判定与次数保持真实配置。
+        retry._backoff = NoBackoff()
+        attempts = {"count": 0}
+
+        async def refuse_until_ready() -> str:
+            """前若干次以真实的连接被拒异常失败，随后成功。"""
+            attempts["count"] += 1
+            if attempts["count"] <= retries:
+                raise ConnectionRefusedError(10061, "目标机器积极拒绝")
+            return "connected"
+
+        async def drop(error: BaseException) -> None:
+            """连接阶段的失败回调只断开连接，不改变重试判定。"""
+            del error
+
         check_equal(
-            "退避间隔沿用 conn_retry_delay",
-            retry._backoff.compute(1),
-            float(expected.conn_retry_delay),
+            "耗尽预算前恢复即成功",
+            await retry.call_with_retry(refuse_until_ready, drop),
+            "connected",
         )
-        # 连接失败要重试；读取超时不重试，否则只是把单次挂起变成多次挂起。
-        check_condition(
-            "连接失败进入重试",
-            RedisConnectionError in retry._supported_errors,
-            actual=retry._supported_errors,
-            expected="包含 ConnectionError",
-        )
-        check_equal(
-            "读取超时不进入重试",
-            pool.connection_pool.connection_kwargs.get("retry_on_error"),
-            [RedisConnectionError],
-        )
+        check_equal("用满预算内的全部尝试", attempts["count"], retries + 1)
     finally:
         await pool.aclose()
+
+
+async def test_queue_pool_fails_read_timeout_after_single_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """服务收下命令后静默时，读取超时只能失败一次，不得被放大成多次挂起。"""
+    import asyncio
+    import time
+
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from data_agent.infrastructure import job_queue
+
+    read_timeout = 0.3
+    connections = {"count": 0}
+    # 处理器必须能被收尾唤醒：Python 3.12.1 起 Server.wait_closed() 会等待所有已建立
+    # 连接的处理器结束，处理器里挂死会让整个测试进程停在收尾上。
+    released = asyncio.Event()
+
+    async def silent(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """接受连接并收下命令，但在断言完成前不响应。"""
+        connections["count"] += 1
+        await reader.read(100)
+        await released.wait()
+        writer.close()
+
+    server = await asyncio.start_server(silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(
+        job_queue.app_config.redis,
+        "url",
+        f"redis://127.0.0.1:{port}/0",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        job_queue.app_config.redis,
+        "socket_timeout_seconds",
+        read_timeout,
+        raising=False,
+    )
+    pool = job_queue.build_queue_pool(
+        connect_retries=job_queue.worker_connect_retries()
+    )
+    try:
+        started = time.monotonic()
+        try:
+            await pool.ping()
+        except RedisTimeoutError as error:
+            check_exception("读取超时如实抛出", error, RedisTimeoutError)
+        else:
+            fail_check(
+                "静默服务读取",
+                actual="未抛出异常",
+                expected="抛出读取超时",
+            )
+        elapsed = time.monotonic() - started
+        check_equal("只建立一次连接", connections["count"], 1)
+        check_condition(
+            "耗时不超过单次读取超时预算",
+            elapsed < read_timeout * 3,
+            actual=elapsed,
+            expected=f"小于 {read_timeout * 3} 秒",
+        )
+    finally:
+        released.set()
+        await pool.aclose()
+        server.close()
+        await server.wait_closed()
 
 
 async def test_arq_worker_issues_redis_command_before_on_startup() -> None:

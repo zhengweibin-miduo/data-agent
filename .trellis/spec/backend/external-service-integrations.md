@@ -45,11 +45,30 @@ retry — solely when `redis_pool` was **not** supplied. It then runs
 `on_startup`. So a connectivity wait inside the worker lifecycle can never guard
 arq's first Redis command, and a worker that boots alongside a not-yet-ready Redis
 exits before consuming any job or running any maintenance cron. `build_queue_pool()`
-therefore configures a connection-level `Retry` mirroring `conn_retries` /
-`conn_retry_delay`: redis-py wraps both `connect()` and command execution in it, so
-the bounded retry applies to arq's first command without depending on arq's
-internal startup order. Connection failures retry; read timeouts do not — a
-service that accepted the command and went silent would only be re-hung.
+therefore configures a connection-level `Retry`: redis-py wraps both `connect()`
+and command execution in it, so the bounded retry applies to arq's first command
+without depending on arq's internal startup order.
+
+Two details of that `Retry` are load-bearing and easy to get wrong:
+
+- **`supported_errors` must include raw `OSError`.** `AbstractConnection.connect()`
+  wraps `_connect()` in `retry.call_with_retry`, but converts `OSError` ->
+  `ConnectionError` and `asyncio.TimeoutError` -> `TimeoutError` *outside* that
+  wrapper. The retry predicate therefore sees the **raw** socket error, while
+  `Retry`'s default `supported_errors` holds only redis's own exceptions — so the
+  default configuration retries the connect phase zero times. Measured against an
+  unlistened port: 1 attempt with the default, 6 (`conn_retries` + 1) once `OSError`
+  is included. redis's `TimeoutError` is deliberately excluded: that is a *read*
+  timeout, and retrying a service that accepted the command and went silent only
+  converts one hang into several. `socket.timeout` and `asyncio.TimeoutError` are
+  `OSError` subclasses, so connect timeouts are covered.
+- **The budget is per role, because the fallback differs.** The worker uses
+  `conn_retries`, reproducing `create_pool`'s startup semantics — a failed connect
+  there has no fallback at all, the process exits and takes every maintenance cron
+  with it. The API uses `0`. Its immediate dispatch is already swallowed by
+  `DDLJobStore._activate_now_safely()` and replayed by the dispatch cron, so
+  spending a 35-second connect budget inside a request only hangs the HTTP call
+  before reaching the fallback that was going to handle it anyway.
 
 The checkpoint saver builds its own connection pool instead of reusing
 `RedisClient`, so it needs the same socket timeouts injected separately. Without
