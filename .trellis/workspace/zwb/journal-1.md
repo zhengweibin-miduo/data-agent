@@ -905,3 +905,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 修复记忆检索与投影的遗留正确性缺陷
+
+**Date**: 2026-07-26
+**Task**: 修复记忆检索与投影的遗留正确性缺陷
+**Branch**: `fix/memory-correctness-defects-20260726`
+
+### Summary
+
+event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在越过一页后永久错误）；移除权威回查阶段的 projection_version 行级否决，消除版本升级窗口内的检索全量黑障；setup 复核既有索引的 dynamic 与 memory_zh 分析器，防止 recreate 竞态下动态映射静默降级。新增 6 个单元测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a5cd384` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
