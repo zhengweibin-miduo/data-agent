@@ -20,6 +20,20 @@ class JobActivityStore:
         self._redis = redis
         self._keys = keys
 
+    async def now(self) -> float:
+        """读取 Redis 服务端当前时间（秒）。
+
+        活动索引的分数由 Lua 脚本用 `TIME` 写入，因此阈值比较与刷新都必须使用同一
+        时钟。混用 worker 主机时钟会在两者偏移超过停滞宽限期时误判：仍在执行的任务
+        被回退成 pending，其终态转换随后 CAS 失败；确定性 arq ID 又会让重新入队被
+        去重，长任务因此可能反复进入这个循环。
+        """
+        seconds, _microseconds = cast(
+            tuple[int, int],
+            await RedisBaseStore.awaitable(self._redis.time()),
+        )
+        return float(seconds)
+
     async def stalled(self, threshold: float, limit: int) -> list[str]:
         """读取最后推进时间早于阈值的有界候选任务。"""
         # 步骤一：只取越过停滞阈值的成员，索引按推进时间排序因而无需全量扫描。

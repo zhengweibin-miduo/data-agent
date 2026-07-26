@@ -130,6 +130,7 @@ class _Jobs:
         """初始化任务记录与终态写入计数。"""
         self.record = _running_record()
         self.terminal_writes = 0
+        self.heartbeats = 0
 
     async def get(self, job_id: str) -> JobRecord:
         """返回测试任务。"""
@@ -145,6 +146,11 @@ class _Jobs:
         """按 worker 内部读取路径返回与当前配置一致的图版本。"""
         del job_id
         return app_config.llm.graph_version
+
+    async def heartbeat(self, job_id: str) -> None:
+        """记录激活开始时的活动索引刷新。"""
+        del job_id
+        self.heartbeats += 1
 
     async def mark_terminal(self, *args: object, **kwargs: object) -> None:
         """记录不应发生的终态写入。"""

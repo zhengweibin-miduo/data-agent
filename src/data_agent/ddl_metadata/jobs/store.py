@@ -432,6 +432,17 @@ class DDLJobStore:
         # 步骤五：只返回实际完成转换的任务，供维护任务协调后续清理。
         return expired
 
+    async def heartbeat(self, job_id: str) -> None:
+        """刷新任务在活动索引中的推进时间。
+
+        每次 arq 激活开始时调用。任务在整个执行期间停留在 RUNNING、不产生状态
+        转换，因此活动索引的分数只在激活边界推进；arq 自动重试同一激活时若不刷新，
+        停滞判定会从第一次执行开始计时而误伤刚开始的重试。
+
+        推进时间取 Redis 服务端时钟，与活动索引分数的写入时钟保持一致。
+        """
+        await self._activity.touch(job_id, await self._activity.now())
+
     async def reap_stalled(self, limit: int = 100) -> list[str]:
         """回收被基础设施重试预算耗尽后遗留的停滞任务。
 
@@ -443,8 +454,11 @@ class DDLJobStore:
             实际被重新激活或判定失败的任务标识。
         """
         # 步骤一：停滞阈值必须严格大于 arq 自身的执行超时，确保被回退的 running
-        # 任务对应的 arq 执行已被超时取消，不会与新激活并发执行。
-        threshold = time.time() - (
+        # 任务对应的 arq 执行已被超时取消，不会与新激活并发执行。基准取 Redis 服务端
+        # 时钟：活动索引分数由 Lua 用 TIME 写入，若这里改用 worker 主机时钟，两者偏移
+        # 超过宽限期时仍在执行的任务会被回退成 pending，其终态转换随后 CAS 失败，而
+        # 确定性 arq ID 又让重新入队被去重，长任务可能反复陷入该循环。
+        threshold = await self._activity.now() - (
             app_config.redis.worker_job_timeout_seconds
             + app_config.redis.job_stall_grace_seconds
         )
@@ -483,7 +497,7 @@ class DDLJobStore:
             await self._activity.drop(job_id)
             return False
         if action is StallAction.SKIP:
-            await self._activity.touch(job_id, time.time())
+            await self._activity.touch(job_id, await self._activity.now())
             return False
         # 步骤三：超过累计激活上限的执行中任务进入终态，不再重新激活。
         if action is StallAction.FAIL:
@@ -510,7 +524,7 @@ class DDLJobStore:
         ):
             return False
         # 步骤五：重新登记激活请求；确定性 arq ID 保证对仍在队列的任务幂等。
-        now = time.time()
+        now = await self._activity.now()
         await self._outbox.enqueue_activation(job_id, record.revision, now)
         await self._activity.touch(job_id, now)
         _log_stalled_job_reactivated(job_id)

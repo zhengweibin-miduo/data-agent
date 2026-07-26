@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS memory_index_outbox
     projection_version VARCHAR(32) NOT NULL COMMENT '本次同步使用的索引投影格式版本',
     attempts           INT NOT NULL DEFAULT 0 COMMENT '已经失败的投递尝试次数',
     available_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录可被工作进程领取或重试的最早时间',
+    lease_token        CHAR(32) NULL COMMENT '本次领取的不可复用代次令牌，确认与退避据此排除迟到结算',
     last_error_type    VARCHAR(128) NULL COMMENT '最近一次投递失败的错误类型',
     updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                          ON UPDATE CURRENT_TIMESTAMP COMMENT '索引期望状态最近更新时间',

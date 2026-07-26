@@ -111,6 +111,7 @@ def _items(uid: str, operation: MemoryIndexOperation) -> list[MemoryOutboxItem]:
             operation=operation,
             projection_version=app_config.memory.projection_version,
             attempts=0,
+            lease_token="lease-1",
         )
         for target in MemoryIndexTarget
     ]
@@ -125,10 +126,14 @@ def _install(
     failing: set[MemoryIndexTarget] | None = None,
     superseded: bool = False,
     acknowledged_hashes: list[str | None] | None = None,
+    converged_out: list[tuple[str, str]] | None = None,
+    broken_projections: set[str] | None = None,
+    purged: bool = False,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """安装记录型替身并返回确认与退避轨迹。"""
     acknowledged: list[tuple[str, str]] = []
     retried: list[tuple[str, str]] = []
+    converged = converged_out if converged_out is not None else []
     acknowledged_hashes = acknowledged_hashes if acknowledged_hashes is not None else []
     broken = failing or set()
 
@@ -153,8 +158,10 @@ def _install(
             return items
 
         async def projection(self, uid: str) -> MemoryProjection | None:
-            """返回预置的权威投影。"""
+            """返回预置的权威投影；指定 UID 模拟确定性解码失败。"""
             recorder.record("projection")
+            if uid in (broken_projections or set()):
+                raise ValueError(f"无法解码历史内容: {uid}")
             return projections.get(uid)
 
         async def dead_letter_count(self) -> int:
@@ -173,6 +180,18 @@ def _install(
                 return False
             acknowledged.append((item.memory_uid, item.target.value))
             acknowledged_hashes.append(content_hash)
+            return True
+
+        async def enqueue_convergence(
+            self,
+            memory_uid: str,
+            target: MemoryIndexTarget,
+        ) -> bool:
+            """记录确认失败后重建的收敛请求。"""
+            recorder.record("converge")
+            if purged:
+                return False
+            converged.append((memory_uid, target.value))
             return True
 
         async def retry_outbox(
@@ -405,3 +424,104 @@ async def test_dispatch_does_not_acknowledge_superseded_content(
     check_equal("未确认的同步不计入已处理", processed, 0)
     check_equal("被取代的期望状态保持未确认", acknowledged, [])
     check_equal("被取代不等于失败，不进入退避", retried, [])
+
+
+async def test_dispatch_rebuilds_convergence_when_acknowledge_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """确认失败必须按当前权威状态重建收敛请求，否则迟到写入会永久残留。"""
+    recorder = _Recorder()
+    converged: list[tuple[str, str]] = []
+    _install(
+        monkeypatch,
+        recorder,
+        items=_items("memory-6", MemoryIndexOperation.UPSERT),
+        projections={"memory-6": _projection("memory-6", MemoryStatus.ACTIVE)},
+        superseded=True,
+        converged_out=converged,
+    )
+
+    await MemoryIndexDispatcher().dispatch()
+
+    check_equal(
+        "为两个目标各自重建收敛请求",
+        sorted(converged),
+        [
+            ("memory-6", MemoryIndexTarget.ELASTICSEARCH.value),
+            ("memory-6", MemoryIndexTarget.QDRANT.value),
+        ],
+    )
+    check_equal("重建仍在确认所在事务内完成", recorder.depths_for("converge"), [1, 1])
+
+
+async def test_dispatch_isolates_projection_decode_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单条权威行解码失败只退避该项，不得中止整批。"""
+    recorder = _Recorder()
+    items = [
+        *_items("memory-broken", MemoryIndexOperation.UPSERT),
+        *_items("memory-ok", MemoryIndexOperation.UPSERT),
+    ]
+    acknowledged, retried = _install(
+        monkeypatch,
+        recorder,
+        items=items,
+        projections={"memory-ok": _projection("memory-ok", MemoryStatus.ACTIVE)},
+        broken_projections={"memory-broken"},
+    )
+
+    processed = await MemoryIndexDispatcher().dispatch()
+
+    check_equal("正常项目仍被处理", processed, 2)
+    check_equal(
+        "解码失败项目进入退避并累计尝试次数",
+        sorted(retried),
+        [
+            ("memory-broken", MemoryIndexTarget.ELASTICSEARCH.value),
+            ("memory-broken", MemoryIndexTarget.QDRANT.value),
+        ],
+    )
+    check_equal(
+        "同批正常项目仍完成确认",
+        sorted(acknowledged),
+        [
+            ("memory-ok", MemoryIndexTarget.ELASTICSEARCH.value),
+            ("memory-ok", MemoryIndexTarget.QDRANT.value),
+        ],
+    )
+
+
+async def test_dispatch_compensates_when_authority_row_is_purged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """权威行已被物理清理时必须补偿删除，而不是静默放弃收敛。"""
+    # 交错：慢 UPSERT 领取后阻塞 → 并发 DELETE 被另一 worker 确认并清空 outbox →
+    # purge 删除权威行 → 本次迟到写入完成。此时没有任何 outbox 请求能纠正残留。
+    recorder = _Recorder()
+    _install(
+        monkeypatch,
+        recorder,
+        items=[
+            MemoryOutboxItem(
+                memory_uid="memory-7",
+                target=MemoryIndexTarget.ELASTICSEARCH,
+                operation=MemoryIndexOperation.UPSERT,
+                projection_version=app_config.memory.projection_version,
+                attempts=0,
+                lease_token="lease-1",
+            )
+        ],
+        projections={"memory-7": _projection("memory-7", MemoryStatus.ACTIVE)},
+        superseded=True,
+        purged=True,
+    )
+
+    processed = await MemoryIndexDispatcher().dispatch()
+
+    check_equal("补偿路径不计入已处理", processed, 0)
+    check_equal(
+        "先写入后补偿删除同一目标",
+        [event for event in recorder.events if event.startswith("es_")],
+        ["es_upsert", "es_delete"],
+    )

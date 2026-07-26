@@ -106,6 +106,10 @@ class _FakeActivityStore:
         self.touched: list[str] = []
         self.dropped: list[str] = []
 
+    async def now(self) -> float:
+        """返回固定的 Redis 服务端时间，保持测试确定性。"""
+        return 1_000_000.0
+
     async def stalled(self, threshold: float, limit: int) -> list[str]:
         """返回预置候选，忽略阈值以保持测试确定性。"""
         return self._candidates
@@ -270,3 +274,13 @@ async def test_reap_stalled_isolates_single_candidate_failure() -> None:
 
     check_equal("故障候选之后的任务仍被回收", reaped, ["job-7"])
     check_equal("后续候选完成激活登记", outbox.activations, [("job-7", 3)])
+
+
+async def test_heartbeat_refreshes_activity_index() -> None:
+    """每次 arq 激活开始都必须刷新活动索引，避免自动重试被误判为停滞。"""
+    records = {"job-8": _record("job-8", JobStatus.RUNNING, revision=1, attempt=1)}
+    store, _, activity, _ = _store(records, [])
+
+    await store.heartbeat("job-8")
+
+    check_equal("刷新活动索引推进时间", activity.touched, ["job-8"])

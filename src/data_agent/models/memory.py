@@ -387,6 +387,7 @@ class MemoryOutboxItem(ContractModel):
     operation: MemoryIndexOperation = Field(description="索引操作。")
     projection_version: str = Field(description="投影版本。")
     attempts: int = Field(description="处理尝试次数。")
+    lease_token: str = Field(description="本次领取的不可复用代次令牌。")
 
 
 class MemoryRebuildResult(ContractModel):
