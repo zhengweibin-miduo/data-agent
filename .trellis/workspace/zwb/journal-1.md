@@ -907,15 +907,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 - None - task complete
 
 
-## Session 28: 补齐外部服务超时与会话轮次租约
+## Session 28: 移除审查问题修复回复模板
 
 **Date**: 2026-07-26
-**Task**: 补齐外部服务超时与会话轮次租约
-**Branch**: `fix/service-timeouts-turn-lease-20260726`
+**Task**: 移除审查问题修复回复模板
+**Branch**: `docs/remove-review-fix-template-20260726`
 
 ### Summary
 
-为 Redis/ES/Qdrant/TEI 四个客户端注入配置化显式超时，并新增 socket_timeout > sse_heartbeat 跨字段校验保护 SSE 阻塞读取；active_turn_uid 门禁改为带租约，用 updated_at 作占用起点并把可抢占性判定下推到 SQL 数据库端时钟，消除客户端崩溃导致的会话永久 busy。新增 8 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+删除未接入自动化流程的 GitHub 审查问题修复回复模板，同步收窄 code_review.md 与 AGENTS.md 的现行规范声明，并保留 P0/P1 inline 审查格式。
 ## Session 28: 统一 worker 的可重试错误判定
 
 **Date**: 2026-07-26
@@ -943,7 +943,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 
 | Hash | Message |
 |------|---------|
-| `c276703` | (see git log) |
+| `4423a3c` | (see git log) |
 | `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 

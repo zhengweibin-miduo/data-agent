@@ -185,8 +185,13 @@ await MemorySearchService.search(
 - Full rebuild may recreate only the configured project index/collection after
   the caller supplies exact matching target names, then
   scans ACTIVE MySQL rows by primary-key cursor and enqueues both targets.
-- `setup()` must verify an existing index really carries `dynamic: strict` and the
-  configured analyzer, and fail loudly otherwise. `recreate()` deletes then
+- `setup()` must verify an existing index matches the current configuration and
+  fail loudly otherwise. Checking that an analyzer with the right *name* exists is
+  not enough: an index built under an older configuration keeps the previous
+  tokenizer, and `memory_text` may not be bound to the analyzer at all. Both cases
+  keep Chinese BM25 running on the wrong tokenization with no error. Verify
+  `dynamic`, `memory_text`'s type and analyzer binding, and the analyzer's
+  tokenizer against `elasticsearch.analyzer`. `recreate()` deletes then
   creates; a write landing in that window makes Elasticsearch auto-create the
   index with a dynamic default mapping, and an existence-only check would silently
   reuse it — losing strict mapping and Chinese analysis with no error and a quiet
