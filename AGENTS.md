@@ -24,7 +24,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 ## Review guidelines
 
-Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取并遵循根目录的 [`code_review.md`](./code_review.md)。该文件是本仓库 AI 代码审查意见与审查问题修复回复格式的唯一规范来源。
+Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取并遵循根目录的 [`code_review.md`](./code_review.md)。该文件是本仓库 AI 代码审查意见格式的唯一规范来源。
 
 ## Git 与 Pull Request 操作
 
