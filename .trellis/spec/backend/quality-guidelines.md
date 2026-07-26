@@ -24,6 +24,10 @@
   Chinese business explanation. Preserve defaults and validation constraints
   in the same `Field`; `tests/unit/test_settings.py` recursively rejects
   missing or non-Chinese descriptions across root and nested settings models.
+- Every field on a shared `ContractModel` uses `Field(description="...")` with
+  a non-empty Chinese business explanation. Preserve the field's type, default,
+  and validation constraints while adding the description; the regression test
+  `tests/unit/test_model_descriptions.py` covers all domain model modules.
 - Runtime configuration modules contain definitions, validators, loaders, and
   shared instances only. Default-configuration self-checks belong in pytest,
   not in a production-module `if __name__ == "__main__"` assertion block.

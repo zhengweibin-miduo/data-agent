@@ -125,9 +125,11 @@ class MemoryIndexOperation(StrEnum):
 class SemanticDecisionContent(ContractModel):
     """表列语义长期记忆的规范内容。"""
 
-    trust: Literal["model_validated", "user_confirmed"] = "model_validated"
-    table: SemanticTable | None = None
-    column: SemanticColumn | None = None
+    trust: Literal["model_validated", "user_confirmed"] = Field(
+        default="model_validated", description="内容可信来源。"
+    )
+    table: SemanticTable | None = Field(default=None, description="表语义决策内容。")
+    column: SemanticColumn | None = Field(default=None, description="列语义决策内容。")
 
     @model_validator(mode="after")
     def validate_decision_shape(self) -> SemanticDecisionContent:
@@ -140,27 +142,41 @@ class SemanticDecisionContent(ContractModel):
 class MetricDefinitionContent(ContractModel):
     """指标定义长期记忆的规范内容。"""
 
-    trust: Literal["model_validated", "user_confirmed"] = "model_validated"
-    metric: MetricMetadata
-    questions: list[MetricQuestion] = Field(default_factory=list)
-    answers: list[MetricAnswer] = Field(default_factory=list)
+    trust: Literal["model_validated", "user_confirmed"] = Field(
+        default="model_validated", description="内容可信来源。"
+    )
+    metric: MetricMetadata = Field(description="指标定义。")
+    questions: list[MetricQuestion] = Field(
+        default_factory=list, description="问题列表。"
+    )
+    answers: list[MetricAnswer] = Field(default_factory=list, description="回答列表。")
 
 
 class UserMemoryContent(ContractModel):
     """由用户原文证据支持的跨会话长期记忆。"""
 
-    trust: Literal["user_confirmed"] = "user_confirmed"
-    value: str = Field(min_length=1, max_length=4096)
-    supporting_user_quote: str = Field(min_length=1, max_length=4096)
-    evidence_message_uids: list[str] = Field(min_length=1, max_length=20)
-    confirmed_assistant_message_uid: str | None = None
+    trust: Literal["user_confirmed"] = Field(
+        default="user_confirmed", description="内容可信来源。"
+    )
+    value: str = Field(min_length=1, max_length=4096, description="记忆值。")
+    supporting_user_quote: str = Field(
+        min_length=1, max_length=4096, description="支持内容的用户原文。"
+    )
+    evidence_message_uids: list[str] = Field(
+        min_length=1, max_length=20, description="证据消息标识列表。"
+    )
+    confirmed_assistant_message_uid: str | None = Field(
+        default=None, description="确认内容的助手消息标识。"
+    )
 
 
 class GenericMemoryContent(ContractModel):
     """由类别策略验证的扩展记忆内容。"""
 
-    trust: Literal["model_validated", "user_confirmed"]
-    data: dict[str, Any]
+    trust: Literal["model_validated", "user_confirmed"] = Field(
+        description="内容可信来源。"
+    )
+    data: dict[str, Any] = Field(description="扩展数据。")
 
 
 MemoryContent = (
@@ -175,172 +191,206 @@ MEMORY_CONTENT_ADAPTER = TypeAdapter(MemoryContent)
 class MemoryProjection(ContractModel):
     """ES 与 Qdrant 共享的有界索引投影。"""
 
-    memory_uid: str
-    source: str
-    user_id: str | None = None
-    created_conversation_uid: str | None = None
-    created_message_uid: str | None = None
-    category: str = Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
-    memory_key: str = Field(min_length=1, max_length=256)
-    content_schema: str = Field(min_length=1, max_length=128)
-    schema_fingerprint: str | None = None
-    memory_text: str
-    content_hash: str
-    object_ids: list[str]
-    trust: MemoryTrust
-    status: MemoryStatus
-    importance_score: float = Field(ge=0, le=1)
-    lifecycle_policy: MemoryLifecyclePolicy
-    expires_at: datetime | None = None
-    record_version: int = Field(ge=1)
-    content_version: str
-    projection_version: str
-    created_at: datetime
-    updated_at: datetime
+    memory_uid: str = Field(description="记忆唯一标识。")
+    source: str = Field(description="数据来源标识。")
+    user_id: str | None = Field(default=None, description="用户标识。")
+    created_conversation_uid: str | None = Field(
+        default=None, description="创建会话标识。"
+    )
+    created_message_uid: str | None = Field(default=None, description="创建消息标识。")
+    category: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$", description="对象类别。"
+    )
+    memory_key: str = Field(min_length=1, max_length=256, description="记忆键。")
+    content_schema: str = Field(
+        min_length=1, max_length=128, description="内容结构类型。"
+    )
+    schema_fingerprint: str | None = Field(default=None, description="结构指纹。")
+    memory_text: str = Field(description="用于检索的记忆文本。")
+    content_hash: str = Field(description="内容哈希。")
+    object_ids: list[str] = Field(description="关联对象标识列表。")
+    trust: MemoryTrust = Field(description="内容可信来源。")
+    status: MemoryStatus = Field(description="当前状态。")
+    importance_score: float = Field(ge=0, le=1, description="重要性评分。")
+    lifecycle_policy: MemoryLifecyclePolicy = Field(description="生命周期策略。")
+    expires_at: datetime | None = Field(default=None, description="过期时间。")
+    record_version: int = Field(ge=1, description="记录版本。")
+    content_version: str = Field(description="内容版本。")
+    projection_version: str = Field(description="投影版本。")
+    created_at: datetime = Field(description="创建时间。")
+    updated_at: datetime = Field(description="最近更新时间。")
 
 
 class MemoryCandidate(ContractModel):
     """与 Meta 快照一并提交的权威记忆候选。"""
 
-    uid: str
-    source: str
-    user_id: str | None = None
-    created_conversation_uid: str | None = None
-    created_message_uid: str | None = None
-    category: str = Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
-    memory_key: str = Field(min_length=1, max_length=256)
-    content_schema: str = Field(min_length=1, max_length=128)
-    schema_fingerprint: str | None = None
-    memory_text: str
-    content: MemoryContent
-    content_hash: str
-    trust: MemoryTrust
-    content_version: str
-    projection_version: str
-    importance_score: float = Field(default=0.5, ge=0, le=1)
-    lifecycle_policy: MemoryLifecyclePolicy = MemoryLifecyclePolicy.ADAPTIVE
-    expires_at: datetime | None = None
-    decision: MemoryDecision | None = None
-    actor_type: MemoryActorType = MemoryActorType.WORKFLOW
-    created_job_id: str | None = None
-    derived_from_uids: list[str] = Field(default_factory=list)
-    related_uids: list[str] = Field(default_factory=list)
-    supersedes_uids: list[str] = Field(default_factory=list)
+    uid: str = Field(description="对象唯一标识。")
+    source: str = Field(description="数据来源标识。")
+    user_id: str | None = Field(default=None, description="用户标识。")
+    created_conversation_uid: str | None = Field(
+        default=None, description="创建会话标识。"
+    )
+    created_message_uid: str | None = Field(default=None, description="创建消息标识。")
+    category: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$", description="对象类别。"
+    )
+    memory_key: str = Field(min_length=1, max_length=256, description="记忆键。")
+    content_schema: str = Field(
+        min_length=1, max_length=128, description="内容结构类型。"
+    )
+    schema_fingerprint: str | None = Field(default=None, description="结构指纹。")
+    memory_text: str = Field(description="用于检索的记忆文本。")
+    content: MemoryContent = Field(description="对象内容。")
+    content_hash: str = Field(description="内容哈希。")
+    trust: MemoryTrust = Field(description="内容可信来源。")
+    content_version: str = Field(description="内容版本。")
+    projection_version: str = Field(description="投影版本。")
+    importance_score: float = Field(default=0.5, ge=0, le=1, description="重要性评分。")
+    lifecycle_policy: MemoryLifecyclePolicy = Field(
+        default=MemoryLifecyclePolicy.ADAPTIVE, description="生命周期策略。"
+    )
+    expires_at: datetime | None = Field(default=None, description="过期时间。")
+    decision: MemoryDecision | None = Field(default=None, description="写入决策。")
+    actor_type: MemoryActorType = Field(
+        default=MemoryActorType.WORKFLOW, description="执行者类型。"
+    )
+    created_job_id: str | None = Field(default=None, description="创建任务标识。")
+    derived_from_uids: list[str] = Field(
+        default_factory=list, description="派生来源记忆标识列表。"
+    )
+    related_uids: list[str] = Field(
+        default_factory=list, description="关联记忆标识列表。"
+    )
+    supersedes_uids: list[str] = Field(
+        default_factory=list, description="被替代记忆标识列表。"
+    )
 
 
 class MemoryLink(ContractModel):
     """浏览器可见的记忆关联。"""
 
-    link_type: MemoryLinkType
-    memory_uid: str
-    linked_memory_uid: str
+    link_type: MemoryLinkType = Field(description="记忆关联类型。")
+    memory_uid: str = Field(description="记忆唯一标识。")
+    linked_memory_uid: str = Field(description="目标记忆标识。")
 
 
 class MemoryDetail(ContractModel):
     """来自 MySQL 权威内容的有界记忆详情。"""
 
-    uid: str
-    source: str
-    user_id: str | None = None
-    created_conversation_uid: str | None = None
-    created_message_uid: str | None = None
-    category: str = Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
-    memory_key: str = Field(min_length=1, max_length=256)
-    content_schema: str = Field(min_length=1, max_length=128)
-    schema_fingerprint: str | None = None
-    memory_text: str
-    content: MemoryContent
-    content_hash: str
-    trust: MemoryTrust
-    status: MemoryStatus
-    importance_score: float = Field(ge=0, le=1)
-    lifecycle_policy: MemoryLifecyclePolicy
-    expires_at: datetime | None = None
-    record_version: int = Field(ge=1)
-    access_count: int = Field(ge=0)
-    last_accessed_at: datetime | None = None
-    content_version: str
-    projection_version: str
-    created_job_id: str | None = None
-    created_at: datetime
-    updated_at: datetime
-    deleted_at: datetime | None = None
-    purge_requested_at: datetime | None = None
-    links: list[MemoryLink] = Field(default_factory=list)
+    uid: str = Field(description="对象唯一标识。")
+    source: str = Field(description="数据来源标识。")
+    user_id: str | None = Field(default=None, description="用户标识。")
+    created_conversation_uid: str | None = Field(
+        default=None, description="创建会话标识。"
+    )
+    created_message_uid: str | None = Field(default=None, description="创建消息标识。")
+    category: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$", description="对象类别。"
+    )
+    memory_key: str = Field(min_length=1, max_length=256, description="记忆键。")
+    content_schema: str = Field(
+        min_length=1, max_length=128, description="内容结构类型。"
+    )
+    schema_fingerprint: str | None = Field(default=None, description="结构指纹。")
+    memory_text: str = Field(description="用于检索的记忆文本。")
+    content: MemoryContent = Field(description="对象内容。")
+    content_hash: str = Field(description="内容哈希。")
+    trust: MemoryTrust = Field(description="内容可信来源。")
+    status: MemoryStatus = Field(description="当前状态。")
+    importance_score: float = Field(ge=0, le=1, description="重要性评分。")
+    lifecycle_policy: MemoryLifecyclePolicy = Field(description="生命周期策略。")
+    expires_at: datetime | None = Field(default=None, description="过期时间。")
+    record_version: int = Field(ge=1, description="记录版本。")
+    access_count: int = Field(ge=0, description="访问次数。")
+    last_accessed_at: datetime | None = Field(
+        default=None, description="最近访问时间。"
+    )
+    content_version: str = Field(description="内容版本。")
+    projection_version: str = Field(description="投影版本。")
+    created_job_id: str | None = Field(default=None, description="创建任务标识。")
+    created_at: datetime = Field(description="创建时间。")
+    updated_at: datetime = Field(description="最近更新时间。")
+    deleted_at: datetime | None = Field(default=None, description="删除时间。")
+    purge_requested_at: datetime | None = Field(
+        default=None, description="清理请求时间。"
+    )
+    links: list[MemoryLink] = Field(default_factory=list, description="关联列表。")
 
 
 class MemorySearchHit(ContractModel):
     """经过 MySQL 回查的混合检索结果。"""
 
-    memory: MemoryDetail
-    score: float = Field(ge=0)
-    signals: list[str]
+    memory: MemoryDetail = Field(description="命中的记忆详情。")
+    score: float = Field(ge=0, description="检索相关性得分。")
+    signals: list[str] = Field(description="检索信号列表。")
 
 
 class MemorySearchResponse(ContractModel):
     """有界混合检索响应。"""
 
-    items: list[MemorySearchHit]
-    degraded_targets: list[MemoryIndexTarget] = Field(default_factory=list)
+    items: list[MemorySearchHit] = Field(description="列表项。")
+    degraded_targets: list[MemoryIndexTarget] = Field(
+        default_factory=list, description="降级或不可用的索引目标。"
+    )
 
 
 class MemoryEvent(ContractModel):
     """一条有界的只追加历史事件。"""
 
-    id: int
-    memory_uid: str
-    event_type: MemoryEventType
-    old_content: MemoryContent | None = None
-    new_content: MemoryContent | None = None
-    job_id: str | None = None
-    actor_type: MemoryActorType
-    created_at: datetime
+    id: int = Field(description="记录唯一标识。")
+    memory_uid: str = Field(description="记忆唯一标识。")
+    event_type: MemoryEventType = Field(description="事件类型。")
+    old_content: MemoryContent | None = Field(default=None, description="变更前内容。")
+    new_content: MemoryContent | None = Field(default=None, description="变更后内容。")
+    job_id: str | None = Field(default=None, description="任务唯一标识。")
+    actor_type: MemoryActorType = Field(description="执行者类型。")
+    created_at: datetime = Field(description="创建时间。")
 
 
 class MemoryHistoryPage(ContractModel):
     """偏移分页的记忆历史。"""
 
-    items: list[MemoryEvent]
-    offset: int
-    limit: int
-    has_more: bool
+    items: list[MemoryEvent] = Field(description="列表项。")
+    offset: int = Field(description="分页偏移。")
+    limit: int = Field(description="分页大小。")
+    has_more: bool = Field(description="是否还有更多数据。")
 
 
 class MemoryUpdateRequest(ContractModel):
     """同种类、同作用域的结构化用户修正。"""
 
-    content: MemoryContent
-    expected_version: int = Field(ge=1)
+    content: MemoryContent = Field(description="对象内容。")
+    expected_version: int = Field(ge=1, description="期望的当前记录版本。")
 
 
 class MemoryUpdateResponse(ContractModel):
     """用户确认修正响应；requires_reprocess 指示是否需 DDL 重处理。"""
 
-    memory_uid: str
-    event_id: int
-    record_version: int = Field(ge=1)
-    requires_reprocess: bool
+    memory_uid: str = Field(description="记忆唯一标识。")
+    event_id: int = Field(description="事件唯一标识。")
+    record_version: int = Field(ge=1, description="记录版本。")
+    requires_reprocess: bool = Field(description="是否需要重新处理。")
 
 
 class MemoryDeleteResponse(ContractModel):
     """可审计软删除响应。"""
 
-    memory_uid: str
-    deleted: Literal[True] = True
+    memory_uid: str = Field(description="记忆唯一标识。")
+    deleted: Literal[True] = Field(default=True, description="是否已删除。")
 
 
 class MemoryOutboxItem(ContractModel):
     """worker 领取的一条索引期望状态。"""
 
-    memory_uid: str
-    target: MemoryIndexTarget
-    operation: MemoryIndexOperation
-    projection_version: str
-    attempts: int
+    memory_uid: str = Field(description="记忆唯一标识。")
+    target: MemoryIndexTarget = Field(description="索引目标。")
+    operation: MemoryIndexOperation = Field(description="索引操作。")
+    projection_version: str = Field(description="投影版本。")
+    attempts: int = Field(description="处理尝试次数。")
 
 
 class MemoryRebuildResult(ContractModel):
     """全量重建批次结果。"""
 
-    processed: int
-    next_after_id: int | None = None
+    processed: int = Field(description="已处理数量。")
+    next_after_id: int | None = Field(default=None, description="下一页游标标识。")
