@@ -50,6 +50,7 @@ def _choose_memory(
     memories: list[StoredMemory],
 ) -> StoredMemory | None:
     """应用用户确认优先级并拒绝同作用域活动冲突。"""
+    # 用户确认只提高可信优先级；同作用域的不同确认内容仍必须显式报冲突。
     preferred = [
         memory for memory in memories if memory.content.trust == "user_confirmed"
     ]
@@ -77,6 +78,7 @@ class MemoryContextLoader:
         schema: PhysicalSchema,
     ) -> LoadedMemoryContext:
         """批量读取语义记忆；完整有效时直接复用。"""
+        # 指纹与 content hash 命中仅产生候选，当前 DDL AST 校验始终拥有最终裁决权。
         fingerprints = {
             object_id: scope_fingerprint(schema, object_id)
             for object_id in (

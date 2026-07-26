@@ -3,7 +3,8 @@ name = "data-agent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-# ponytail: asyncmy 0.2.11 lacks a Windows Python 3.14 wheel; lift when available.
+# Windows compatibility: keep <3.14 until asyncmy ships a CPython 3.14 wheel,
+# then lift this bound and regenerate uv.lock.
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "arq>=0.28,<0.29",

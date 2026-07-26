@@ -80,6 +80,15 @@ Every conversation, message, outbox, memory, ES, and Qdrant operation carries
 the same `user_id` boundary. Search candidates are accepted only after an
 authority lookup in MySQL with that boundary.
 
+PATCHing a user-scoped memory locks its current authority row, appends a new
+user-confirmed ACTIVE version, and returns `requires_reprocess=false`
+immediately. It does not acquire the DDL source mutation lease or wait for a
+DDL workflow because it does not project into Meta. The shared memory service's
+DDL-scoped branch instead acquires that source lease and returns
+`requires_reprocess=true`: the new memory authority version is active
+immediately, while applying the correction to Meta still requires a complete
+DDL workflow.
+
 The extraction worker claims only the earliest eligible turn per conversation,
 commits a short lease before calling the LLM, and bounds each claim wave by LLM
 concurrency. A candidate is accepted only when its exact user quote occurs in

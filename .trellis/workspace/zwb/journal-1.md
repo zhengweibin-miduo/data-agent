@@ -771,3 +771,37 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: 审查并完善项目核心流程注释
+
+**Date**: 2026-07-26
+**Task**: 审查并完善项目核心流程注释
+**Branch**: `chore/review-comments-20260725`
+
+### Summary
+
+审查项目注释与备注，修正不准确说明，为 DDL、会话和长期记忆核心流程补充中文意图与约束注释，并完成静态检查和单元测试验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a84c445` | (see git log) |
+| `ef06fb9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

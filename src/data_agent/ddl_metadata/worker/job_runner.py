@@ -258,6 +258,8 @@ async def run_ddl_job(
     if record.revision != revision:
         return
     if record.graph_version != app_config.llm.graph_version:
+        # 任务绑定的 graph_version 不允许由新图继续解释；PENDING 任务先通过
+        # 修订保护进入 RUNNING，再按统一终态路径记录 attempt 并安排清理。
         if record.status == JobStatus.PENDING:
             await jobs.mark_running(job_id, revision)
             record = record.model_copy(
@@ -347,6 +349,8 @@ async def run_ddl_job(
         "configurable": {"thread_id": job_id},
     }
     try:
+        # 同一 job_id 始终绑定同一 checkpoint 线程：无快照才注入原始请求，
+        # interrupt 只恢复已提交回答，已完成快照先投影终态，其余情况续跑现有图。
         snapshot = await graph.aget_state(config)
         graph_input: DDLGraphState | Command | None
         interrupt_payload = _interrupt_payload(snapshot)
@@ -385,6 +389,8 @@ async def run_ddl_job(
             graph_input = None
         else:
             graph_input = None
+        # sync durability 先固化节点结果再让 worker 继续；tasks 流只映射稳定阶段，
+        # 节点输入、输出、interrupt 和错误均不得进入公开进度事件。
         async for event in graph.astream(
             graph_input,
             config,
@@ -422,6 +428,8 @@ async def run_ddl_job(
             )
             raise Retry(defer=2) from redis_error
         if isinstance(error, _RETRYABLE) and latest.attempt < 3:
+            # 仅显式瞬态异常可在预算内回到 PENDING；指数退避与 checkpoint 复用
+            # 共同避免热循环，也避免持久化重试重复已经完成的模型节点。
             await jobs.transition(
                 job_id,
                 revision,

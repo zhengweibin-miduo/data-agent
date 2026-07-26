@@ -161,6 +161,8 @@ class DDLWorkflowNodes:
                 capsule,
             )
         except (TypeError, ValueError):
+            # semantic_attempts 存在 checkpoint 中，并由结构化解析与确定性校验
+            # 共享一次修复预算；再次失败必须转业务拒绝，不能形成无限模型回环。
             attempts = state.get("semantic_attempts", 0)
             if attempts < 1:
                 issue = ValidationIssue(
@@ -288,6 +290,8 @@ class DDLWorkflowNodes:
             MetricQuestion.model_validate(question)
             for question in state.get("current_questions", [])
         ]
+        # question_set_id 与 revision 共同锚定外部回答，round 仅说明当前轮次；
+        # 恢复后按 question_id 合并历史证据，陈旧提交由 store 的 CAS 拒绝。
         resumed = interrupt(
             {
                 "questions": [question.model_dump(mode="json") for question in current],
@@ -345,6 +349,8 @@ class DDLWorkflowNodes:
                 issues,
             )
         except (TypeError, ValueError):
+            # metric_attempts 同样随 checkpoint 恢复且只允许一次可修复回环；
+            # 持续无效的模型输出必须收敛为结构化拒绝，而不是重复消耗模型调用。
             attempts = state.get("metric_attempts", 0)
             if attempts < 1:
                 issue = ValidationIssue(
@@ -503,6 +509,8 @@ class DDLWorkflowNodes:
             MemoryCandidate.model_validate(candidate)
             for candidate in state.get("memory_candidates", [])
         ]
+        # 记忆候选只来自已 finalized 的语义和指标；snapshot 事务成功后才返回
+        # SUCCEEDED，异常则交由 runner 统一分类，避免出现成功投影但快照未提交。
         await self._dependencies.snapshot.persist(
             schema,
             metadata,

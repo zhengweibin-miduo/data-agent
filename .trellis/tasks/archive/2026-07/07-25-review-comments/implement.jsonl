@@ -1,0 +1,15 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "code_review.md", "reason": "项目 AI 审查结论与证据规范"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端范围和质量检查入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Docstring 与注释契约"}
+{"file": ".trellis/tasks/07-25-review-comments/research/source-test-comment-inventory.md", "reason": "源码和测试注释分布"}
+{"file": ".trellis/tasks/07-25-review-comments/research/config-doc-notes-inventory.md", "reason": "配置与文档备注边界"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-standards-and-tooling.md", "reason": "审查标准和工具能力"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "对话与长期记忆可执行契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "事务、仓储和 outbox 契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "DDL 状态、重试和终态清理契约"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Redis checkpoint 与记忆投影契约"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层流程注释边界"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-plan-ddl.md", "reason": "DDL 核心流程注释定位"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-plan-conversation.md", "reason": "conversation 核心流程注释定位"}
+{"file": ".trellis/tasks/07-25-review-comments/research/comment-plan-memory.md", "reason": "长期记忆核心流程注释定位"}

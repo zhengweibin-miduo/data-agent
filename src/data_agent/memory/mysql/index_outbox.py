@@ -107,6 +107,7 @@ class MemoryIndexOutboxRepository:
 
     async def acknowledge_outbox(self, item: MemoryOutboxItem) -> None:
         """仅确认仍与已处理期望状态相同的 outbox 行。"""
+        # 领取锁只覆盖当前事务；完整期望条件确保迟到 worker 无法删除更新后的状态。
         await self._session.execute(
             delete(memory_index_outbox).where(
                 memory_index_outbox.c.memory_uid == item.memory_uid,

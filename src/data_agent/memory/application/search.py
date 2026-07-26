@@ -54,6 +54,7 @@ class MemorySearchService:
             limit or app_config.memory.search_limit,
             app_config.memory.search_limit,
         )
+        # 派生索引只贡献候选和排名信号，MySQL exact 与后续回查始终保留权威性。
         rankings: list[tuple[str, Sequence[str]]] = []
         degraded: list[MemoryIndexTarget] = []
         if exact_uids:
@@ -137,6 +138,7 @@ class MemorySearchService:
             "elasticsearch": MemoryIndexTarget.ELASTICSEARCH,
             "qdrant": MemoryIndexTarget.QDRANT,
         }
+        # 待投影目标可能仍指向旧版本，必须先剔除其信号再执行 RRF 融合。
         confirmed_rankings = [
             (
                 signal,
@@ -153,6 +155,7 @@ class MemorySearchService:
             constant=app_config.memory.rrf_constant,
             exact_uids=set(baseline_uids),
         )
+        # RRF 分数不能绕过版本、hash、过期时间，以及调用方提供的对象白名单。
         items: list[MemorySearchHit] = []
         for uid, score, signals in fused:
             detail = by_uid.get(uid)
@@ -192,6 +195,7 @@ class MemorySearchService:
             )
         items.sort(key=lambda item: (-item.score, item.memory.uid))
         items = items[:bounded_limit]
+        # 访问热度不影响本次结果正确性，统计失败不得撤销已完成的权威过滤。
         if items:
             try:
                 async with MySQLDatabase.session() as session:
