@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,10 @@ from tests.helpers.checks import check_condition, check_equal
 
 
 class _FakeResult:
-    """返回预置标量集合的结果替身。"""
+    """返回预置结果集的替身，兼容标量与行映射两种读取方式。"""
 
-    def __init__(self, values: list[str]) -> None:
-        """绑定预置标量。"""
+    def __init__(self, values: list[Any]) -> None:
+        """绑定预置结果集。"""
         self._values = values
 
     def scalars(self) -> _FakeResult:
@@ -33,20 +33,20 @@ class _FakeResult:
         """沿用同一替身暴露行映射视图。"""
         return self
 
-    def all(self) -> list[str]:
-        """返回预置标量集合。"""
+    def all(self) -> list[Any]:
+        """返回预置结果集。"""
         return self._values
 
-    def scalar_one_or_none(self) -> str | None:
-        """返回预置标量的首项，用于单值查询。"""
+    def scalar_one_or_none(self) -> Any | None:
+        """返回预置结果的首项，用于单值查询。"""
         return self._values[0] if self._values else None
 
 
 class _RecordingSession:
     """记录执行语句并对锁定复核返回预置 ACTIVE 子集。"""
 
-    def __init__(self, locked: list[str]) -> None:
-        """绑定锁定复核应返回的 UID 子集。"""
+    def __init__(self, locked: list[Any]) -> None:
+        """绑定查询应返回的预置结果集。"""
         self.statements: list[ClauseElement] = []
         self._locked = locked
 
