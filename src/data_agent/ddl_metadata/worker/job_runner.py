@@ -195,9 +195,12 @@ async def run_ddl_job(
     """
     jobs = cast(DDLJobStore, ctx["jobs"])
     graph = cast(CompiledStateGraph, ctx["graph"])
-    # 步骤一：先读取权威公开记录；Redis 暂时不可用时不猜测状态，交由 arq 延迟重试。
+    # 步骤一：先读取权威公开记录与图版本兼容字段；两次读取都是激活前的内部读取，
+    # 必须共用同一个 Redis 重试边界。若把 graph_version 留在边界之外，一次瞬时断连
+    # 就会让本次激活直接失败，任务只能等停滞巡检恢复（默认 720 秒），而不是 2 秒。
     try:
         record = await jobs.get(job_id)
+        graph_version = await jobs.graph_version(job_id)
     except (
         RedisConnectionError,
         RedisTimeoutError,
@@ -219,7 +222,7 @@ async def run_ddl_job(
     # 步骤三：任务绑定的 graph_version 不允许由新图继续解释；PENDING 任务先通过
     # 修订保护进入 RUNNING，再按统一终态路径记录 attempt 并安排清理。该字段只对
     # worker 有意义，因此走内部读取路径而不是公开投影。
-    if await jobs.graph_version(job_id) != app_config.llm.graph_version:
+    if graph_version != app_config.llm.graph_version:
         if record.status == JobStatus.PENDING:
             await jobs.mark_running(job_id, revision)
             record = record.model_copy(

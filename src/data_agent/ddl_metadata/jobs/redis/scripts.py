@@ -45,8 +45,8 @@ if ARGV[7] == '1' then
   redis.call('ZADD', KEYS[4], redis_time[1], job_id)
   redis.call('ZREM', KEYS[5], job_id)
   redis.call('HDEL', KEYS[1],
-    'ddl', 'answer_json', 'answer_hash', 'questions_json',
-    'question_set_id', 'expires_at', 'expires_at_epoch')
+    'ddl', 'answer_json', 'questions_json',
+    'expires_at', 'expires_at_epoch')
   redis.call('EXPIRE', KEYS[1], ARGV[8 + field_count * 2 + 1])
 else
   redis.call('ZADD', KEYS[5], redis_time[1], job_id)
@@ -57,6 +57,11 @@ return 1
     # 受理回答后清除 questions_json 与等待截止时间，使 pending 状态下的读取不再
     # 返回上一轮问题；question_set_id 与 answer_hash 必须保留，重复提交的幂等判定
     # （返回码 2）依赖它们，清除会把合法重试误判为 stale_answer。
+    #
+    # 同理，终态清理也只删除原始 answer_json 与 ddl，保留这两个指纹字段直到任务
+    # Hash 的结果保留期到期：受理回答后会立即调度激活，任务可能在 HTTP 响应送达
+    # 或客户端重试之前就到达终态；若终态一并删除指纹，合法的相同回答重试就会拿到
+    # stale_answer，调用方无法据此判断先前请求是否已被受理。
     ANSWER: ClassVar[str] = """
 local status = redis.call('HGET', KEYS[1], 'status')
 local revision = redis.call('HGET', KEYS[1], 'revision')
@@ -80,8 +85,8 @@ if tonumber(redis.call('HGET', KEYS[1], 'expires_at_epoch')) <= tonumber(ARGV[3]
   redis.call('ZADD', KEYS[5], ARGV[3], redis.call('HGET', KEYS[1], 'job_id'))
   redis.call('ZREM', KEYS[6], redis.call('HGET', KEYS[1], 'job_id'))
   redis.call('HDEL', KEYS[1],
-    'ddl', 'answer_json', 'answer_hash', 'questions_json',
-    'question_set_id', 'expires_at', 'expires_at_epoch')
+    'ddl', 'answer_json', 'questions_json',
+    'expires_at', 'expires_at_epoch')
   redis.call('EXPIRE', KEYS[1], ARGV[11])
   return -1
 end

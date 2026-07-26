@@ -366,3 +366,32 @@ async def test_submit_dispatches_immediately_without_waiting_for_cron() -> None:
     # 因此入队失败不得撤销已经成立的受理承诺。
     accepted = await _submit(BrokenOutbox())
     check_equal("立即调度失败仍报告受理成功", accepted.status, JobStatus.PENDING)
+
+
+def test_terminal_cleanup_preserves_answer_idempotency_fingerprint() -> None:
+    """终态清理不得删除回答幂等判定所依赖的指纹字段。"""
+    # 受理回答后会立即调度激活，任务可能在客户端重试到达前就进入终态；此时若指纹
+    # 已被删除，ANSWER 的非等待态幂等分支（返回码 2）就会退化为 stale_answer。
+    for label, script in (
+        ("状态转换终态清理", JobScripts.TRANSITION),
+        ("回答超时终态清理", JobScripts.ANSWER),
+    ):
+        terminal = script[script.index("HDEL") :]
+        check_condition(
+            f"{label} 删除原始回答载荷",
+            "'answer_json'" in terminal,
+            actual=terminal[:160],
+            expected="HDEL 包含 answer_json",
+        )
+        check_condition(
+            f"{label} 保留 answer_hash",
+            "'answer_hash'" not in terminal.split("EXPIRE")[0],
+            actual=terminal[:160],
+            expected="终态 HDEL 不含 answer_hash",
+        )
+        check_condition(
+            f"{label} 保留 question_set_id",
+            "'question_set_id'" not in terminal.split("EXPIRE")[0],
+            actual=terminal[:160],
+            expected="终态 HDEL 不含 question_set_id",
+        )
