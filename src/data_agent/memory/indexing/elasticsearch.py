@@ -87,10 +87,15 @@ class MemoryElasticsearchIndex:
         )
 
     async def _verify_mapping(self) -> None:
-        """复核既有索引具备当前严格映射与中文分析器。
+        """复核既有索引与当前配置声明的严格映射、分析器绑定完全一致。
+
+        只检查"存在一个同名分析器"是不够的：索引可能建于旧配置，`memory_zh` 的
+        tokenizer 仍是上一版取值；或 `memory_text` 根本没有绑定该分析器。两种情况下
+        中文 BM25 会持续按错误分词检索，结果显著劣化却没有任何报错。因此逐项核对
+        `dynamic`、`memory_text` 的类型与 analyzer 绑定、以及分析器的 tokenizer。
 
         Raises:
-            DataAgentError: 既有索引缺少 `dynamic: strict` 或配置的分析器。
+            DataAgentError: 既有索引的映射或分析器绑定与当前配置不一致。
         """
         # 步骤一：读取既有索引的映射与分析设置，按响应体逐层取值。
         mapping = cast(
@@ -102,25 +107,58 @@ class MemoryElasticsearchIndex:
             (await self._client.indices.get_settings(index=self._index)).body,
         )
         dynamic = _nested(mapping, self._index, "mappings", "dynamic")
-        analyzers = _nested(
+        properties = _nested(mapping, self._index, "mappings", "properties")
+        declared = set(properties) if isinstance(properties, dict) else set()
+        memory_text = (
+            properties.get("memory_text") if isinstance(properties, dict) else None
+        )
+        # 严格映射会拒绝任何未声明字段，因此投影新增字段而索引未同步时，写入会持续
+        # 失败、outbox 反复重试直到死信，派生索引再也无法收敛。
+        missing_fields = set(MemoryProjection.model_fields) - declared
+        analyzer = _nested(
             settings,
             self._index,
             "settings",
             "index",
             "analysis",
             "analyzer",
+            _ANALYZER_NAME,
         )
-        # 步骤二：严格映射与自定义分析器缺一不可；不满足说明该索引是被动态映射
-        # 自动创建的，继续复用会静默降级检索质量，因此必须显式失败。
-        if str(dynamic).casefold() != "strict" or not (
-            isinstance(analyzers, dict) and _ANALYZER_NAME in analyzers
-        ):
+        # 步骤二：逐项判定并记录首个不一致原因，使报错能直接定位到失配的部分。
+        expected_tokenizer = app_config.elasticsearch.analyzer
+        reason: str | None = None
+        if str(dynamic).casefold() != "strict":
+            reason = "缺少严格映射，索引可能由动态映射自动创建"
+        elif not isinstance(memory_text, dict):
+            reason = "缺少 memory_text 字段映射"
+        elif str(memory_text.get("type")) != "text":
+            reason = "memory_text 不是全文检索字段"
+        elif str(memory_text.get("analyzer")) != _ANALYZER_NAME:
+            reason = "memory_text 未绑定当前中文分析器"
+        elif str(memory_text.get("search_analyzer", _ANALYZER_NAME)) != _ANALYZER_NAME:
+            # 检索用的是不显式指定 analyzer 的 match 查询，Elasticsearch 因此采用
+            # 字段的 search_analyzer；它被覆盖成别的分析器时，写入侧分词正确而查询侧
+            # 仍按错误规则切分，BM25 召回显著劣化，且索引写入本身不会报任何错。
+            reason = "memory_text 的查询分析器被覆盖为其它分析器"
+        elif missing_fields:
+            reason = f"映射缺少当前投影字段：{', '.join(sorted(missing_fields))}"
+        elif not isinstance(analyzer, dict):
+            reason = "缺少中文分析器定义"
+        elif str(analyzer.get("tokenizer")) != expected_tokenizer:
+            reason = "中文分析器的分词器与当前配置不一致"
+        # 步骤三：任一项不一致都必须显式失败；继续复用会静默降级中文检索质量。
+        if reason is not None:
             raise DataAgentError(
                 "memory_index_mapping_invalid",
                 "memory_index_setup",
-                "既有记忆索引缺少严格映射或中文分析器，可能由动态映射自动创建",
+                f"既有记忆索引与当前配置不一致：{reason}",
                 http_status=500,
-                details={"index": self._index, "analyzer": _ANALYZER_NAME},
+                details={
+                    "index": self._index,
+                    "analyzer": _ANALYZER_NAME,
+                    "tokenizer": expected_tokenizer,
+                    "reason": reason,
+                },
             )
 
     async def recreate(self) -> None:

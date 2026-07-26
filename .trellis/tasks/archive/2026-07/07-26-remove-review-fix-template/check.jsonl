@@ -1,0 +1,2 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/archive/2026-07/07-17-codex-github-review-templates/research/codex-review-guidance.md", "reason": "核验删除范围不会破坏仍需保留的 inline 审查模板"}
