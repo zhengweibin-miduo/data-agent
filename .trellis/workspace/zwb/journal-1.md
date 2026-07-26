@@ -905,3 +905,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 统一 worker 的可重试错误判定
+
+**Date**: 2026-07-26
+**Task**: 统一 worker 的可重试错误判定
+**Branch**: `fix/retryable-error-contract-20260726`
+
+### Summary
+
+新增 _is_retryable：DataAgentError.retryable 成为可重试性权威来源，第三方异常才回退内置瞬态清单；终态投影 retryable 改为反映底层瞬态性。在 spec 中确立'新增基础设施在边界包装为 DataAgentError(retryable=True)'的约定。新增 4 个单元测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fdc78dc` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
