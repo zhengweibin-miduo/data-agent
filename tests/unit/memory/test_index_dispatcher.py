@@ -127,6 +127,7 @@ def _install(
     acknowledged_hashes: list[str | None] | None = None,
     converged_out: list[tuple[str, str]] | None = None,
     broken_projections: set[str] | None = None,
+    purged: bool = False,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """安装记录型替身并返回确认与退避轨迹。"""
     acknowledged: list[tuple[str, str]] = []
@@ -184,10 +185,13 @@ def _install(
             self,
             memory_uid: str,
             target: MemoryIndexTarget,
-        ) -> None:
+        ) -> bool:
             """记录确认失败后重建的收敛请求。"""
             recorder.record("converge")
+            if purged:
+                return False
             converged.append((memory_uid, target.value))
+            return True
 
         async def retry_outbox(
             self,
@@ -484,4 +488,38 @@ async def test_dispatch_isolates_projection_decode_failure(
             ("memory-ok", MemoryIndexTarget.ELASTICSEARCH.value),
             ("memory-ok", MemoryIndexTarget.QDRANT.value),
         ],
+    )
+
+
+async def test_dispatch_compensates_when_authority_row_is_purged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """权威行已被物理清理时必须补偿删除，而不是静默放弃收敛。"""
+    # 交错：慢 UPSERT 领取后阻塞 → 并发 DELETE 被另一 worker 确认并清空 outbox →
+    # purge 删除权威行 → 本次迟到写入完成。此时没有任何 outbox 请求能纠正残留。
+    recorder = _Recorder()
+    _install(
+        monkeypatch,
+        recorder,
+        items=[
+            MemoryOutboxItem(
+                memory_uid="memory-7",
+                target=MemoryIndexTarget.ELASTICSEARCH,
+                operation=MemoryIndexOperation.UPSERT,
+                projection_version=app_config.memory.projection_version,
+                attempts=0,
+            )
+        ],
+        projections={"memory-7": _projection("memory-7", MemoryStatus.ACTIVE)},
+        superseded=True,
+        purged=True,
+    )
+
+    processed = await MemoryIndexDispatcher().dispatch()
+
+    check_equal("补偿路径不计入已处理", processed, 0)
+    check_equal(
+        "先写入后补偿删除同一目标",
+        [event for event in recorder.events if event.startswith("es_")],
+        ["es_upsert", "es_delete"],
     )

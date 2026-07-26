@@ -135,9 +135,20 @@ class MemoryIndexDispatcher:
                 item,
                 content_hash=(writable.content_hash if writable is not None else None),
             )
-            if not acknowledged:
-                await repository.enqueue_convergence(item.memory_uid, item.target)
+            enqueued = (
+                True
+                if acknowledged
+                else await repository.enqueue_convergence(
+                    item.memory_uid,
+                    item.target,
+                )
+            )
         if not acknowledged:
+            # 权威行已被物理清理时无处登记收敛请求：慢 UPSERT 与并发 DELETE 交错后
+            # purge 可能已删除权威行，本次迟到写入会把用户已删除的内容留在派生索引
+            # 里且再无 outbox 请求能纠正它，因此直接补偿删除该目标的派生文档。
+            if not enqueued and writable is not None:
+                await self._apply(item, None)
             _log_index_sync_superseded(item.memory_uid)
         return acknowledged
 

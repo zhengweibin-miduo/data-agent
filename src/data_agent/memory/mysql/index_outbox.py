@@ -214,7 +214,7 @@ class MemoryIndexOutboxRepository:
         self,
         memory_uid: str,
         target: MemoryIndexTarget,
-    ) -> None:
+    ) -> bool:
         """确认失败后按当前权威状态为单个目标重建收敛请求。
 
         确认失败意味着本次写入已经与权威内容不一致：可能是内容再次变更，也可能是
@@ -228,15 +228,21 @@ class MemoryIndexOutboxRepository:
         Args:
             memory_uid: 需要重新收敛的权威记忆 UID。
             target: 需要重新收敛的派生索引目标。
+
+        Returns:
+            是否登记了收敛请求；权威行已被物理清理时为 False，调用方必须改为直接
+            补偿删除派生文档。
         """
-        # 步骤一：权威行已被物理清理时无处可收敛，且外键不允许挂空引用，直接返回。
+        # 步骤一：权威行已被物理清理时无处登记——外键不允许挂空引用。此时不能静默
+        # 放弃：慢 UPSERT 与并发 DELETE 交错后 purge 可能已经删除权威行，迟到写入
+        # 会把用户已删除的内容留在派生索引里，因此由调用方执行补偿删除。
         status = (
             await self._session.execute(
                 select(agent_memory.c.status).where(agent_memory.c.uid == memory_uid)
             )
         ).scalar_one_or_none()
         if status is None:
-            return
+            return False
         # 步骤二：按当前权威状态派生目标操作——仍为 ACTIVE 则写入，否则删除。
         operation = (
             MemoryIndexOperation.UPSERT
@@ -261,6 +267,7 @@ class MemoryIndexOutboxRepository:
                 projection_version=statement.inserted.projection_version,
             )
         )
+        return True
 
     async def retry_outbox(
         self,
