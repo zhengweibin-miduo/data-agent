@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Agent · Agent 模块知识点</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1b1f24; --muted:#5c6672;
+    --line:#e5e8ec; --accent:#3b6cff; --accent-soft:#eaf0ff;
+    --green:#1f9d55; --green-soft:#e6f6ec; --amber:#b7791f; --amber-soft:#fdf3e0;
+    --red:#d1453b; --red-soft:#fdecea; --purple:#7b5bd6; --purple-soft:#efeaff;
+    --code-bg:#f0f2f5; --shadow:0 1px 3px rgba(20,25,35,.06),0 8px 24px rgba(20,25,35,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1216; --panel:#171b21; --ink:#e8ebef; --muted:#9aa4b0;
+      --line:#262c34; --accent:#6f95ff; --accent-soft:#1b2540;
+      --green:#4cc38a; --green-soft:#12271c; --amber:#e0a94a; --amber-soft:#2a2114;
+      --red:#f08079; --red-soft:#2c1715; --purple:#a58cf0; --purple-soft:#1f1a30;
+      --code-bg:#0c0f13; --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1140px; margin:0 auto; padding:0 20px 80px}
+  header.hero{padding:46px 0 22px; border-bottom:1px solid var(--line); margin-bottom:26px}
+  .eyebrow{color:var(--accent); font-weight:700; letter-spacing:.08em; font-size:12px; text-transform:uppercase}
+  h1{font-size:30px; line-height:1.2; margin:10px 0 12px; letter-spacing:-.01em}
+  .lede{color:var(--muted); font-size:15px; max-width:820px; margin:0}
+
+  /* layout */
+  .layout{display:grid; grid-template-columns:236px 1fr; gap:36px; align-items:start}
+  @media(max-width:880px){.layout{grid-template-columns:1fr; gap:8px}}
+  .toc{position:sticky; top:18px; align-self:start; font-size:13px}
+  @media(max-width:880px){.toc{position:static; margin-bottom:18px; border:1px solid var(--line); border-radius:12px; padding:10px}}
+  .toc .grp{margin:16px 0 5px; font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:700}
+  .toc .grp:first-child{margin-top:0}
+  .toc a{display:block; padding:5px 11px; border-radius:7px; color:var(--muted); text-decoration:none; border-left:2px solid transparent; transition:background .12s}
+  .toc a:hover{color:var(--ink); background:var(--code-bg)}
+  .toc a.active{color:var(--accent); border-left-color:var(--accent); background:var(--accent-soft); font-weight:600}
+
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px 20px; box-shadow:var(--shadow)}
+  .mod-sec{scroll-margin-top:16px; margin-bottom:20px}
+  .modhead{display:flex; align-items:center; gap:9px; margin-bottom:4px; flex-wrap:wrap}
+  .modhead h3{margin:0; font-size:17px}
+  .files{font-size:12px; color:var(--muted); margin:6px 0 10px; line-height:1.95}
+  .files code{font-size:11.5px}
+  .role{font-size:13.5px; color:var(--ink); margin:0 0 10px; padding:9px 12px; background:var(--code-bg); border-radius:9px}
+  .role b{color:var(--ink)}
+  h2.big{font-size:20px; margin:34px 0 12px; letter-spacing:-.01em; scroll-margin-top:16px}
+
+  code{font-family:"SF Mono",ui-monospace,"Cascadia Code",Consolas,monospace; font-size:12.5px; background:var(--code-bg); padding:2px 6px; border-radius:5px; color:var(--ink)}
+  .tag{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; white-space:nowrap}
+  .t-blue{background:var(--accent-soft); color:var(--accent)}
+  .t-green{background:var(--green-soft); color:var(--green)}
+  .t-amber{background:var(--amber-soft); color:var(--amber)}
+  .t-red{background:var(--red-soft); color:var(--red)}
+  .t-purple{background:var(--purple-soft); color:var(--purple)}
+  .t-gray{background:var(--code-bg); color:var(--muted)}
+
+  ul.clean{margin:2px 0 0; padding-left:0; list-style:none}
+  ul.clean li{position:relative; padding-left:19px; margin:7px 0; font-size:13.5px; color:var(--muted)}
+  ul.clean li::before{content:""; position:absolute; left:3px; top:8px; width:6px; height:6px; border-radius:2px; background:var(--accent)}
+  ul.clean li b{color:var(--ink); font-weight:600}
+  ul.clean.deep{margin-top:4px}
+  ul.clean.deep li{color:var(--ink); font-size:14px; margin:12px 0}
+  ul.clean.deep li .d{display:block; color:var(--muted); font-size:12.5px; margin-top:3px; line-height:1.6; font-weight:400}
+  ul.clean.deep li code{font-size:12px}
+  .star{display:flex; flex-direction:column; margin-top:6px}
+  .star-row{display:grid; grid-template-columns:64px 1fr; gap:14px; padding:11px 0; border-top:1px dashed var(--line)}
+  .star-row:first-child{border-top:none; padding-top:2px}
+  @media(max-width:520px){.star-row{grid-template-columns:1fr; gap:5px}}
+  .sl{align-self:start; font-size:11px; font-weight:700; padding:4px 0; border-radius:7px; text-align:center; letter-spacing:.02em}
+  .s-s{background:var(--code-bg); color:var(--muted)}
+  .s-t{background:var(--accent-soft); color:var(--accent)}
+  .s-a{background:var(--purple-soft); color:var(--purple)}
+  .s-r{background:var(--green-soft); color:var(--green)}
+  .star-row p{margin:0; font-size:13.5px; color:var(--ink); line-height:1.62}
+  .star-row.r p{color:var(--ink)}
+  .star-row p .m{color:var(--muted)}
+  .point{padding:15px 0 3px; border-top:1px solid var(--line)}
+  .point:first-of-type{border-top:none; padding-top:4px}
+  .pt{font-size:14.5px; font-weight:700; color:var(--ink); margin:0 0 7px; display:flex; gap:8px; align-items:baseline}
+  .pt .n{flex:none; font-size:10.5px; font-weight:700; color:var(--accent); background:var(--accent-soft); border-radius:5px; padding:1px 7px}
+  .pt code{font-size:12.5px}
+  .star.mini{margin:0}
+  .star.mini .star-row{grid-template-columns:26px 1fr; gap:10px; padding:3px 0; border-top:none}
+  .star.mini .sl{font-size:10.5px; padding:2px 0}
+  .star.mini .star-row p{font-size:12.5px; line-height:1.5; color:var(--ink)}
+
+  .diagram{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--shadow); overflow-x:auto; margin-bottom:14px}
+  .diagram svg{display:block; margin:0 auto; max-width:100%; height:auto}
+  .diagram text{font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif}
+  .dcap{font-size:12.5px; color:var(--muted); margin:10px 2px 0; text-align:center}
+  .grid{display:grid; gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:680px){.g2{grid-template-columns:1fr}}
+
+  .callout{display:flex; gap:12px; background:var(--amber-soft); border:1px solid color-mix(in srgb,var(--amber) 30%,transparent); border-radius:12px; padding:13px 15px; font-size:13px; margin-top:10px}
+  .callout .i{font-size:17px}
+  footer{margin-top:44px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Agent Knowledge · 按模块目录</div>
+    <h1>Data Agent — Agent 模块知识点</h1>
+    <p class="lede">左侧目录逐模块跳转，每个模块给出<b>职责 · 关键文件 · 核心要点</b>。记忆系统拆为 Domain / 检索 / 投影 / 存储 / 会话五个子模块。贯穿全局的思想：<b>确定性事实约束 LLM，权威源与投影分离，唯一出口原子落库</b>。</p>
+  </header>
+
+  <div class="layout">
+
+    <!-- ============ 目录 ============ -->
+    <nav class="toc">
+      <div class="grp">概览</div>
+      <a href="#overview">架构总览</a>
+      <div class="grp">编排 &amp; 模型</div>
+      <a href="#langgraph">LangGraph 工作流</a>
+      <a href="#langchain">LangChain / LLM</a>
+      <a href="#kernel">确定性内核 · 解析校验</a>
+      <div class="grp">记忆系统</div>
+      <a href="#mem-domain">长期记忆 · Domain</a>
+      <a href="#mem-app">记忆检索 · Application</a>
+      <a href="#mem-index">记忆投影 · Indexing</a>
+      <a href="#mem-store">记忆存储 · MySQL</a>
+      <a href="#conversation">会话记忆 · Conversation</a>
+      <div class="grp">平台</div>
+      <a href="#persistence">持久化 · Persistence</a>
+      <a href="#infra">基础设施 · Infrastructure</a>
+      <a href="#api">接口层 · API &amp; Worker</a>
+      <a href="#models">共享契约 · Models</a>
+    </nav>
+
+    <!-- ============ 内容 ============ -->
+    <main>
+
+      <!-- 架构总览 -->
+      <h2 class="big" id="overview">架构总览</h2>
+      <div class="diagram">
+        <svg viewBox="0 0 816 440" role="img" aria-label="Data Agent 分层架构图">
+          <defs><marker id="am" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#am)">
+            <path d="M300,76 L344,126"/><path d="M520,76 L488,126"/>
+            <path d="M360,184 L172,232"/><path d="M410,184 L410,232"/><path d="M460,184 L656,232"/>
+            <path d="M143,298 L143,346"/><path d="M410,298 L410,346"/><path d="M677,298 L677,346"/>
+          </g>
+          <g font-size="10.5" fill="var(--muted)">
+            <text x="238" y="212" text-anchor="middle">结构化调用</text>
+            <text x="582" y="212" text-anchor="middle">加载 / 落库</text>
+          </g>
+          <g text-anchor="middle">
+            <rect x="210" y="24" width="180" height="52" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="300" y="45" font-size="13" font-weight="600" fill="var(--ink)">FastAPI API</text>
+            <text x="300" y="63" font-size="10.5" fill="var(--muted)">jobs · memories · events</text>
+            <rect x="430" y="24" width="180" height="52" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="520" y="45" font-size="13" font-weight="600" fill="var(--ink)">arq Worker</text>
+            <text x="520" y="63" font-size="10.5" fill="var(--muted)">图执行 · cron 维护</text>
+            <text x="140" y="55" font-size="11" font-weight="700" fill="var(--muted)" text-anchor="end">接口层</text>
+            <rect x="250" y="126" width="320" height="58" rx="12" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+            <text x="410" y="150" font-size="14" font-weight="700" fill="var(--ink)">编排层 · LangGraph</text>
+            <text x="410" y="169" font-size="10.5" fill="var(--muted)">StateGraph · checkpoint · interrupt · 唯一出口</text>
+            <text x="150" y="159" font-size="11" font-weight="700" fill="var(--accent)" text-anchor="end">编排层</text>
+            <rect x="36" y="232" width="214" height="66" rx="12" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.3"/>
+            <text x="143" y="258" font-size="13" font-weight="600" fill="var(--ink)">模型接入 · LangChain</text>
+            <text x="143" y="276" font-size="10.5" fill="var(--muted)">ChatOpenAI · 结构化输出</text>
+            <text x="143" y="290" font-size="10.5" fill="var(--muted)">classify / plan / metrics</text>
+            <rect x="300" y="232" width="220" height="66" rx="12" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="410" y="258" font-size="13" font-weight="600" fill="var(--ink)">确定性内核</text>
+            <text x="410" y="276" font-size="10.5" fill="var(--muted)">sqlglot → PhysicalSchema</text>
+            <text x="410" y="290" font-size="10.5" fill="var(--muted)">metadata / metric 校验</text>
+            <rect x="570" y="232" width="210" height="66" rx="12" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="675" y="258" font-size="13" font-weight="600" fill="var(--ink)">记忆系统</text>
+            <text x="675" y="276" font-size="10.5" fill="var(--muted)">domain·检索·投影·存储</text>
+            <text x="675" y="290" font-size="10.5" fill="var(--muted)">AST 拥有最终裁决权</text>
+            <text x="410" y="320" font-size="11" font-weight="700" fill="var(--muted)">能力层</text>
+            <rect x="36" y="346" width="744" height="64" rx="12" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="408" y="372" font-size="13" font-weight="600" fill="var(--ink)">持久化 &amp; 基础设施</text>
+            <text x="408" y="392" font-size="10.5" fill="var(--muted)">MySQL（权威）· Redis（checkpoint/队列）· Qdrant（向量）· Elasticsearch（全文）· TEI（嵌入）</text>
+          </g>
+        </svg>
+        <div class="dcap">分层架构：上层依赖下层；编排层是唯一状态机，能力层被调用、彼此不直接耦合</div>
+      </div>
+      <div class="callout">
+        <span class="i">⚠️</span>
+        <div>全局硬约束：<b>模型输出 ≠ 可信事实</b>；<b>MySQL 是权威源，ES/Qdrant 只是可重建投影</b>；任何绕过确定性校验、或在 <code>persist_snapshot</code> 之外写权威库的改动都破坏核心不变量。</div>
+      </div>
+
+      <!-- LangGraph -->
+      <h2 class="big" id="langgraph">编排 &amp; 模型</h2>
+      <section class="mod-sec">
+        <div class="card" style="border-left:3px solid var(--accent)">
+          <div class="modhead"><span class="tag t-blue">编排层</span><h3>LangGraph 工作流</h3></div>
+          <div class="files"><code>workflow/graph.py</code> · <code>nodes.py</code> · <code>routing.py</code> · <code>state.py</code> · <code>contracts.py</code></div>
+          <p class="role">职责：把「解析 → 分类 → 澄清 → 指标 → 校验 → 落库」编排成一个<b>可中断、可续跑</b>的状态机，是全项目唯一的控制流所在。</p>
+          <div class="point"><div class="pt"><span class="n">1</span><code>StateGraph(DDLGraphState)</code> · 图与节点</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>全流程有解析、LLM、校验、人工澄清等异构步骤，需要统一编排。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>用一张有向图把 9 个步骤与分支连起来。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>注册 9 个 async 节点 + 条件边，<code>START→parse_ddl→…→persist_snapshot→END</code>，每个节点只返回状态增量。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>控制流集中在图里，步骤顺序与分支一目了然、可扩展。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>状态即事实 · <code>DDLGraphState</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>任务可能中断、进程可能重启，状态必须能持久化恢复。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>让整份状态可靠落盘并跨节点传递。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>TypedDict(total=False)</code> 只存 dict/list/str 等可 JSON 序列化值，落 Redis checkpoint，节点间不传对象引用。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>任务可断点续跑，状态无隐藏可变对象，序列化安全。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>人在环中 · <code>interrupt()</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>业务含义不足时必须等人工回答，期间不能产出错误结果。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>在澄清点安全暂停并可恢复。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>await_metric_answers</code> 调 <code>interrupt()</code> 冻结 checkpoint，用 <code>question_set_id</code> 锚定回答契约，提交后 resume。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>暂停期间图不前进、不落权威数据，澄清不污染结果。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>纯函数路由 · <code>routing.py</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>业务判断与图结构耦合会让流程难懂难改。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把"下一步去哪"与节点逻辑解耦。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>after_*</code> 是纯函数，只读 <code>state["route"]</code> 返回下一节点名；route 只由刚跑完的节点写。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>路由无副作用、易测试，所有失败分支统一指向 <code>rejected → END</code>。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>唯一成功出口 · <code>persist_snapshot</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>多处写库会导致半成品和不一致。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把权威写入收敛到单一出口。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>只有 <code>persist_snapshot</code> 能提交权威数据，<code>build_memory_candidates</code> 只构候选；<code>_observed_node</code> 给每个节点织日志边界。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>写库路径唯一可控，业务代码里没有日志样板。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">6</span>有界修复预算 · <code>*_attempts</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>模型可能反复产出坏结果，无限重试会卡死并烧钱。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>给模型修复设一个硬上限。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>semantic_attempts</code> / <code>metric_attempts</code> 各 ≤1，存 checkpoint，结构化解析失败与确定性校验共享这一次预算。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>再失败即转 <code>DataAgentError</code> 拒绝，杜绝无限重试。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">7</span>依赖注入 · <code>DDLGraphDependencies</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>model/记忆/快照等依赖不可序列化，不该混进状态。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把进程内依赖与可持久化状态分开。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>依赖经 <code>contracts</code> 注入 <code>DDLWorkflowNodes</code>，绑定在节点闭包里而不进 checkpoint。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>checkpoint 保持纯数据，依赖可在恢复时重新注入。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 860 900" role="img" aria-label="DDL 元数据工作流总览图">
+          <defs><marker id="ah1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#ah1)">
+            <path d="M430,74 L430,104"/><path d="M430,154 L430,184"/><path d="M430,234 L430,264"/>
+            <path d="M430,314 L430,344"/><path d="M430,394 L430,424"/><path d="M430,474 L430,504"/>
+            <path d="M430,554 L430,584"/><path d="M430,634 L430,664"/><path d="M430,714 L430,744"/>
+            <path d="M430,794 L430,824"/>
+          </g>
+          <g fill="none" stroke="var(--amber)" stroke-width="1.5" marker-end="url(#ah1)">
+            <path d="M315,289 C282,289 282,209 315,209"/><path d="M315,609 C282,609 282,529 315,529"/>
+          </g>
+          <path d="M315,529 C238,529 238,369 315,369" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#ah1)"/>
+          <path d="M545,129 C595,129 595,289 545,289" fill="none" stroke="var(--green)" stroke-width="1.5" marker-end="url(#ah1)"/>
+          <path d="M545,289 C660,289 660,609 545,609" fill="none" stroke="var(--green)" stroke-width="1.5" marker-end="url(#ah1)"/>
+          <path d="M545,369 C605,369 605,689 545,689" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#ah1)"/>
+          <path d="M545,609 C645,648 665,690 690,712" fill="none" stroke="var(--red)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah1)"/>
+          <g font-size="10.5">
+            <text x="298" y="253" text-anchor="end" fill="var(--amber)">repair ≤1</text>
+            <text x="298" y="573" text-anchor="end" fill="var(--amber)">repair ≤1</text>
+            <text x="234" y="453" text-anchor="end" fill="var(--accent)">followup·含义不足</text>
+            <text x="600" y="140" fill="var(--green)">validate_cached·记忆完整</text>
+            <text x="610" y="400" fill="var(--accent)">no_metrics·无事实表</text>
+            <text x="666" y="470" fill="var(--green)">valid+reused·跳过问答</text>
+          </g>
+          <g font-size="13" font-weight="600" text-anchor="middle">
+            <rect x="315" y="24" width="230" height="50" rx="10" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/>
+            <text x="430" y="45" fill="var(--ink)">1 · parse_ddl</text>
+            <text x="430" y="62" font-size="10.5" font-weight="400" fill="var(--muted)">sqlglot · 确定性物理 Schema</text>
+            <rect x="315" y="104" width="230" height="50" rx="10" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.2"/>
+            <text x="430" y="125" fill="var(--ink)">2 · load_and_validate_memory</text>
+            <text x="430" y="142" font-size="10.5" font-weight="400" fill="var(--muted)">按 AST 重新裁决兼容记忆</text>
+            <rect x="315" y="184" width="230" height="50" rx="10" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.2"/>
+            <text x="430" y="205" fill="var(--ink)">3 · classify_metadata</text>
+            <text x="430" y="222" font-size="10.5" font-weight="400" fill="var(--muted)">LLM · 只补语义不改结构</text>
+            <rect x="315" y="264" width="230" height="50" rx="10" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/>
+            <text x="430" y="285" fill="var(--ink)">4 · validate_metadata</text>
+            <text x="430" y="302" font-size="10.5" font-weight="400" fill="var(--muted)">确定性校验（模型输出≠事实）</text>
+            <rect x="315" y="344" width="230" height="50" rx="10" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.2"/>
+            <text x="430" y="365" fill="var(--ink)">5 · plan_metric_questions</text>
+            <text x="430" y="382" font-size="10.5" font-weight="400" fill="var(--muted)">LLM · 仅事实表 · 引用校验</text>
+            <rect x="315" y="424" width="230" height="50" rx="10" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.2"/>
+            <text x="430" y="445" fill="var(--ink)">6 · await_metric_answers ⏸</text>
+            <text x="430" y="462" font-size="10.5" font-weight="400" fill="var(--muted)">interrupt() · 暂停不写库</text>
+            <rect x="315" y="504" width="230" height="50" rx="10" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.2"/>
+            <text x="430" y="525" fill="var(--ink)">7 · generate_metrics</text>
+            <text x="430" y="542" font-size="10.5" font-weight="400" fill="var(--muted)">LLM · 据语义+回答生成</text>
+            <rect x="315" y="584" width="230" height="50" rx="10" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/>
+            <text x="430" y="605" fill="var(--ink)">8 · validate_metrics</text>
+            <text x="430" y="622" font-size="10.5" font-weight="400" fill="var(--muted)">finalize + 引用/表达式/契约校验</text>
+            <rect x="315" y="664" width="230" height="50" rx="10" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="430" y="685" fill="var(--ink)">9 · build_memory_candidates</text>
+            <text x="430" y="702" font-size="10.5" font-weight="400" fill="var(--muted)">构建候选 · 不写库</text>
+            <rect x="315" y="744" width="230" height="50" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"/>
+            <text x="430" y="765" fill="var(--ink)">10 · persist_snapshot 🔒</text>
+            <text x="430" y="782" font-size="10.5" font-weight="400" fill="var(--muted)">唯一成功出口 · 原子事务</text>
+            <rect x="345" y="824" width="170" height="44" rx="22" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.4"/>
+            <text x="430" y="851" fill="var(--green)">END · SUCCEEDED</text>
+            <rect x="686" y="688" width="164" height="52" rx="12" fill="var(--red-soft)" stroke="var(--red)" stroke-width="1.4"/>
+            <text x="768" y="710" fill="var(--red)" font-size="12.5">END · rejected</text>
+            <text x="768" y="727" font-size="10" font-weight="400" fill="var(--muted)">校验失败/预算耗尽·任一节点</text>
+          </g>
+        </svg>
+        <div class="dcap">工作流总览：主干（灰）＋修复回环（橙 ≤1）＋记忆跳过（绿）＋含义不足回问（蓝）＋拒绝出口（红虚线）</div>
+      </div>
+
+      <div class="diagram">
+        <svg viewBox="0 0 834 244" role="img" aria-label="有界修复预算循环图">
+          <defs><marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <path d="M180,129 L214,129" fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah2)"/>
+          <path d="M320,96 C320,52 500,52 644,50" fill="none" stroke="var(--green)" stroke-width="1.8" marker-end="url(#ah2)"/>
+          <path d="M410,129 L444,129" fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah2)"/>
+          <path d="M534,90 C534,24 102,24 102,96" fill="none" stroke="var(--amber)" stroke-width="1.8" marker-end="url(#ah2)"/>
+          <path d="M624,132 L644,134" fill="none" stroke="var(--red)" stroke-width="1.8" marker-end="url(#ah2)"/>
+          <g font-size="13">
+            <text x="500" y="42" text-anchor="middle" fill="var(--green)">valid</text>
+            <text x="330" y="16" text-anchor="middle" fill="var(--amber)">repair · attempts+1（每类 1 次）</text>
+            <text x="636" y="120" text-anchor="middle" fill="var(--red)">耗尽</text>
+          </g>
+          <g font-size="15" font-weight="600" text-anchor="middle">
+            <rect x="24" y="96" width="156" height="66" rx="11" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.3"/>
+            <text x="102" y="126" fill="var(--ink)">LLM 节点</text>
+            <text x="102" y="147" font-size="11.5" font-weight="400" fill="var(--muted)">classify · generate</text>
+            <rect x="214" y="96" width="196" height="66" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="312" y="124" fill="var(--ink)">结构化 + 确定性</text>
+            <text x="312" y="145" font-size="11.5" font-weight="400" fill="var(--muted)">校验</text>
+            <rect x="444" y="90" width="180" height="78" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="534" y="126" fill="var(--ink)">attempts &lt; 1 ?</text>
+            <text x="534" y="150" font-size="11.5" font-weight="400" fill="var(--muted)">修复预算判断</text>
+            <rect x="644" y="24" width="166" height="56" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="727" y="50" fill="var(--green)">通过 → 下一阶段</text>
+            <text x="727" y="68" font-size="11.5" font-weight="400" fill="var(--muted)">route = valid</text>
+            <rect x="644" y="104" width="166" height="64" rx="11" fill="var(--red-soft)" stroke="var(--red)" stroke-width="1.3"/>
+            <text x="727" y="132" fill="var(--red)">END · 业务拒绝</text>
+            <text x="727" y="151" font-size="11.5" font-weight="400" fill="var(--muted)">route = rejected</text>
+          </g>
+        </svg>
+        <div class="dcap">有界修复预算：解析与校验共享一次修复回环，耗尽即结构化拒绝</div>
+      </div>
+
+      <div class="diagram">
+        <svg viewBox="0 0 780 250" role="img" aria-label="人在环中的 interrupt/resume 时序图">
+          <defs><marker id="ah3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <text x="382" y="44" text-anchor="middle" font-size="14" fill="var(--amber)">⏸ 暂停期间不写权威数据</text>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah3)">
+            <path d="M224,135 L268,135"/><path d="M496,135 L540,135"/>
+          </g>
+          <path d="M382,196 L382,172" fill="none" stroke="var(--green)" stroke-width="1.8" marker-end="url(#ah3)"/>
+          <text x="518" y="122" text-anchor="middle" font-size="12.5" fill="var(--muted)">resume · 答案按 id 合并</text>
+          <text x="398" y="188" font-size="12.5" fill="var(--green)">resume</text>
+          <g font-size="15" font-weight="600" text-anchor="middle">
+            <rect x="28" y="100" width="196" height="70" rx="11" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.3"/>
+            <text x="126" y="132" fill="var(--ink)">plan_metric_questions</text>
+            <text x="126" y="154" font-size="11.5" font-weight="400" fill="var(--muted)">生成澄清问题</text>
+            <rect x="268" y="100" width="228" height="70" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.5"/>
+            <text x="382" y="128" fill="var(--ink)">await_metric_answers</text>
+            <text x="382" y="150" font-size="11.5" font-weight="400" fill="var(--muted)">interrupt() ⏸ · question_set_id</text>
+            <rect x="540" y="100" width="196" height="70" rx="11" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.3"/>
+            <text x="638" y="132" fill="var(--ink)">generate_metrics</text>
+            <text x="638" y="154" font-size="11.5" font-weight="400" fill="var(--muted)">据语义+回答生成</text>
+            <rect x="268" y="196" width="228" height="44" rx="9" fill="none" stroke="var(--muted)" stroke-width="1.3" stroke-dasharray="6 4"/>
+            <text x="382" y="223" font-size="11.5" font-weight="400" fill="var(--muted)">外部提交回答（客户端）</text>
+          </g>
+        </svg>
+        <div class="dcap">人在环中：interrupt 暂停 → 按 question_set_id 提交回答 → resume</div>
+      </div>
+
+      <!-- LangChain -->
+      <section class="mod-sec" id="langchain" style="margin-top:20px">
+        <div class="card" style="border-left:3px solid var(--purple)">
+          <div class="modhead"><span class="tag t-purple">模型接入</span><h3>LangChain / LLM</h3></div>
+          <div class="files"><code>workflow/llm_metadata_generator.py</code> · <code>infrastructure/llm_client.py</code></div>
+          <p class="role">职责：把有界结构化输入交给模型，<b>强制返回 Pydantic 契约</b>，为编排层提供三类语义/指标生成能力；模型只补语义，绝不改结构。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>强制结构化输出 · <code>with_structured_output</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>模型可能返回自由文本或幻造字段。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>强制模型返回严格的 Pydantic 契约。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>with_structured_output(output_type, method)</code> 绑定类型，method 来自配置，禁止文本/宽松 JSON 降级。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>"模型输出≠事实"的边界不被降级打破。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>可复现 + 并发预算</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>随机性影响可复现，并发会打爆端点。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>稳定输出并限制并发。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>temperature=0</code> + <code>asyncio.Semaphore(max_concurrency)</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>同输入尽量同结构，端点不被 worker 并行任务压垮。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span><code>LLMClient</code> 单例与密钥</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>密钥敏感，重复建客户端浪费且易泄漏。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>统一、安全地管理模型客户端。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>单例 <code>initialize()</code> 幂等创建 <code>ChatOpenAI</code>，密钥仅从 <code>DATA_AGENT_LLM_API_KEY</code> 读取、缺失即失败，<code>close()</code> 释放 HTTP client。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>密钥不入配置/仓库，连接可控可关闭。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>启动能力探针 · <code>check_structured_output_capability</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>端点可能"声称支持"结构化输出却不履约。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>启动期就验证真实能力。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>用 <code>_CapabilityProbe(ok=true)</code> 向真实端点发一次结构化请求，同时校验响应类型和值。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>不合格端点启动即暴露，避免运行期降级。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>三类调用 · classify / plan / metrics</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>分类、澄清、指标是不同任务，不能一个提示打天下。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>为每个阶段提供专用生成能力。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>各有 system prompt 与有界 payload；<code>plan_questions</code> 带轮次与历史回答，<code>generate_metrics</code> 输出 <code>missing_business_meaning</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>每阶段职责清晰，缺口显式而非硬编。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">6</span>Prompt 硬约束</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>LLM 易臆造对象或引用不存在的 ID。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>从提示层压住幻觉。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>只允许用已给 table/column ID、必须引用回答 question ID、描述是已接受事实、每对象恰好一次、缺口显式列出。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>模型只补语义、不改结构、不臆造。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">7</span>有界输入 + 二次确认</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>长 DDL 回灌模型浪费，且返回类型仍需保证。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>精简输入并二次校验输出。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>payload 紧凑 JSON 且 <code>exclude canonical_ddl</code>；返回后再 <code>isinstance</code>，<code>TypeError/ValueError</code> 交修复预算。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>输入有界、输出类型可信，异常收敛到预算。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 940 200" role="img" aria-label="结构化输出调用管道图">
+          <defs><marker id="ah4" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah4)">
+            <path d="M174,102 L198,102"/><path d="M398,102 L422,102"/><path d="M598,102 L622,102"/>
+          </g>
+          <path d="M772,88 L800,58" fill="none" stroke="var(--green)" stroke-width="1.8" marker-end="url(#ah4)"/>
+          <path d="M772,116 L800,146" fill="none" stroke="var(--amber)" stroke-width="1.8" marker-end="url(#ah4)"/>
+          <text x="790" y="74" text-anchor="end" font-size="12" fill="var(--green)">ok</text>
+          <text x="790" y="140" text-anchor="end" font-size="12" fill="var(--amber)">Type/ValueError</text>
+          <g font-size="14" font-weight="600" text-anchor="middle">
+            <rect x="16" y="70" width="158" height="64" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="95" y="98" fill="var(--ink)">有界 JSON 输入</text>
+            <text x="95" y="118" font-size="11" font-weight="400" fill="var(--muted)">exclude canonical_ddl</text>
+            <rect x="198" y="70" width="200" height="64" rx="11" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.3"/>
+            <text x="298" y="98" fill="var(--ink)">with_structured_output</text>
+            <text x="298" y="118" font-size="11" font-weight="400" fill="var(--muted)">method · 禁止文本降级</text>
+            <rect x="422" y="70" width="176" height="64" rx="11" fill="var(--purple-soft)" stroke="var(--purple)" stroke-width="1.3"/>
+            <text x="510" y="98" fill="var(--ink)">Semaphore → ainvoke</text>
+            <text x="510" y="118" font-size="11" font-weight="400" fill="var(--muted)">temperature=0 · 并发预算</text>
+            <rect x="622" y="70" width="150" height="64" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="697" y="98" fill="var(--ink)">isinstance 校验</text>
+            <text x="697" y="118" font-size="11" font-weight="400" fill="var(--muted)">返回类型确认</text>
+            <rect x="800" y="26" width="126" height="54" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="863" y="49" font-size="12.5" fill="var(--green)">返回 Pydantic</text>
+            <text x="863" y="66" font-size="12.5" fill="var(--green)">契约</text>
+            <rect x="800" y="118" width="126" height="54" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="863" y="141" font-size="12.5" fill="var(--amber)">交节点</text>
+            <text x="863" y="158" font-size="12.5" fill="var(--amber)">修复预算</text>
+          </g>
+        </svg>
+        <div class="dcap">结构化输出调用：绑定契约 → 并发闸 → 端点 → 类型校验；失败进入节点修复预算（禁止文本降级）</div>
+      </div>
+
+      <!-- 内核 -->
+      <section class="mod-sec" id="kernel">
+        <div class="card" style="border-left:3px solid var(--green)">
+          <div class="modhead"><span class="tag t-green">确定性内核</span><h3>DDL 解析 &amp; 校验</h3></div>
+          <div class="files"><code>ddl_metadata/parsing.py</code> · <code>validation.py</code> · <code>models/physical.py</code> · <code>identifiers.py</code></div>
+          <p class="role">职责：唯一产生「可信事实」的地方。确定性地把 DDL 变成 <code>PhysicalSchema</code>，并对每一次模型输出做重新校验——<b>模型结果必须回到这里被判定</b>。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>确定性解析 · <code>sqlglot</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>表/列身份必须绝对确定，不能受模型影响。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>从 DDL 得到确定性物理结构。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>parse_ddl</code> 在线程外边界用 sqlglot 解析出 <code>PhysicalSchema</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>全流程唯一物理事实，模型只能补语义不能改结构。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>身份锚点 · 三种 fingerprint</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>记忆复用与快照版本要能精确对齐。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>给版本与作用域一套稳定标识。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>ddl_hash</code>（整份）、<code>schema_fingerprint</code>（schema 级）、<code>scope_fingerprint</code>（单个表/列）。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>指纹变即不兼容，复用/快照按锚点对齐。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>语义 / 问题校验</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>模型分类与问题可能引用不存在的对象。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>校验模型输出是否与物理结构一致。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>validate_metadata</code> 逐项对照结构（存在性、主外键角色）；<code>validate_metric_questions</code> 校验问题引用。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>无效分类/问题不能进入下一步或 interrupt。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>指标 finalize + 校验</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>模型指标是碎片，需与证据合成完整定义再判定。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把指标 finalize 并校验业务契约。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>finalize_and_validate_metrics</code> 合成后校验引用/表达式/契约，返回 <code>(finalized, issues)</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>只有 finalized 结果能进入记忆构建与落库。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>可修复判定 · <code>ValidationIssue.repairable</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>有些校验问题可让模型改，有些不能。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>决定是否值得回环重试。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>只有"全部问题可修复且预算未耗尽"时才回环让模型修一次。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>避免无意义重试，其余收敛为业务拒绝。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">6</span>核心不变量</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>模型输出天然不可信。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>保证只有经校验的事实能推进。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>任何模型结果都要重新过确定性校验；失败产出带 <code>code/stage/retryable/details</code> 的 <code>DataAgentError</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>结构永不被 LLM 改动，错误结构化可分类。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 900 226" role="img" aria-label="确定性内核：事实源与三校验图">
+          <defs><marker id="ah5" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah5)">
+            <path d="M140,116 L170,116"/><path d="M310,116 L340,116"/>
+          </g>
+          <g fill="none" stroke="var(--green)" stroke-width="1.8" marker-end="url(#ah5)">
+            <path d="M500,104 L560,44"/><path d="M500,116 L560,114"/><path d="M500,128 L560,184"/>
+          </g>
+          <text x="530" y="214" text-anchor="middle" font-size="11.5" fill="var(--muted)">身份锚点：ddl_hash · schema_fingerprint · scope_fingerprint</text>
+          <g font-size="14" font-weight="600" text-anchor="middle">
+            <rect x="20" y="88" width="120" height="56" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="80" y="121" fill="var(--ink)">DDL 文本</text>
+            <rect x="170" y="88" width="140" height="56" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="240" y="121" fill="var(--ink)">sqlglot 解析</text>
+            <rect x="340" y="82" width="160" height="72" rx="12" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+            <text x="420" y="112" fill="var(--ink)">PhysicalSchema</text>
+            <text x="420" y="132" font-size="11" font-weight="400" fill="var(--muted)">事实源 · 身份不可改</text>
+          </g>
+          <g font-size="13" font-weight="600" text-anchor="start">
+            <rect x="560" y="20" width="320" height="48" rx="10" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/>
+            <text x="578" y="42" fill="var(--ink)">validate_metadata</text>
+            <text x="578" y="59" font-size="10.5" font-weight="400" fill="var(--muted)">语义分类 ↔ 物理结构</text>
+            <rect x="560" y="90" width="320" height="48" rx="10" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/>
+            <text x="578" y="112" fill="var(--ink)">validate_metric_questions</text>
+            <text x="578" y="129" font-size="10.5" font-weight="400" fill="var(--muted)">问题引用校验</text>
+            <rect x="560" y="160" width="320" height="48" rx="10" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/>
+            <text x="578" y="182" fill="var(--ink)">finalize_and_validate_metrics</text>
+            <text x="578" y="199" font-size="10.5" font-weight="400" fill="var(--muted)">引用 / 表达式 / 业务契约</text>
+          </g>
+        </svg>
+        <div class="dcap">确定性内核：<code>PhysicalSchema</code> 是唯一事实源，三个校验器都以它为基准判定模型输出</div>
+      </div>
+
+      <!-- 记忆系统 -->
+      <h2 class="big" id="mem-domain">记忆系统</h2>
+      <section class="mod-sec">
+        <div class="card" style="border-left:3px solid var(--amber)">
+          <div class="modhead"><span class="tag t-amber">记忆 · 领域</span><h3>长期记忆 · Domain</h3></div>
+          <div class="files"><code>memory/domain/{candidates,lifecycle,ranking,policies,payloads}.py</code> · <code>workflow/memory_context.py</code></div>
+          <p class="role">职责：把「已接受结果」确定性地变成<b>权威记忆候选</b>，并管理其生命周期、冲突与投影文本——全部为纯函数式领域逻辑，不做 I/O。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>候选构建 · <code>build_accepted_memories</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>已接受结果要变成可复用、可追溯的记忆。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>确定性地构建权威候选。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>由 Schema/语义/问答/指标 + 兼容记忆产出 <code>MemoryCandidate</code>，附 uid/指纹/trust/版本/job_id。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>候选带完整来源，可追溯到证据。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>生命周期裁决 · <code>decide_memory</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>写入会遇到删除、空槽、同内容、合并等情况。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>确定性决定对记忆做什么。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>按固定顺序返回 ADD/UPDATE/MERGE/DELETE/NOOP，先处理删除与空槽，再用 <code>same_content</code> 拦幂等。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>避免墓碑，防止同内容被当新版本累积。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>语义等价 · <code>semantically_equivalent</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>同一事实可能因表述不同被当成新内容。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>按含义而非文字判等价。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>按值比较；<code>UserMemoryContent</code> 只比归一化后的 value（大小写/空白折叠）。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>同一事实不因描述差异反复更新。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>类别策略 · <code>MemoryCategoryPolicy</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>不同记忆类别的写入/检索规则不同。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>用策略统一驱动行为。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>每类声明 schema、生命周期、importance、retrieval_weight、content_types、user_scoped、<code>conflict_strategy(replace/merge)</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>写入与检索由策略统一，不散落硬编。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>排名融合 · RRF</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>ES 与 Qdrant 分数量纲不同，无法直接比较。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>融合两种排名成统一序。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>reciprocal_rank_fusion</code> 用 <code>1/(constant+rank)</code> 融合，精确命中 +1.0，按 <code>(-score,uid)</code> 稳定排序。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>结果确定可复现，并列有稳定 tie-break。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">6</span>投影转换 · <code>payloads</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>记忆要能做稳定哈希与检索文本。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>从权威内容生成稳定投影。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>canonical_content_json</code>（排序去空白 exclude_none）、<code>memory_content_hash</code>(SHA-256)、<code>build_memory_text</code>(≤2048)。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>内容可回查、可检索，哈希稳定。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">7</span>加载与裁决 · <code>MemoryContextLoader</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>兼容记忆可能陈旧或冲突，且不能凌驾当前 DDL。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>安全复用兼容记忆。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>按 <code>scope_fingerprint</code> 取记忆、content_hash 剔陈旧、<code>user_confirmed</code> 优先、冲突抛 <code>memory_conflict</code>，最后过当前 AST <code>validate_metadata</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>复用内容仍要 AST 裁决，冲突显式不静默。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 880 540" role="img" aria-label="decide_memory 决策流程图">
+          <defs><marker id="ahL" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <!-- spine (continue path) -->
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ahL)">
+            <path d="M170,76 L170,150"/><path d="M170,202 L170,264"/><path d="M170,316 L170,378"/><path d="M170,430 L170,468"/>
+          </g>
+          <!-- branches -->
+          <path d="M270,50 L420,50" fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ahL)"/>
+          <path d="M610,42 L690,30" fill="none" stroke="var(--red)" stroke-width="1.8" marker-end="url(#ahL)"/>
+          <path d="M610,58 L690,90" fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ahL)"/>
+          <path d="M270,176 L420,176" fill="none" stroke="var(--green)" stroke-width="1.8" marker-end="url(#ahL)"/>
+          <path d="M270,290 L420,290" fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ahL)"/>
+          <path d="M270,404 L420,404" fill="none" stroke="var(--amber)" stroke-width="1.8" marker-end="url(#ahL)"/>
+          <!-- yes/no labels -->
+          <g font-size="11.5" font-weight="600">
+            <text x="300" y="42" fill="var(--muted)">是</text>
+            <text x="180" y="118" fill="var(--muted)">否</text>
+            <text x="628" y="28" fill="var(--red)">是</text>
+            <text x="628" y="84" fill="var(--muted)">否</text>
+            <text x="300" y="168" fill="var(--green)">否</text>
+            <text x="180" y="240" fill="var(--muted)">是</text>
+            <text x="300" y="282" fill="var(--muted)">是</text>
+            <text x="180" y="354" fill="var(--muted)">否</text>
+            <text x="300" y="396" fill="var(--amber)">是</text>
+            <text x="180" y="454" fill="var(--accent)">否</text>
+          </g>
+          <!-- decision nodes -->
+          <g font-size="14" font-weight="600" text-anchor="middle">
+            <rect x="70" y="24" width="200" height="52" rx="10" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="170" y="55" fill="var(--ink)">delete_requested ?</text>
+            <rect x="420" y="24" width="190" height="52" rx="10" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="515" y="55" fill="var(--ink)">has_active ?</text>
+            <rect x="70" y="150" width="200" height="52" rx="10" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="170" y="181" fill="var(--ink)">has_active ?</text>
+            <rect x="70" y="264" width="200" height="52" rx="10" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="170" y="295" fill="var(--ink)">same_content ?</text>
+            <rect x="70" y="378" width="200" height="52" rx="10" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="170" y="409" fill="var(--ink)">merge_requested ?</text>
+          </g>
+          <!-- outcome pills -->
+          <g font-size="14.5" font-weight="700" text-anchor="middle">
+            <rect x="690" y="6" width="150" height="44" rx="22" fill="var(--red-soft)" stroke="var(--red)" stroke-width="1.4"/>
+            <text x="765" y="34" fill="var(--red)">DELETE</text>
+            <rect x="690" y="70" width="150" height="44" rx="22" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.4"/>
+            <text x="765" y="98" fill="var(--muted)">NOOP</text>
+            <rect x="420" y="154" width="150" height="44" rx="22" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.4"/>
+            <text x="495" y="182" fill="var(--green)">ADD</text>
+            <rect x="420" y="268" width="150" height="44" rx="22" fill="var(--code-bg)" stroke="var(--muted)" stroke-width="1.4"/>
+            <text x="495" y="296" fill="var(--muted)">NOOP</text>
+            <rect x="420" y="382" width="150" height="44" rx="22" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.4"/>
+            <text x="495" y="410" fill="var(--amber)">MERGE</text>
+            <rect x="95" y="468" width="150" height="44" rx="22" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+            <text x="170" y="496" fill="var(--accent)">UPDATE</text>
+          </g>
+        </svg>
+        <div class="dcap"><code>decide_memory</code> 决策流程：确定性 if-cascade，先裁决删除/空槽/幂等，再按 merge 意图决定 MERGE 或 UPDATE，避免墓碑或同内容被误判为新版本</div>
+      </div>
+
+      <section class="mod-sec" id="mem-app">
+        <div class="card" style="border-left:3px solid var(--amber)">
+          <div class="modhead"><span class="tag t-amber">记忆 · 应用</span><h3>记忆检索 · Application</h3></div>
+          <div class="files"><code>memory/application/{search,service}.py</code></div>
+          <p class="role">职责：对外提供 Mem0 风格的记忆读写用例，内部做<b>混合检索 + MySQL 权威回查</b>，保证返回的永远是当前有效的权威内容。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>混合检索 · <code>MemorySearchService</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>单一召回方式会漏检。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>用两条通路互补召回。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>并发查 ES(全文) 与 Qdrant(向量，先 TEI 嵌入)，RRF 融合。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>召回更全，漏检被另一路补上。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>权威回查</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>外部索引可能陈旧/损坏。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>保证返回的是当前有效权威内容。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>检索只给 UID，内容从 MySQL 取回并用 <code>memory_content_hash</code> 与 content_hash 比对，不一致丢弃。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>绝不把陈旧投影当事实返回。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>范围限定</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>混合检索可能引入无关记忆。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>限制检索范围。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>allowed_object_ids</code> / <code>categories</code> 限范围，混合检索只补精确查询的空槽。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>只补空槽、不取代精确查询，结果相关。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>写入用例 · <code>MemoryService</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>记忆写入需要一致的策略与去重。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提供领域安全的写 API。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>add/update/delete</code> 按 <code>category_policy</code> 应用冲突与生命周期策略。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>对外简单，对内每次写入都经策略去重。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>投影异步对齐</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>外部索引可用性不该阻塞读写。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>解耦权威写入与投影同步。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>写权威表时只登记 outbox 期望状态（同事务），实际更新交 dispatcher 异步幂等。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>读写不被索引可用性阻塞，最终一致。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 1000 240" role="img" aria-label="混合检索与权威回查图">
+          <defs><marker id="ah7" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah7)">
+            <path d="M160,112 L206,60"/><path d="M160,138 L206,182"/>
+            <path d="M386,58 L436,110"/><path d="M386,182 L436,140"/>
+            <path d="M596,124 L640,124"/><path d="M820,124 L864,124"/>
+          </g>
+          <text x="188" y="118" font-size="11.5" fill="var(--muted)">并发两路</text>
+          <text x="726" y="86" font-size="11.5" fill="var(--muted)">剔除陈旧/损坏</text>
+          <g font-size="14" font-weight="600" text-anchor="middle">
+            <rect x="20" y="94" width="140" height="60" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="90" y="129" fill="var(--ink)">查询文本</text>
+            <rect x="206" y="26" width="180" height="58" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="296" y="52" fill="var(--ink)">ES 全文检索</text>
+            <text x="296" y="70" font-size="11" font-weight="400" fill="var(--muted)">BM25 排名</text>
+            <rect x="206" y="156" width="180" height="58" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="296" y="182" fill="var(--ink)">Qdrant 向量</text>
+            <text x="296" y="200" font-size="11" font-weight="400" fill="var(--muted)">经 TEI 嵌入</text>
+            <rect x="436" y="92" width="160" height="64" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.4"/>
+            <text x="516" y="120" fill="var(--ink)">RRF 融合</text>
+            <text x="516" y="140" font-size="11" font-weight="400" fill="var(--muted)">精确命中 +1.0</text>
+            <rect x="640" y="92" width="180" height="64" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.4"/>
+            <text x="730" y="120" fill="var(--ink)">MySQL 权威回查</text>
+            <text x="730" y="140" font-size="11" font-weight="400" fill="var(--muted)">content_hash 核对</text>
+            <rect x="864" y="100" width="120" height="48" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="924" y="129" font-size="13" fill="var(--green)">权威结果</text>
+          </g>
+        </svg>
+        <div class="dcap">混合检索：ES + Qdrant 并发出候选 → RRF 融合 → 只拿 UID 回 MySQL 取权威内容并 hash 核对</div>
+      </div>
+
+      <section class="mod-sec" id="mem-index">
+        <div class="card" style="border-left:3px solid var(--amber)">
+          <div class="modhead"><span class="tag t-amber">记忆 · 投影</span><h3>记忆投影 · Indexing</h3></div>
+          <div class="files"><code>memory/indexing/{dispatcher,elasticsearch,qdrant,rebuilder}.py</code></div>
+          <p class="role">职责：把 MySQL 权威记忆<b>异步、幂等地</b>投影到 ES / Qdrant。投影可随时从权威源重建，本身不是事实来源。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>批量领取 · <code>Dispatcher.dispatch</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>outbox 可能积压，需要有界处理。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>按批可靠地推进投影。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>事务内 <code>claim_outbox</code> 一批（上限 batch_size），逐项处理，成功才 acknowledge。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>有界批处理，成功才确认。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>两目标独立确认</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>ES 与 Qdrant 可能一个成功一个失败。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>保证两目标都真正落地。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>两者各成一条期望状态，各自 <code>upsert/delete</code>、各自 ack，互不替代。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>避免"半同步"被当成完成。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>从权威源重建</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>直接搬旧内容可能写出过期快照。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>保证投影等于权威当前值。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>每次用 <code>memory_uid</code> 回 MySQL 取当前 projection 再写索引。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>重复投递幂等，不写过期内容。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>TEI 嵌入</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>向量检索需要嵌入。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>为 Qdrant 生成向量。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>写 Qdrant 前 <code>aembed_documents(memory_text)</code>，向量与 payload 一起 upsert。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>向量投影与全文投影各就各位。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>失败隔离与退避 · <code>retry_outbox</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>单点失败不该拖垮整批。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>隔离并重试失败项。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>单目标失败只退避该行（记录异常、按 max_backoff），保留期望状态。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>不阻塞其它项、不回滚已成功目标。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">6</span>全量重建 · <code>rebuilder</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>灾难或版本升级需要重建投影。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>从权威源整体重建。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>rebuilder</code> 从 MySQL 重建整套 ES/Qdrant 投影。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>投影可丢可重建，非事实源。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 960 252" role="img" aria-label="记忆投影 outbox 分发图">
+          <defs><marker id="ah8" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah8)">
+            <path d="M190,132 L224,132"/><path d="M384,132 L418,132"/>
+            <path d="M568,120 L606,58"/><path d="M568,140 L606,132"/>
+            <path d="M776,56 L812,86"/><path d="M776,132 L812,106"/>
+          </g>
+          <path d="M690,162 C600,214 300,214 108,166" fill="none" stroke="var(--red)" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ah8)"/>
+          <text x="440" y="230" text-anchor="middle" font-size="12" fill="var(--red)">单目标失败 → retry_outbox · 退避重试（不阻塞其它项）</text>
+          <g font-size="13.5" font-weight="600" text-anchor="middle">
+            <rect x="20" y="100" width="170" height="64" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.3"/>
+            <text x="105" y="128" fill="var(--ink)">MySQL 权威 + outbox</text>
+            <text x="105" y="147" font-size="11" font-weight="400" fill="var(--muted)">期望状态</text>
+            <rect x="224" y="100" width="160" height="64" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="304" y="128" fill="var(--ink)">Dispatcher</text>
+            <text x="304" y="147" font-size="11" font-weight="400" fill="var(--muted)">claim 批次 · 逐项</text>
+            <rect x="418" y="100" width="150" height="64" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="493" y="128" fill="var(--ink)">重建投影</text>
+            <text x="493" y="147" font-size="11" font-weight="400" fill="var(--muted)">从 MySQL</text>
+            <rect x="606" y="28" width="170" height="56" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="691" y="52" fill="var(--ink)">ES upsert/delete</text>
+            <text x="691" y="70" font-size="11" font-weight="400" fill="var(--muted)">全文投影</text>
+            <rect x="606" y="104" width="170" height="56" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="691" y="128" fill="var(--ink)">Qdrant upsert/delete</text>
+            <text x="691" y="146" font-size="11" font-weight="400" fill="var(--muted)">TEI 向量投影</text>
+            <rect x="812" y="60" width="128" height="60" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="876" y="88" fill="var(--green)">独立 ack</text>
+            <text x="876" y="106" font-size="11" font-weight="400" fill="var(--muted)">两目标互不替代</text>
+          </g>
+        </svg>
+        <div class="dcap">投影分发：从 outbox 领取期望状态，逐项从 MySQL 重建后幂等写 ES / Qdrant，两目标独立确认，失败仅退避自身行</div>
+      </div>
+
+      <section class="mod-sec" id="mem-store">
+        <div class="card" style="border-left:3px solid var(--amber)">
+          <div class="modhead"><span class="tag t-amber">记忆 · 存储</span><h3>记忆存储 · MySQL</h3></div>
+          <div class="files"><code>memory/mysql/{repository,index_outbox,tables}.py</code></div>
+          <p class="role">职责：长期记忆的<b>权威关系存储</b>与 outbox 表，是所有记忆读写和投影重建的唯一事实来源。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>仓库查询 · <code>MemoryRepository</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>需要按作用域找当前有效记忆。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提供按指纹/版本的查询。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>find_compatible_scopes</code>（source+指纹+类别+content_version）、<code>find_active_by_fingerprint</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>查询即"按作用域取当前有效版本"。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span><code>StoredMemory</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>上层要判断内容是否被破坏、谁更可信。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>承载权威内容与元信息。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>权威内容 + 明细（<code>content_hash</code>、trust、生命周期状态）。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>支撑 hash 回查与 <code>user_confirmed</code> 优先。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>事务性 outbox · <code>MemoryIndexOutboxRepository</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>权威写入与投影同步要可靠解耦。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把投影同步做成可靠消息。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>claim / acknowledge / retry / projection</code> 四个操作。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>可重试的消息流，权威与投影解耦。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>表定义 · <code>tables.py</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>项目不用 ORM/迁移框架。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>用显式方式定义表。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>SQLAlchemy Core 声明记忆/明细/outbox 三类表，配 bootstrap SQL。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>无 ORM 实体层，读写用显式 SQL。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>版本隔离</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>升级时新旧内容不能互相误判。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>隔离内容/投影版本。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>content_version</code> / <code>projection_version</code> 参与查询与哈希。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>旧版本不被误判兼容，可平滑并存升级。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="mod-sec" id="conversation">
+        <div class="card" style="border-left:3px solid var(--accent)">
+          <div class="modhead"><span class="tag t-blue">记忆 · 会话</span><h3>会话记忆 · Conversation</h3></div>
+          <div class="files"><code>conversation/{service,extraction,repository,models,mysql_tables,api}.py</code></div>
+          <p class="role">职责：管理<b>永久、用户拥有</b>的文本轮次，提供有界上下文，并异步从对话中提炼可复用的用户记忆。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>幂等轮次 · <code>ConversationService</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>客户端重试不能产生重复轮次。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提供永久、幂等的轮次。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>start/complete turn</code> 用稳定标识，会话与消息可分页。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>重复提交不产生重复轮次。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>有界上下文召回</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>上下文不能跨用户串味。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>只取同用户相关记忆。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>复用 <code>MemorySearchService</code>，按 <code>CONVERSATION_MEMORY_SOURCE</code> 与用户作用域隔离。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>数据面杜绝跨租户/用户泄漏。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>异步抽取 · <code>extraction</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>对话里有可复用的用户事实。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提炼有证据的用户记忆。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>抽取并更新摘要，写入走与长期记忆相同的 hash/canonical 管道。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>会话记忆与 DDL 记忆共享去重与生命周期。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>数据所有权 · <code>DeleteConversation*</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>用户拥有自己的会话数据，需可清除。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>支持彻底删除。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>按会话/按用户清除（含派生记忆）。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>满足数据所有权与清除诉求。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>后台驱动 · cron</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>抽取不能拖慢对话接口。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把抽取移出请求路径。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>arq cron <code>extract_conversation_memory</code> 周期批量处理。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>接口低延迟，抽取失败不影响当次交互。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 960 210" role="img" aria-label="会话轮次与异步抽取图">
+          <defs><marker id="ah9" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah9)">
+            <path d="M220,64 L250,64"/><path d="M430,64 L460,64"/><path d="M670,64 L700,64"/>
+          </g>
+          <path d="M460,138 L340,102" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ah9)"/>
+          <text x="150" y="120" font-size="11.5" fill="var(--accent)">上下文召回 ↑</text>
+          <g font-size="13.5" font-weight="600" text-anchor="middle">
+            <rect x="20" y="34" width="200" height="60" rx="11" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.3"/>
+            <text x="120" y="60" fill="var(--ink)">轮次 start/complete</text>
+            <text x="120" y="78" font-size="11" font-weight="400" fill="var(--muted)">幂等</text>
+            <rect x="250" y="34" width="180" height="60" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.3"/>
+            <text x="340" y="60" fill="var(--ink)">永久存储</text>
+            <text x="340" y="78" font-size="11" font-weight="400" fill="var(--muted)">ConversationRepository</text>
+            <rect x="460" y="34" width="210" height="60" rx="11" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"/>
+            <text x="565" y="60" fill="var(--ink)">extraction 异步抽取</text>
+            <text x="565" y="78" font-size="11" font-weight="400" fill="var(--muted)">cron 周期驱动 · 有证据</text>
+            <rect x="700" y="34" width="240" height="60" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3"/>
+            <text x="820" y="60" fill="var(--ink)">用户记忆 → 长期记忆管道</text>
+            <text x="820" y="78" font-size="11" font-weight="400" fill="var(--muted)">hash / canonical 复用</text>
+            <rect x="250" y="132" width="240" height="46" rx="9" fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-dasharray="6 4"/>
+            <text x="370" y="153" font-size="12" fill="var(--ink)">MemorySearchService</text>
+            <text x="370" y="169" font-size="10.5" font-weight="400" fill="var(--muted)">租户 / 用户作用域隔离</text>
+          </g>
+        </svg>
+        <div class="dcap">会话：幂等轮次 → 永久存储 → cron 异步抽取有证据用户记忆，复用长期记忆管道；上下文按租户隔离召回</div>
+      </div>
+
+      <!-- 平台 -->
+      <h2 class="big" id="persistence">平台</h2>
+      <section class="mod-sec">
+        <div class="card" style="border-left:3px solid var(--green)">
+          <div class="modhead"><span class="tag t-green">持久化</span><h3>Persistence · 快照</h3></div>
+          <div class="files"><code>ddl_metadata/persistence/{snapshots,metadata_repository,memory_references,tables}.py</code> · <code>persistence/schema.py</code></div>
+          <p class="role">职责：把工作流最终产物<b>原子地</b>落库。它是唯一写权威元数据的地方，保证「要么全部提交、要么什么都不留」。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>原子写入 · <code>snapshots.persist</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>多张表任何部分提交都不一致。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>把最终产物原子落库。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>语义 + 指标 + 记忆候选 + 索引 outbox 写<b>同一事务</b>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>要么全成、要么全不留。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>提交后才置终态</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>提前置成功会暴露半成品。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>保证终态与事务一致。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>事务成功返回后才置 <code>SUCCEEDED</code>，异常交 runner 分类。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>杜绝"投影已写但快照未提交"。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>可追溯引用</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>结果要能回溯到依据。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>记录快照与来源记忆的关系。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>metadata_repository</code> / <code>memory_references</code> 记录引用。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>每个落库结果可回溯到证据。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>Core 无迁移</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>项目不用迁移框架。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>用显式方式拥有 schema。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>SQLAlchemy Core，schema 由 <code>schema.py</code> + bootstrap SQL 拥有。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>变更靠人工审校，非自动迁移黑盒。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 820 224" role="img" aria-label="快照原子事务图">
+          <defs><marker id="ah10" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <rect x="20" y="26" width="562" height="116" rx="13" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="7 4"/>
+          <text x="40" y="50" font-size="13" font-weight="700" fill="var(--accent)">persist_snapshot · 单一 MySQL 事务</text>
+          <g font-size="12.5" font-weight="600" text-anchor="middle">
+            <rect x="40" y="72" width="118" height="50" rx="9" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/><text x="99" y="102" fill="var(--ink)">语义元数据</text>
+            <rect x="172" y="72" width="118" height="50" rx="9" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.2"/><text x="231" y="102" fill="var(--ink)">指标</text>
+            <rect x="304" y="72" width="126" height="50" rx="9" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.2"/><text x="367" y="102" fill="var(--ink)">记忆候选</text>
+            <rect x="444" y="72" width="120" height="50" rx="9" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.2"/><text x="504" y="102" fill="var(--ink)">索引 outbox</text>
+          </g>
+          <g fill="none" stroke-width="1.8" marker-end="url(#ah10)">
+            <path d="M582,64 L636,52" stroke="var(--green)"/>
+            <path d="M582,120 L636,150" stroke="var(--red)"/>
+          </g>
+          <text x="612" y="44" font-size="11" fill="var(--green)">commit</text>
+          <text x="612" y="150" font-size="11" fill="var(--red)">任一失败</text>
+          <g font-size="13" font-weight="600" text-anchor="middle">
+            <rect x="636" y="30" width="164" height="52" rx="11" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.4"/>
+            <text x="718" y="54" fill="var(--green)">SUCCEEDED</text>
+            <text x="718" y="71" font-size="10.5" font-weight="400" fill="var(--muted)">提交后才置终态</text>
+            <rect x="636" y="140" width="164" height="52" rx="11" fill="var(--red-soft)" stroke="var(--red)" stroke-width="1.4"/>
+            <text x="718" y="164" fill="var(--red)">全部回滚</text>
+            <text x="718" y="181" font-size="10.5" font-weight="400" fill="var(--muted)">不留半成品</text>
+          </g>
+        </svg>
+        <div class="dcap">原子落库：四类产物写在同一事务，要么全部提交（SUCCEEDED）、要么全部回滚，杜绝"投影已写但快照未提交"</div>
+      </div>
+
+      <section class="mod-sec" id="infra">
+        <div class="card" style="border-left:3px solid var(--muted)">
+          <div class="modhead"><span class="tag t-gray">基础设施</span><h3>Infrastructure · 异步客户端</h3></div>
+          <div class="files"><code>infrastructure/{mysql,redis,qdrant,elasticsearch,tei_embeddings,llm_client,checkpoint_store}.py</code></div>
+          <p class="role">职责：集中管理所有外部服务的<b>异步客户端生命周期</b>，为各层提供统一、可关闭、单例化的连接入口。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>客户端单例</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>多服务连接需统一管理。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>统一生命周期。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>每服务 ClassVar 单例 <code>initialize/get_client/close</code>，未 init 就 get 报错。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>连接可控，避免隐式建链。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>本地绑定与密钥</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>安全默认很重要。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>不暴露端口、不泄密钥。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>端口绑 <code>127.0.0.1</code>，密钥仅环境变量、不入 YAML。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>本地不外暴露，密钥不入仓库。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span><code>checkpoint_store</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>可恢复工作流需要存储后端。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提供 checkpoint 存储。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>Redis <code>BaseCheckpointSaver</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>支撑 interrupt / 断点续跑。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>会话与嵌入</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>各层需要事务会话与嵌入能力。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>封装通用能力。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>MySQLDatabase.session()</code> 给 async 事务上下文；<code>TEIEmbeddingClient</code> 封装嵌入端点。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>事务与嵌入被各层共用。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>启动自检</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>缺依赖不该运行期才暴露。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>启动即校验依赖。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>worker 启动逐一探测 Redis / MySQL / 索引 / TEI / 结构化能力。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>缺依赖启动即失败。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="mod-sec" id="api">
+        <div class="card" style="border-left:3px solid var(--muted)">
+          <div class="modhead"><span class="tag t-gray">接口层</span><h3>API &amp; Worker</h3></div>
+          <div class="files"><code>ddl_metadata/api/{jobs,memories,job_events,router}.py</code> · <code>worker/settings.py</code> · <code>maintenance.py</code> · <code>jobs/store.py</code></div>
+          <p class="role">职责：对外暴露 HTTP 入口并异步执行工作流。API 负责受理与回放，Worker 负责跑图与周期维护。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>HTTP 入口 · <code>POST ddl-jobs</code> + SSE</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>客户端要提交任务/回答并看进度。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提供受理与进度回放。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>受理任务与回答，<code>job_events</code> 用 SSE <code>StreamingResponse</code> 增量回放。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>无需轮询即可看进度。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>任务存储 · <code>DDLJobStore</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>任务状态要在应用生命周期内可访问。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>提供任务存储。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>app.state</code> 上的 <code>DDLJobStore</code>；<code>memories</code> 路由暴露记忆读写。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>路由可读任务与记忆。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>Worker 执行 · <code>run_ddl_job</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>图执行要异步、可观测。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>后台驱动图。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>arq discovery 加载 <code>WorkerSettings</code>，<code>run_ddl_job</code> 跑图，<code>_observed</code> 织日志边界。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>图异步执行且有统一日志。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>cron 维护</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>系统需要周期性清理/续跑/抽取。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>自动化后台维护。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>cleanup_checkpoints</code> / <code>dispatch_memory_index_outbox</code> / <code>dispatch_pending</code> / <code>expire_*</code> / <code>extract_conversation_memory</code> / <code>purge_user_memories</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>维护自动化、无需人工。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">5</span>任务终态 · <code>JobStatus</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>拒绝不应表现为崩溃。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>用结构化终态表达结果。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>RUNNING / SUCCEEDED / REJECTED。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>客户端拿到 code/stage 明确原因。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="diagram">
+        <svg viewBox="0 0 980 250" role="img" aria-label="API 与 Worker 任务流图">
+          <defs><marker id="ah11" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker></defs>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.8" marker-end="url(#ah11)">
+            <path d="M126,64 L150,64"/><path d="M310,64 L336,64"/><path d="M466,64 L492,64"/>
+            <path d="M612,64 L638,64"/><path d="M788,64 L814,64"/>
+          </g>
+          <path d="M230,94 C230,150 71,150 71,96" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ah11)"/>
+          <text x="150" y="166" text-anchor="middle" font-size="11.5" fill="var(--accent)">SSE 进度回放 · job_events</text>
+          <path d="M713,94 L713,150" fill="none" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#ah11)"/>
+          <text x="726" y="128" font-size="11" fill="var(--muted)">cron</text>
+          <g font-size="13" font-weight="600" text-anchor="middle">
+            <rect x="16" y="38" width="110" height="52" rx="10" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="71" y="68" fill="var(--ink)">客户端</text>
+            <rect x="150" y="38" width="160" height="52" rx="10" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="230" y="62" fill="var(--ink)">FastAPI ddl-jobs</text>
+            <text x="230" y="79" font-size="10.5" font-weight="400" fill="var(--muted)">提交 / 提交回答</text>
+            <rect x="336" y="38" width="130" height="52" rx="10" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="401" y="68" fill="var(--ink)">DDLJobStore</text>
+            <rect x="492" y="38" width="120" height="52" rx="10" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="552" y="68" fill="var(--ink)">Redis 队列</text>
+            <rect x="638" y="38" width="150" height="52" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.3"/>
+            <text x="713" y="62" fill="var(--ink)">arq Worker</text>
+            <text x="713" y="79" font-size="10.5" font-weight="400" fill="var(--muted)">run_ddl_job</text>
+            <rect x="814" y="38" width="150" height="52" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+            <text x="889" y="68" fill="var(--ink)">LangGraph 图</text>
+          </g>
+          <g text-anchor="middle">
+            <rect x="590" y="150" width="374" height="76" rx="11" fill="var(--code-bg)" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="777" y="172" font-size="12.5" font-weight="700" fill="var(--ink)">cron 维护任务</text>
+            <text x="777" y="192" font-size="10.5" fill="var(--muted)">cleanup_checkpoints · dispatch_memory_index_outbox · dispatch_pending</text>
+            <text x="777" y="210" font-size="10.5" fill="var(--muted)">expire_memories / expire_waiting · extract_conversation_memory · purge_user_memories</text>
+          </g>
+        </svg>
+        <div class="dcap">任务流：API 受理入队 → Worker 跑图 → SSE 回放进度；interrupt 后由提交回答重入队；cron 负责周期维护</div>
+      </div>
+
+      <section class="mod-sec" id="models">
+        <div class="card" style="border-left:3px solid var(--purple)">
+          <div class="modhead"><span class="tag t-purple">共享契约</span><h3>Models · Pydantic v2</h3></div>
+          <div class="files"><code>models/{physical,semantic,memory,jobs,base}.py</code></div>
+          <p class="role">职责：定义所有跨层数据契约。checkpoint 里的 JSON 在每个节点边界都要靠这些模型重新校验成强类型，是"边界即契约"的落点。</p>
+          <div class="point"><div class="pt"><span class="n">1</span>物理 / 语义契约</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>各阶段输入输出需要强约束。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>定义物理与语义模型。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>physical</code>(PhysicalSchema/表列/指纹)、<code>semantic</code>(分类/问题/回答/指标/ValidationIssue/TableRole)。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>各阶段 I/O 由契约约束。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">2</span>记忆判别联合</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>记忆内容有多种子类型，需从 JSON 还原。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>安全区分记忆内容类型。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>MemoryContent</code> 判别联合 + <code>MEMORY_CONTENT_ADAPTER</code>(TypeAdapter)，另有 Candidate/Projection/Trust。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>JSON 能还原到正确子类型。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">3</span>任务契约 · <code>jobs</code></div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>任务状态/结果/错误要有统一结构。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>定义任务相关模型。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>JobStatus</code>、<code>JobResult</code>(ddl_hash+计数)、<code>JobError</code>(code/stage/retryable/details) 与请求/受理响应。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>任务生命周期字段统一。</p></div>
+            </div>
+          </div>
+          <div class="point"><div class="pt"><span class="n">4</span>边界即契约</div>
+            <div class="star mini">
+              <div class="star-row"><span class="sl s-s">S</span><p>checkpoint 里 JSON 要在边界还原强类型。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>每个节点边界都校验。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>入口 <code>model_validate</code>、出口 <code>model_dump(mode="json")</code>。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>契约变更牵动 API/仓库/投影/测试同步。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer>
+    <p>按模块整理 · 来源：<code>ddl_metadata/</code> · <code>memory/{domain,application,indexing,mysql}</code> · <code>conversation/</code> · <code>infrastructure/</code> · <code>models/</code> · <code>persistence/</code></p>
+  </footer>
+
+</div>
+
+<script>
+  const links = [...document.querySelectorAll('.toc a')];
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const targets = [...document.querySelectorAll('main [id]')];
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const a = map.get(e.target.id);
+        if (a) { links.forEach(l => l.classList.remove('active')); a.classList.add('active'); }
+      }
+    });
+  }, { rootMargin: '-8% 0px -82% 0px', threshold: 0 });
+  targets.forEach(t => obs.observe(t));
+</script>
+</body>
+</html>
