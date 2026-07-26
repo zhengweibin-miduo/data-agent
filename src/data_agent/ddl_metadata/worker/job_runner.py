@@ -52,6 +52,29 @@ _RETRYABLE = (
     TimeoutError,
 )
 
+
+def _is_retryable(error: BaseException) -> bool:
+    """判定一次失败是否属于可重试的瞬态错误。
+
+    `DataAgentError` 自带 `retryable` 声明，是可重试性的权威来源：显式声明为
+    可重试的错误必须被重试，显式声明为不可重试的也不能因为异常类型恰好落在内置
+    清单里而被重试。只有无法自我描述的第三方异常才回退到内置瞬态清单。
+
+    新增基础设施时应在其边界把瞬态失败包装为 `DataAgentError(retryable=True)`，
+    而不是继续扩充 `_RETRYABLE`——否则编排层要持续跟踪每个库的异常分类。
+
+    Args:
+        error: 本次捕获的异常。
+
+    Returns:
+        该错误是否属于瞬态可重试错误。
+    """
+    # 步骤一：项目自有错误以其显式声明为准，不再参与类型匹配。
+    if isinstance(error, DataAgentError):
+        return error.retryable
+    # 步骤二：第三方异常回退到内置瞬态类型清单。
+    return isinstance(error, _RETRYABLE)
+
 _NODE_STAGES = {
     "parse_ddl": JobEventStage.PARSING,
     "load_and_validate_memory": JobEventStage.MEMORY_LOADING,
@@ -378,7 +401,9 @@ async def run_ddl_job(
             _log_retry_scheduled()
             raise Retry(defer=2) from redis_error
         # 步骤九：可重试异常使用指数退避，并复用 checkpoint 避免重复已完成的模型节点。
-        if isinstance(error, _RETRYABLE) and latest.attempt < 3:
+        # 可重试性以错误契约为准，业务层显式声明因此不会被静默忽略。
+        retryable = _is_retryable(error)
+        if retryable and latest.attempt < 3:
             await jobs.transition(
                 job_id,
                 revision,
@@ -388,12 +413,15 @@ async def run_ddl_job(
             _log_retry_scheduled()
             raise Retry(defer=(2**latest.attempt) + random.uniform(0, 1)) from error
         # 步骤十：不可重试或预算耗尽时写入安全失败终态，并安排 checkpoint 清理。
+        # 投影的 retryable 描述错误本身是否瞬态（与 JobError 字段声明一致），
+        # 而不是"本次是否还会重试"；预算耗尽的瞬态失败因此仍报告为可重试，
+        # 供调用方判断能否重新提交。
         job_error = JobError(
             code=(
                 error.code if isinstance(error, DataAgentError) else "worker_failed"
             ),
             stage=(error.stage if isinstance(error, DataAgentError) else "worker"),
-            retryable=False,
+            retryable=retryable,
             attempt=latest.attempt,
             details=(
                 error.details
