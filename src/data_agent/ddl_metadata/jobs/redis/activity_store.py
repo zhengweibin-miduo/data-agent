@@ -6,6 +6,17 @@ from redis.asyncio import Redis
 
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
+from data_agent.models.jobs import JobStatus
+
+_SCAN_BATCH = 200
+
+_TERMINAL_STATUSES = frozenset(
+    {
+        JobStatus.SUCCEEDED.value,
+        JobStatus.REJECTED.value,
+        JobStatus.FAILED.value,
+    }
+)
 
 
 class JobActivityStore:
@@ -49,6 +60,51 @@ class JobActivityStore:
                 )
             ),
         )
+
+    async def backfill(self, at: float) -> int:
+        """把键空间中所有非终态任务补录进活动索引。
+
+        活动索引由 submit/transition/answer 脚本维护，因此只覆盖本版本受理的任务。
+        升级前已经停在 pending/running 的任务、以及滚动发布期间由旧实例受理的任务
+        都不在索引中；非终态任务 Hash 不设 TTL，不会自行消失，若不补录就永远不会被
+        停滞巡检发现。每次 worker 启动执行一次，幂等且可重复。
+
+        Args:
+            at: 补录时写入的推进时间，应取 Redis 服务端时钟。
+
+        Returns:
+            本次补录的任务数量。
+        """
+        # 步骤一：按游标扫描任务 Hash 键，排除事件 Stream 等派生键。
+        backfilled = 0
+        cursor = 0
+        while True:
+            cursor, keys = cast(
+                tuple[int, list[str]],
+                await RedisBaseStore.awaitable(
+                    self._redis.scan(
+                        cursor=cursor,
+                        match=f"{self._keys.prefix}:job:*",
+                        count=_SCAN_BATCH,
+                    )
+                ),
+            )
+            for key in keys:
+                if key.endswith(":events"):
+                    continue
+                # 步骤二：只补录仍处于非终态的任务；终态任务自带保留期 TTL。
+                status = cast(
+                    str | None,
+                    await RedisBaseStore.awaitable(self._redis.hget(key, "status")),
+                )
+                if status is None or status in _TERMINAL_STATUSES:
+                    continue
+                job_id = key.rsplit(":", 1)[-1]
+                await self.touch(job_id, at)
+                backfilled += 1
+            # 步骤三：游标回到 0 表示一轮完整扫描结束。
+            if cursor == 0:
+                return backfilled
 
     async def touch(self, job_id: str, at: float) -> None:
         """把任务的最后推进时间前移，避免同一候选被连续重复巡检。"""
