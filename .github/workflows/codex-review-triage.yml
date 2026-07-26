@@ -16,8 +16,8 @@ jobs:
   triage:
     # 只对白名单内的审查 bot 做响应，且必须是非草稿 PR。
     #
-    # 白名单来自仓库变量 REVIEW_BOTS（逗号分隔的 bot login），与下方 allowed_bots 共用
-    # 同一份配置。变量未设置时表达式恒为 false，即 fail-closed，不会误放行。
+    # 白名单默认只含 Codex；需要接入其他审查 bot 时设仓库变量 REVIEW_BOTS 覆盖
+    # （逗号分隔的 bot login），与下方 allowed_bots 共用同一份配置。
     # 两侧都用逗号包裹后再比较，避免 `codex-connector[bot]` 这类子串意外命中。
     #
     # draft 判断对两种事件取不同字段；字段缺失时为 null（!= true 成立），即失败时放行而非静默跳过。
@@ -30,11 +30,13 @@ jobs:
       github.event.pull_request.draft != true &&
       github.event.issue.draft != true &&
       ((github.event_name == 'pull_request_review' &&
-        contains(format(',{0},', vars.REVIEW_BOTS), format(',{0},', github.event.review.user.login)) &&
+        contains(format(',{0},', vars.REVIEW_BOTS || 'chatgpt-codex-connector[bot]'),
+                 format(',{0},', github.event.review.user.login)) &&
         github.event.pull_request.head.repo.full_name == github.repository) ||
        (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
-        contains(format(',{0},', vars.REVIEW_BOTS), format(',{0},', github.event.comment.user.login)) &&
+        contains(format(',{0},', vars.REVIEW_BOTS || 'chatgpt-codex-connector[bot]'),
+                 format(',{0},', github.event.comment.user.login)) &&
         github.event.issue.author_association == 'OWNER'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -65,7 +67,7 @@ jobs:
           # 本 workflow 由 bot 触发，而 action 默认「不允许任何 bot」（空值），
           # 不显式授权则每次都会被拒绝执行。公开仓库下禁止使用 '*'：
           # 那会让任意外部 App 都能以自己控制的 prompt 调起本 action。
-          allowed_bots: ${{ vars.REVIEW_BOTS }}
+          allowed_bots: ${{ vars.REVIEW_BOTS || 'chatgpt-codex-connector[bot]' }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
