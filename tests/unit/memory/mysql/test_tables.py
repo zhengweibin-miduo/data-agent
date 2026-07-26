@@ -23,6 +23,7 @@ def test_memory_table_indexes_match_bootstrap_contract() -> None:
             "idx_agent_memory_user",
             "idx_agent_memory_expiry",
             "idx_agent_memory_text_hash",
+            "idx_agent_memory_key_lookup",
         },
     )
     check_equal(

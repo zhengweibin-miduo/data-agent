@@ -76,6 +76,15 @@ agent_memory = Table(
         "memory_text_hash",
         "status",
     ),
+    # 同一查询的 memory_key 分支也需要独立的等值路径：默认检索允许不带 category，
+    # 而 idx_agent_memory_exact 的 category 排在 memory_key 之前，缺少它时无法用
+    # 该索引前缀直接定位 memory_key，OR 的这一侧仍会退化为按 source 扫描。
+    Index(
+        "idx_agent_memory_key_lookup",
+        "source",
+        "memory_key",
+        "status",
+    ),
     schema=app_config.memory.database,
 )
 agent_memory_event = Table(

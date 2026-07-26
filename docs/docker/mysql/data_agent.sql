@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS agent_memory
         (user_id, category, status, updated_at),
     INDEX idx_agent_memory_expiry (status, expires_at, id),
     INDEX idx_agent_memory_text_hash
-        (source, memory_text_hash, status)
+        (source, memory_text_hash, status),
+    INDEX idx_agent_memory_key_lookup
+        (source, memory_key, status)
 ) ENGINE = InnoDB COMMENT = '存储经验证的权威长期记忆及其生命周期状态';
 
 CREATE TABLE IF NOT EXISTS agent_conversation
