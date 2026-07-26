@@ -363,6 +363,20 @@ user message and acquires the conversation's single `active_turn_uid`.
 Completing it commits the assistant message, extraction outbox row, and gate
 release in one transaction.
 
+The `active_turn_uid` gate is leased, not permanent. `complete_turn` is the only
+release path, so a caller that dies between start and completion — or loses its
+`turn_uid` — would otherwise lock the conversation out of every future turn with
+`conversation_busy` until someone edits the database. Because `start_turn` writes
+`active_turn_uid` and `updated_at` in the same statement, `updated_at` is the
+occupancy start and no extra column is needed. `start_turn` therefore treats the
+gate as claimable when it is unset, already held by the same `turn_uid`, or older
+than `conversation.turn_lease_seconds`. The staleness comparison is pushed into
+SQL with `func.timestampadd(text("SECOND"), -lease, func.now())` for the same
+reason back-off deadlines are: a naive Python timestamp compared against a
+database clock in another time zone either expires the lease immediately or never.
+A preempted turn's later `complete_turn` still fails its `active_turn_uid` check,
+so it cannot overwrite the turn that replaced it.
+
 Conversation-derived `agent_memory` rows use
 `source=data_agent_conversation`, a non-null `user_id`, nullable
 `created_job_id`, and explicit conversation/message provenance. DDL memory

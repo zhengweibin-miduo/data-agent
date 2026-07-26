@@ -19,16 +19,20 @@ qdrant:
   vector_size: 1024
   distance: Cosine
   top_k: 20
+  timeout_seconds: 10
 
 elasticsearch:
   url: http://localhost:9200
   memory_index: data_agent_memory
   analyzer: ik_max_word
   top_k: 20
+  request_timeout_seconds: 10
+  max_retries: 2
 
 tei:
   url: http://localhost:8080
   vector_size: 1024
+  request_timeout_seconds: 30
 
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
@@ -47,6 +51,9 @@ api:
 redis:
   url: redis://localhost:6379/0
   key_prefix: ddl
+  socket_timeout_seconds: 30
+  socket_connect_timeout_seconds: 5
+  health_check_interval_seconds: 30
   checkpoint_retention_seconds: 86400
   result_retention_seconds: 86400
   event_stream_max_events: 256
@@ -84,3 +91,4 @@ conversation:
   summary_max_chars: 4096
   extraction_batch_size: 10
   extraction_lease_seconds: 180
+  turn_lease_seconds: 600

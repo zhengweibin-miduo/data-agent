@@ -18,9 +18,14 @@ class ElasticsearchClient:
         # 步骤一：以共享实例作为幂等门禁，已有客户端直接复用。
         if cls._client is None:
             # 步骤二：只从统一配置创建异步客户端，并保留可选认证兼容字段。
+            # 显式声明请求超时与有界重试：记忆检索是读路径，没有 outbox 兜底，
+            # 因此在客户端层保留重试；缺少超时会让检索调用无限等待。
             cls._client = AsyncElasticsearch(
                 hosts=app_config.elasticsearch.url,
                 api_key=app_config.elasticsearch.api_key,
+                request_timeout=app_config.elasticsearch.request_timeout_seconds,
+                max_retries=app_config.elasticsearch.max_retries,
+                retry_on_timeout=True,
             )
 
         return cls._client

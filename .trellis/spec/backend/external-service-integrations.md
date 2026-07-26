@@ -1,5 +1,45 @@
 # External Service Integrations
 
+## Every Client Declares Its Own Timeouts
+
+No infrastructure client may rely on library defaults for timeouts. A client
+without a read timeout turns a half-open TCP connection or an unresponsive
+service into a call that never returns, and a business exception handler cannot
+catch a call that does not return: the API request hangs, or a worker cron slot
+is occupied forever. Timeout values come from `conf/app_config.yaml` so they are
+reviewable and environment-specific.
+
+Current injection points — verify parameter names against the locked dependency
+versions before changing them, because these libraries rename timeout arguments
+across major versions:
+
+| Client | Parameters |
+|---|---|
+| `Redis.from_url` | `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+| `AsyncElasticsearch` | `request_timeout`, `max_retries`, `retry_on_timeout` |
+| `AsyncQdrantClient` | `timeout` |
+| `AsyncInferenceClient` (TEI) | `timeout` |
+| `ChatOpenAI` | `timeout`, `max_retries` |
+
+### Redis read timeout is coupled to the SSE heartbeat
+
+The job event stream uses `xread(block=api.sse_heartbeat_seconds * 1000)`, so
+blocking for a full heartbeat interval is **normal idle behavior**, not a fault.
+`socket_timeout` is redis-py's per-command read timeout, so any value less than
+or equal to the heartbeat turns every idle heartbeat into a `TimeoutError` and
+breaks the stream. `AppSettings` enforces
+`redis.socket_timeout_seconds > api.sse_heartbeat_seconds`; keep that validator
+in place rather than relying on the defaults happening to be ordered correctly.
+
+### Where retries belong
+
+Put bounded retries in the client only for read paths that have no durable
+retry channel — Elasticsearch memory search is the current example. Write paths
+covered by an outbox (Qdrant, TEI) get a timeout and nothing else: the outbox
+already provides exponential back-off and a dead-letter bound, and stacking a
+second retry layer makes the worst-case duration of one cron cycle
+unpredictable.
+
 ## Scenario: Local Text Embeddings Inference
 
 ### 1. Scope / Trigger

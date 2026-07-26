@@ -25,6 +25,7 @@ from data_agent.conversation.mysql_tables import (
 )
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import stable_id
+from data_agent.settings import app_config
 
 
 def _message(row: RowMapping) -> MessageRecord:
@@ -202,6 +203,47 @@ class ConversationRepository:
             ),
         )
 
+    async def _turn_gate_claimable(
+        self,
+        conversation_id: int,
+        user_id: str,
+        turn_uid: str,
+    ) -> bool:
+        """判定当前轮次是否可以占用会话的活动轮次门禁。
+
+        调用方必须已在同一事务内锁定该会话行，因此这里只做无竞态的条件读取。
+
+        Args:
+            conversation_id: 已锁定会话的主键。
+            user_id: 会话归属用户。
+            turn_uid: 申请占用门禁的轮次标识。
+
+        Returns:
+            门禁空闲、由同一轮次持有或已超过租约时为 True。
+        """
+        # 步骤一：把"门禁空闲""同一轮次重入""占用已超租约"三种可占用情形
+        # 一次性下推到 SQL，租约到期时间由数据库端时间函数计算。
+        claimable = (
+            await self._session.execute(
+                select(agent_conversation.c.id).where(
+                    agent_conversation.c.id == conversation_id,
+                    agent_conversation.c.user_id == user_id,
+                    or_(
+                        agent_conversation.c.active_turn_uid.is_(None),
+                        agent_conversation.c.active_turn_uid == turn_uid,
+                        agent_conversation.c.updated_at
+                        <= func.timestampadd(
+                            text("SECOND"),
+                            -app_config.conversation.turn_lease_seconds,
+                            func.now(),
+                        ),
+                    ),
+                )
+            )
+        ).one_or_none()
+        # 步骤二：只把是否可占用返回给调用方，具体拒绝语义由调用方投影。
+        return claimable is not None
+
     async def start_turn(
         self,
         user_id: str,
@@ -223,8 +265,16 @@ class ConversationRepository:
                 "会话不存在",
                 http_status=404,
             )
-        active_turn = conversation["active_turn_uid"]
-        if active_turn is not None and str(active_turn) != turn_uid:
+        # 步骤二：门禁带租约。start_turn 写入 active_turn_uid 时同时推进
+        # updated_at，该列即轮次占用起点；调用方在 start 与 complete 之间崩溃并
+        # 丢失 turn_uid 时，超过租约的占用允许被新轮次抢占，否则该会话会永久
+        # 返回 conversation_busy。判定放在 SQL 内，与其它租约一样只用数据库时钟，
+        # 避免应用 naive 时间与数据库会话时区不一致导致租约提前或永不到期。
+        if not await self._turn_gate_claimable(
+            int(conversation["id"]),
+            user_id,
+            turn_uid,
+        ):
             raise DataAgentError(
                 "conversation_busy",
                 "conversation_turn",

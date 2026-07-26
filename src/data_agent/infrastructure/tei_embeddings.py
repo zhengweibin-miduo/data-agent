@@ -30,9 +30,14 @@ class TEIEmbeddingClient:
         if cls._client is None:
             # 步骤二：规范化自托管端点，并只注入支持 URL 的异步推理客户端。
             endpoint = f"{app_config.tei.url.rstrip('/')}/embed"
+            # AsyncInferenceClient 默认不设超时；缺少超时的向量化调用会让索引
+            # 调度的整个 cron 周期永久挂起，失败重试由记忆索引 outbox 负责。
             cls._client = TEIEmbeddings.model_construct(
                 client=None,
-                async_client=AsyncInferenceClient(model=endpoint),
+                async_client=AsyncInferenceClient(
+                    model=endpoint,
+                    timeout=app_config.tei.request_timeout_seconds,
+                ),
                 model=endpoint,
                 repo_id=endpoint,
                 task="feature-extraction",
