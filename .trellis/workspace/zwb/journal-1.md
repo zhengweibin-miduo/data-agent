@@ -907,15 +907,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 - None - task complete
 
 
-## Session 28: 修复配置文件路径解析与加载入口
+## Session 28: 移除审查问题修复回复模板
 
 **Date**: 2026-07-26
-**Task**: 修复配置文件路径解析与加载入口
-**Branch**: `fix/config-path-resolution-20260726`
+**Task**: 移除审查问题修复回复模板
+**Branch**: `docs/remove-review-fix-template-20260726`
 
 ### Summary
 
-新增 resolve_config_path 四级解析（显式实参/DATA_AGENT_CONFIG/工作目录/源码树），显式指定缺失时直接失败不回退，全部缺失时报错列出候选绝对路径；新增 get_settings 缓存与 reset_settings。修复 wheel 安装后 parents[2] 指向 Lib 目录导致入口无法启动的问题，已在临时 venv 实测通过。新增 5 个单元测试。
+删除未接入自动化流程的 GitHub 审查问题修复回复模板，同步收窄 code_review.md 与 AGENTS.md 的现行规范声明，并保留 P0/P1 inline 审查格式。
 ## Session 28: 统一 worker 的可重试错误判定
 
 **Date**: 2026-07-26
@@ -943,7 +943,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 
 | Hash | Message |
 |------|---------|
-| `97cd19d` | (see git log) |
+| `4423a3c` | (see git log) |
 | `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 
