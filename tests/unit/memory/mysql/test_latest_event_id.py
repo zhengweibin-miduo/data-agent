@@ -8,6 +8,7 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
 
+from data_agent.memory.domain.payloads import memory_text_hash
 from data_agent.memory.mysql.repository import MemoryRepository
 from tests.helpers.checks import check_condition, check_equal
 
@@ -23,6 +24,10 @@ class _FakeResult:
         """返回预置标量。"""
         return self._value
 
+    def all(self) -> list[str]:
+        """标量查询返回空结果，本用例只断言语句形态。"""
+        return []
+
 
 class _RecordingSession:
     """记录执行语句并返回预置最大事件编号。"""
@@ -36,6 +41,11 @@ class _RecordingSession:
         """记录语句并返回预置结果。"""
         self.statements.append(statement)
         return _FakeResult(self._value)
+
+    async def scalars(self, statement: ClauseElement) -> _FakeResult:
+        """记录标量查询语句并返回空结果视图。"""
+        self.statements.append(statement)
+        return _FakeResult(None)
 
 
 class _Detail:
@@ -154,4 +164,39 @@ async def test_record_access_preserves_content_update_time() -> None:
         "updated_at=now()" not in compact,
         actual=rendered,
         expected="SET 中不出现 updated_at=now()",
+    )
+
+
+async def test_find_exact_query_uses_indexed_hash_equality() -> None:
+    """精确基线检索必须比较定长哈希，而不是对 TEXT 列做全等比较。"""
+    session = _RecordingSession(0)
+    repository = MemoryRepository(cast(AsyncSession, session))
+
+    await repository.find_exact_query("dw", "订单事实表", None, user_id=None, limit=20)
+
+    rendered = _rendered(session.statements[0])
+    compact = rendered.replace(" ", "")
+    check_condition(
+        "改为比较文本哈希",
+        "memory_text_hash=" in compact,
+        actual=rendered,
+        expected="WHERE 使用 memory_text_hash 等值比较",
+    )
+    check_condition(
+        "不再对 TEXT 列做全等比较",
+        "agent_memory.memory_text=" not in compact,
+        actual=rendered,
+        expected="WHERE 不含 memory_text 全等比较",
+    )
+    check_condition(
+        "文本分支绑定的是查询文本的哈希",
+        memory_text_hash("订单事实表") in rendered,
+        actual=rendered,
+        expected="memory_text_hash 参数为查询文本的 SHA-256",
+    )
+    check_condition(
+        "保留可走索引的 memory_key 等值分支",
+        "memory_key=" in compact,
+        actual=rendered,
+        expected="WHERE 仍包含 memory_key 等值比较",
     )
