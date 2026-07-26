@@ -127,9 +127,27 @@ await MemorySearchService.search(
   acknowledged independently only after its idempotent upsert/delete succeeds.
   Failures retain the row with bounded exponential retry and a safe exception
   type.
+- `projection_version` describes derived-index structure, not authority. Whether
+  a derived index has converged to the current structure is already expressed per
+  signal by `pending_targets`, so the final authority re-check must **not** veto a
+  row on `projection_version`. Doing so also discards MySQL exact-baseline hits,
+  which blanks out search entirely between raising `memory.projection_version` and
+  the rebuild job stamping rows with the new value. Keep the row-level checks that
+  do concern authority: tenant, status, `content_version`, content hash, expiry,
+  and the object allowlist.
 - Full rebuild may recreate only the configured project index/collection after
   the caller supplies exact matching target names, then
   scans ACTIVE MySQL rows by primary-key cursor and enqueues both targets.
+- `setup()` must verify an existing index really carries `dynamic: strict` and the
+  configured analyzer, and fail loudly otherwise. `recreate()` deletes then
+  creates; a write landing in that window makes Elasticsearch auto-create the
+  index with a dynamic default mapping, and an existence-only check would silently
+  reuse it — losing strict mapping and Chinese analysis with no error and a quiet
+  drop in BM25 quality.
+- A writer that reports "the event id I just committed" must read the maximum
+  event id in the logical-fact scope, never the last item of an ascending
+  `history()` page. Once a fact accumulates more events than one page, the page's
+  last item is an old event and the reported id becomes permanently wrong.
 - Search runs ES BM25 and TEI/Qdrant concurrently with the configured timeout,
   excludes target signals that still have pending outbox work, and combines
   the remaining ranks with stable RRF.

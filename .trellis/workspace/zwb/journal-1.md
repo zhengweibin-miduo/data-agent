@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 新增 _is_retryable：DataAgentError.retryable 成为可重试性权威来源，第三方异常才回退内置瞬态清单；终态投影 retryable 改为反映底层瞬态性。在 spec 中确立'新增基础设施在边界包装为 DataAgentError(retryable=True)'的约定。新增 4 个单元测试。
+## Session 28: 修复记忆检索与投影的遗留正确性缺陷
+
+**Date**: 2026-07-26
+**Task**: 修复记忆检索与投影的遗留正确性缺陷
+**Branch**: `fix/memory-correctness-defects-20260726`
+
+### Summary
+
+event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在越过一页后永久错误）；移除权威回查阶段的 projection_version 行级否决，消除版本升级窗口内的检索全量黑障；setup 复核既有索引的 dynamic 与 memory_zh 分析器，防止 recreate 竞态下动态映射静默降级。新增 6 个单元测试。
 
 ### Main Changes
 
@@ -926,6 +935,7 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 | Hash | Message |
 |------|---------|
 | `fdc78dc` | (see git log) |
+| `a5cd384` | (see git log) |
 
 ### Testing
 

@@ -904,6 +904,54 @@ class MemoryRepository:
             ).all()
         ]
 
+    async def latest_event_id(
+        self,
+        uid: str,
+        *,
+        user_id: str | None = None,
+    ) -> int:
+        """读取逻辑事实作用域内最新一条历史事件的编号。
+
+        写入方需要回报"刚提交的事件编号"。按 `history` 分页回读再取末项只在事件
+        总数不超过一页时才正确：历史按事件 id 升序分页，越过一页后末项是旧事件。
+        这里直接取作用域内的最大事件 id，与事件总量无关。
+
+        Args:
+            uid: 本次写入的权威记忆 UID。
+            user_id: 租户边界；DDL 记忆为 None。
+
+        Returns:
+            最新事件编号；作用域内没有可见事件时为 0。
+        """
+        # 步骤一：先解析当前租户可见的权威记忆，确定逻辑事实作用域。
+        memory = await self.get_by_uid(uid, user_id=user_id)
+        if memory is None:
+            return 0
+        # 步骤二：在同一作用域内取最大事件 id，避免依赖分页窗口。
+        latest = (
+            await self._session.execute(
+                select(func.max(agent_memory_event.c.id))
+                .select_from(
+                    agent_memory_event.join(
+                        agent_memory,
+                        agent_memory.c.id == agent_memory_event.c.memory_id,
+                    )
+                )
+                .where(
+                    agent_memory.c.source == memory.detail.source,
+                    (
+                        agent_memory.c.user_id.is_(None)
+                        if user_id is None
+                        else agent_memory.c.user_id == user_id
+                    ),
+                    agent_memory.c.category == memory.detail.category,
+                    agent_memory.c.memory_key == memory.detail.memory_key,
+                )
+            )
+        ).scalar_one_or_none()
+        # 步骤三：作用域内无事件时返回 0，与既有响应契约保持一致。
+        return int(latest) if latest is not None else 0
+
     async def history(
         self,
         uid: str,

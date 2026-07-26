@@ -464,14 +464,13 @@ class MemoryService:
                     "修正内容与已删除或未生效的历史事实冲突",
                     http_status=409,
                 )
-            # 步骤四：在同一事务中回读事件历史，供响应返回已提交的事件编号。
-            history = await repository.history(
+            # 步骤四：在同一事务中回读本次提交的事件编号。取作用域内最大事件 id
+            # 而不是分页回读末项：历史按 id 升序分页，事件总数越过一页后末项是
+            # 旧事件，会让响应永久返回错误编号。
+            event_id = await repository.latest_event_id(
                 candidate.uid,
                 user_id=user_id,
-                offset=0,
-                limit=100,
             )
-        event_id = history.items[-1].id if history and history.items else 0
         return MemoryUpdateResponse(
             memory_uid=candidate.uid,
             event_id=event_id,
