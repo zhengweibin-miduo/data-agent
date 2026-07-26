@@ -109,11 +109,26 @@ retries and never hide or roll back already committed messages.
 
 ## Worker Retry and Terminal Errors
 
-The worker retries only the explicit transient exception set: OpenAI
+`DataAgentError.retryable` is the authoritative source of retryability. The
+worker reads it first: an error that declares itself retryable is retried, and one
+that declares itself permanent is not, even when its exception type happens to
+appear in the built-in transient set. Only third-party exceptions, which cannot
+describe themselves, fall back to that set: OpenAI
 connection/timeout/rate-limit/5xx errors, SQLAlchemy `OperationalError`, Redis
 connection failures, and ordinary connection/timeouts. It transitions
 `running -> pending` before raising arq `Retry` with bounded exponential
 backoff and jitter.
+
+When adding infrastructure, wrap its transient failures as
+`DataAgentError(retryable=True)` at that client's boundary instead of extending
+the built-in set. Otherwise the worker orchestration layer has to keep tracking
+every library's exception taxonomy, and swapping a dependency means editing the
+runner.
+
+`JobError.retryable` describes whether the underlying error is transient — the
+meaning its field description states — not whether another attempt is scheduled.
+A transient failure that exhausted its attempt budget therefore still reports
+`retryable: true`, which is what tells a caller resubmission may succeed.
 
 Business validation/rejection is graph state, not an infrastructure retry.
 After retry exhaustion or a non-retryable exception, the worker writes a safe
