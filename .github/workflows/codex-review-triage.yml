@@ -22,13 +22,20 @@ jobs:
     #
     # draft 判断对两种事件取不同字段；字段缺失时为 null（!= true 成立），即失败时放行而非静默跳过。
     #
-    # 本仓库为公开仓库：任何人都能 fork 并开 PR，审查 bot 会自动评审这些 PR。本 job 会
-    # 检出 PR 代码并携带 secrets 运行，因此必须排除外部来源，否则 fork 中的文件内容可
-    # 构成 prompt injection 面。pull_request_review 用 head.repo 判断；issue_comment 的
-    # 事件载荷没有 head.repo，改以 PR 作者必须是仓库所有者作为等价约束。
+    # 本仓库为公开仓库：任何人都能 fork 并开 PR（GitHub 不提供关闭该能力的选项），
+    # 审查 bot 会自动评审这些 PR。本 job 会检出 PR 代码并携带 secrets 运行，因此必须
+    # 限定 PR 来源，否则外部 PR 的文件内容即构成 prompt injection 面。
+    #
+    # 两道约束：
+    # 1. PR 作者必须在白名单内 —— 默认为仓库所有者、Codex、Claude 三方；需要放行其他
+    #    人时设仓库变量 PR_AUTHORS 覆盖（逗号分隔，覆盖时须把默认三项一并写入）。
+    # 2. pull_request_review 另行校验 head.repo，确保分支来自本仓库而非 fork。
+    #    issue_comment 的事件载荷没有 head.repo，仅靠第 1 条约束。
     if: >
       github.event.pull_request.draft != true &&
       github.event.issue.draft != true &&
+      contains(format(',{0},', vars.PR_AUTHORS || 'zhengweibin-miduo,chatgpt-codex-connector[bot],claude[bot]'),
+               format(',{0},', github.event.pull_request.user.login || github.event.issue.user.login)) &&
       ((github.event_name == 'pull_request_review' &&
         contains(format(',{0},', vars.REVIEW_BOTS || 'chatgpt-codex-connector[bot]'),
                  format(',{0},', github.event.review.user.login)) &&
@@ -36,8 +43,7 @@ jobs:
        (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
         contains(format(',{0},', vars.REVIEW_BOTS || 'chatgpt-codex-connector[bot]'),
-                 format(',{0},', github.event.comment.user.login)) &&
-        github.event.issue.author_association == 'OWNER'))
+                 format(',{0},', github.event.comment.user.login))))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
