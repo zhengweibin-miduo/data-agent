@@ -35,6 +35,8 @@ class RedisJobStateStore:
         now: datetime,
     ) -> bool:
         """原子写入来源租约、任务 Hash 和 dispatch outbox。"""
+        # 步骤一：把来源租约、权威 Hash 与 dispatch outbox 交给同一 Lua 脚本提交，
+        # 任一键无法建立时都不留下部分受理状态。
         accepted = await RedisBaseStore.awaitable(
             self._redis.eval(
                 JobScripts.SUBMIT,
@@ -51,13 +53,16 @@ class RedisJobStateStore:
                 str(now.timestamp()),
             )
         )
+        # 步骤二：把 Lua 数值结果收敛为是否成功建立完整受理边界。
         return int(accepted) == 1
 
     async def get(self, job_id: str) -> JobRecord:
         """读取公开安全任务投影。"""
+        # 步骤一：读取任务权威 Hash，保留 Redis 对任务保留期的真实判断。
         values = await RedisBaseStore.awaitable(
             self._redis.hgetall(self._keys.job(job_id))
         )
+        # 步骤二：空 Hash 统一投影为安全的任务不存在错误。
         if not values:
             raise DataAgentError(
                 "job_not_found",
@@ -65,16 +70,19 @@ class RedisJobStateStore:
                 "任务不存在或已过保留期",
                 http_status=404,
             )
+        # 步骤三：通过集中 codec 丢弃原始 DDL 和内部回答后返回公开契约。
         return JobCodec.project(cast(Mapping[str, str], values))
 
     async def execution_input(self, job_id: str) -> DDLJobRequest:
         """读取仅供 worker 使用的初始请求。"""
+        # 步骤一：只读取 worker 首次执行所需的来源、方言与原始 DDL 字段。
         values = await RedisBaseStore.awaitable(
             self._redis.hmget(
                 self._keys.job(job_id),
                 ["source", "dialect", "ddl"],
             )
         )
+        # 步骤二：缺少任一内部字段都视为不可执行任务，不构造残缺输入。
         if not all(values):
             raise DataAgentError(
                 "job_not_found",
@@ -82,6 +90,7 @@ class RedisJobStateStore:
                 "任务执行输入不存在",
                 http_status=404,
             )
+        # 步骤三：恢复类型化请求，仅在内部 worker 边界暴露原始 DDL。
         return DDLJobRequest(
             source=values[0],
             dialect=values[1],
@@ -104,7 +113,9 @@ class RedisJobStateStore:
         fields: Mapping[str, str] | None = None,
     ) -> bool:
         """执行修订感知的原子状态转换。"""
+        # 步骤一：先读取权威记录以确定来源租约键，避免调用方传入第二份来源。
         record = await self.get(job_id)
+        # 步骤二：统一计算时间、等待成员和扩展字段，形成稳定 Lua 参数协议。
         now = datetime.now(UTC)
         values = dict(fields or {})
         expires_epoch = float(values.get("expires_at_epoch", "0"))
@@ -121,6 +132,8 @@ class RedisJobStateStore:
         ]
         arguments.extend(item for pair in values.items() for item in pair)
         arguments.append(str(app_config.redis.result_retention_seconds))
+        # 步骤三：由 Lua 以状态和 revision 做 CAS，并在需要时原子维护等待集合、
+        # 来源租约、结果 TTL 与 checkpoint cleanup outbox。
         changed = await RedisBaseStore.awaitable(
             self._redis.eval(
                 JobScripts.TRANSITION,
@@ -132,6 +145,7 @@ class RedisJobStateStore:
                 *arguments,
             )
         )
+        # 步骤四：只把原子转换是否胜出返回给应用门面。
         return int(changed) == 1
 
     async def submit_answers(
@@ -150,8 +164,11 @@ class RedisJobStateStore:
             Lua 协议返回码：首次受理为 1，幂等重复为 2，过期为 -1，
             状态或修订不匹配为 0。
         """
+        # 步骤一：预先派生下一修订和统一时间坐标，确保所有 Redis 键使用同一轮次。
         next_revision = revision + 1
         now = datetime.now(UTC)
+        # 步骤二：由 Lua 一次性校验状态、修订、问题集、截止时间及回答摘要，
+        # 并原子更新任务、等待集合、来源租约、dispatch 与 cleanup outbox。
         return int(
             await RedisBaseStore.awaitable(
                 self._redis.eval(

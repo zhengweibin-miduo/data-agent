@@ -64,6 +64,7 @@ def _json_field_value(value: object) -> object | None:
 
 def _json_formatter(record: Any) -> str:
     """把 Loguru 记录投影为单行扁平 JSON。"""
+    # 步骤一：先构造固定公共字段，确保每条记录都具备可检索的基础上下文。
     extra = record["extra"]
     payload: dict[str, object] = {
         "timestamp": record["time"]
@@ -85,10 +86,12 @@ def _json_formatter(record: Any) -> str:
         "line_number": record["line"],
         "process_id": record["process"].id,
     }
+    # 步骤二：只接纳白名单应用字段，并把值收敛为严格 JSON 可编码类型。
     for key in _APPLICATION_FIELDS:
         if key in extra:
             payload[key] = _json_field_value(extra[key])
 
+    # 步骤三：异常记录补充错误类型和有界堆栈，并在堆栈尾部省略异常消息。
     exception = record["exception"]
     if exception is not None:
         payload.setdefault("error_type", exception.type.__name__)
@@ -101,6 +104,7 @@ def _json_formatter(record: Any) -> str:
         )
         payload["stack_trace"] = stack_trace[:_MAX_STACK_TRACE_CHARACTERS]
 
+    # 步骤四：把扁平载荷序列化到 Loguru extra，由统一模板输出为单行 JSON。
     extra["_serialized_record"] = json.dumps(
         payload,
         ensure_ascii=False,
@@ -117,6 +121,7 @@ def _sink_format(output_format: str) -> str | Any:
 
 def setup_logging(config: LoggingSettings = app_config.logging) -> None:
     """根据应用配置重建 Loguru sinks。"""
+    # 步骤一：移除既有 sinks，并为所有后续记录设置稳定的共享上下文字段。
     logger.remove()
     logger.configure(
         extra={
@@ -128,6 +133,7 @@ def setup_logging(config: LoggingSettings = app_config.logging) -> None:
         }
     )
 
+    # 步骤二：按控制台开关和格式装配 stderr sink。
     if config.console.enable:
         logger.add(
             sys.stderr,
@@ -138,6 +144,7 @@ def setup_logging(config: LoggingSettings = app_config.logging) -> None:
             enqueue=True,
         )
 
+    # 步骤三：按文件开关先准备目录，再装配具备轮转与保留策略的文件 sink。
     if config.file.enable:
         config.file.path.mkdir(parents=True, exist_ok=True)
         logger.add(

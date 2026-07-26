@@ -1,0 +1,8 @@
+{"file": "code_review.md", "reason": "项目 AI 代码审查规范"}
+{"file": ".trellis/spec/backend/index.md", "reason": "复核后端范围与模块职责"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核中文 Docstring 与注释质量"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "复核会话事务与上下文注释准确性"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核持久化事务与清理范围注释"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核 DDL 状态、重试和清理注释"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "复核 Redis、checkpoint、SSE 与生命周期注释"}
+{"file": ".trellis/tasks/07-26-add-core-flow-comments/research/core-flow-comment-map.md", "reason": "复核六类流程覆盖与排除范围"}

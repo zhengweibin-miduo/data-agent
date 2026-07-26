@@ -25,6 +25,8 @@ class JobEventStore:
         data: JobEventData,
     ) -> str:
         """追加有界公开事件并刷新与任务结果一致的 TTL。"""
+        # 步骤一：在事务 pipeline 中同时追加近似有界通知并刷新事件流保留期，
+        # 使通知生命周期与任务公开结果保持一致。
         key = self._keys.events(job_id)
         pipeline = self._redis.pipeline(transaction=True)
         pipeline.xadd(
@@ -40,11 +42,13 @@ class JobEventStore:
             key,
             app_config.redis.result_retention_seconds,
         )
+        # 步骤二：提交 pipeline 后返回 Redis 分配的游标，供 SSE 精确续读。
         results = await pipeline.execute()
         return str(results[0])
 
     async def tail_id(self, job_id: str) -> str:
         """读取当前事件流尾 ID；尚无事件时返回 Redis 起始游标。"""
+        # 步骤一：只反向读取最新一条通知，避免为建立连接游标扫描完整 Stream。
         entries = cast(
             list[tuple[str, dict[str, str]]],
             await RedisBaseStore.awaitable(
@@ -54,6 +58,7 @@ class JobEventStore:
                 )
             ),
         )
+        # 步骤二：已有通知返回其 ID，否则返回 Redis 起始游标建立空流基线。
         return entries[0][0] if entries else "0-0"
 
     async def read_after(
@@ -65,6 +70,7 @@ class JobEventStore:
         count: int = 100,
     ) -> list[JobEvent]:
         """在有界阻塞时间内读取指定游标后的公开事件。"""
+        # 步骤一：从给定游标执行有界阻塞读取，让 SSE 循环可定期检查断连和权威状态。
         streams = cast(
             list[tuple[str, list[tuple[str, dict[str, str]]]]],
             await RedisBaseStore.awaitable(
@@ -75,8 +81,10 @@ class JobEventStore:
                 )
             ),
         )
+        # 步骤二：读取超时直接返回空批次，由上层决定投影修复或发送心跳。
         if not streams:
             return []
+        # 步骤三：通过类型化契约解码公开通知，不暴露 Redis 原始字段。
         return [
             JobEvent(
                 event_id=event_id,

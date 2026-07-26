@@ -50,13 +50,14 @@ def _choose_memory(
     memories: list[StoredMemory],
 ) -> StoredMemory | None:
     """应用用户确认优先级并拒绝同作用域活动冲突。"""
-    # 用户确认只提高可信优先级；同作用域的不同确认内容仍必须显式报冲突。
+    # 步骤一：用户确认只提高可信优先级；没有确认内容时才回退到其他活动记忆。
     preferred = [
         memory for memory in memories if memory.content.trust == "user_confirmed"
     ]
     choices = preferred or memories
     if not choices:
         return None
+    # 步骤二：同作用域存在多条不同的用户确认内容时显式报冲突，禁止任选其一。
     canonical = {
         memory.content.model_dump_json(exclude_none=True) for memory in choices
     }
@@ -78,7 +79,7 @@ class MemoryContextLoader:
         schema: PhysicalSchema,
     ) -> LoadedMemoryContext:
         """批量读取语义记忆；完整有效时直接复用。"""
-        # 指纹与 content hash 命中仅产生候选，当前 DDL AST 校验始终拥有最终裁决权。
+        # 步骤一：为当前物理对象计算作用域指纹，限定精确兼容记忆的查询范围。
         fingerprints = {
             object_id: scope_fingerprint(schema, object_id)
             for object_id in (
@@ -86,6 +87,7 @@ class MemoryContextLoader:
                 *[column.id for table in schema.tables for column in table.columns],
             )
         }
+        # 步骤二：批量读取语义与指标候选，并用权威内容哈希剔除损坏或陈旧载荷。
         async with MySQLDatabase.session() as session:
             repository = MemoryRepository(session)
             grouped = await repository.find_compatible_scopes(
@@ -113,6 +115,7 @@ class MemoryContextLoader:
                 for memory in metric_memories
                 if memory_content_hash(memory.content) == memory.detail.content_hash
             ]
+        # 步骤三：以当前表列文本做混合检索，只用权威回查后的命中补齐精确查询空槽。
         allowed_object_ids = set(fingerprints)
         query = "；".join(
             value
@@ -143,6 +146,7 @@ class MemoryContextLoader:
                     detail=hit.memory,
                 )
             ]
+        # 步骤四：按作用域选择唯一可信内容并投影语义 capsule，冲突不允许静默覆盖。
         capsule: list[MemoryContent] = []
         tables: list[SemanticTable] = []
         columns: list[SemanticColumn] = []
@@ -160,6 +164,8 @@ class MemoryContextLoader:
             else:
                 continue
             capsule.append(content)
+        # 步骤五：指纹与 content hash 命中仅产生候选，当前 DDL AST 校验始终
+        # 拥有最终裁决权。
         metadata = SemanticMetadata(tables=tables, columns=columns)
         semantic_issues = validate_metadata(schema, metadata)
         if any(issue.code != "missing_object" for issue in semantic_issues):
@@ -167,6 +173,7 @@ class MemoryContextLoader:
         if semantic_issues:
             return LoadedMemoryContext(capsule, None, [], [], [])
 
+        # 步骤六：仅在语义完整有效时合并指标证据，并重新执行确定性指标校验。
         metric_contents = [
             memory.content
             for memory in metric_memories
@@ -199,6 +206,7 @@ class MemoryContextLoader:
             questions = []
             answers = []
             finalized = []
+        # 步骤七：只返回本轮校验通过的指标记忆，供后续候选构建保持来源关系。
         reused_metrics = {metric.id for metric in finalized}
         reused_metric_content: list[MemoryContent] = []
         for memory in metric_memories:

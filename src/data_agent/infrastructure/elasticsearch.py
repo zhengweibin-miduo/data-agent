@@ -15,7 +15,9 @@ class ElasticsearchClient:
     @classmethod
     def initialize(cls) -> AsyncElasticsearch:
         """初始化并返回 Elasticsearch 客户端，重复调用时复用现有实例。"""
+        # 步骤一：以共享实例作为幂等门禁，已有客户端直接复用。
         if cls._client is None:
+            # 步骤二：只从统一配置创建异步客户端，并保留可选认证兼容字段。
             cls._client = AsyncElasticsearch(
                 hosts=app_config.elasticsearch.url,
                 api_key=app_config.elasticsearch.api_key,
@@ -37,8 +39,10 @@ class ElasticsearchClient:
     @classmethod
     async def close(cls) -> None:
         """关闭 Elasticsearch 客户端并清除当前实例。"""
+        # 步骤一：未初始化或已关闭时直接返回，保持关闭操作幂等。
         if cls._client is None:
             return
 
+        # 步骤二：关闭当前客户端后清除共享引用，使后续初始化创建新实例。
         await cls._client.close()
         cls._client = None

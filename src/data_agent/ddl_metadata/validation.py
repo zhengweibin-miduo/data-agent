@@ -22,11 +22,13 @@ def _set_issues(
     path: str,
 ) -> list[ValidationIssue]:
     """生成对象集合或重复项问题。"""
+    # 步骤一：先计算重复、越界和缺失对象，统一形成集合差异。
     issues: list[ValidationIssue] = []
     counts = Counter(actual)
     duplicates = sorted(value for value, count in counts.items() if count > 1)
     unknown = sorted(set(actual) - expected)
     missing = sorted(expected - set(actual))
+    # 步骤二：再把三类差异分别投影为稳定校验问题，供上层决定修复或拒绝。
     if duplicates:
         issues.append(
             ValidationIssue(
@@ -60,6 +62,7 @@ def validate_metadata(
     confidence_threshold: float = app_config.llm.semantic_confidence_threshold,
 ) -> list[ValidationIssue]:
     """校验语义对象集合、结构角色、置信度和证据引用。"""
+    # 步骤一：先以物理 Schema 为权威建立表列全集，并校验模型对象是否完整且唯一。
     expected_tables = {table.id for table in schema.tables}
     columns = {column.id: column for table in schema.tables for column in table.columns}
     expected_columns = set(columns)
@@ -75,6 +78,7 @@ def validate_metadata(
             "columns",
         )
     )
+    # 步骤二：逐表校验置信度与证据引用，低置信度属于不可自动修复问题。
     known_evidence = expected_tables | expected_columns
     for table in metadata.tables:
         if table.confidence < confidence_threshold:
@@ -94,6 +98,7 @@ def validate_metadata(
                     message="表语义证据必须引用当前物理对象 ID",
                 )
             )
+    # 步骤三：逐列对照解析器确定的结构角色，再校验置信度和证据边界。
     for column in metadata.columns:
         physical = columns.get(column.column_id)
         if physical is not None:
@@ -143,10 +148,12 @@ def validate_metric_questions(
     questions: list[MetricQuestion],
 ) -> list[ValidationIssue]:
     """校验指标问题只引用当前事实表和列。"""
+    # 步骤一：从已验证语义和物理 Schema 建立允许引用的事实表与列集合。
     fact_tables = {
         table.table_id for table in metadata.tables if table.role == TableRole.FACT
     }
     columns = {column.id for table in schema.tables for column in table.columns}
+    # 步骤二：先拒绝重复问题 ID，再逐题校验事实表和列引用。
     issues = _set_issues(
         [question.question_id for question in questions],
         {question.question_id for question in questions},
@@ -182,6 +189,7 @@ def finalize_and_validate_metrics(
     metrics: list[MetricMetadata],
 ) -> tuple[list[MetricMetadata], list[ValidationIssue]]:
     """分配稳定指标 ID 并验证引用、唯一性和回答依据。"""
+    # 步骤一：建立当前表、列、问题与有效回答边界，并为模型指标重算稳定 ID。
     table_roles = {table.table_id: table.role for table in metadata.tables}
     column_ids = {column.id for table in schema.tables for column in table.columns}
     question_ids = {question.question_id for question in questions}
@@ -194,6 +202,7 @@ def finalize_and_validate_metrics(
         )
         for metric in metrics
     ]
+    # 步骤二：在稳定 ID 投影后检查同一事实表内的规范化指标名称是否重复。
     issues: list[ValidationIssue] = []
     names = [
         f"{metric.fact_table_id}\0{metric.name.strip().casefold()}"
@@ -208,6 +217,7 @@ def finalize_and_validate_metrics(
                 message="同一事实表存在重复指标名称",
             )
         )
+    # 步骤三：逐项验证事实表归属、列引用及已回答问题证据，避免无依据指标落库。
     for metric in finalized:
         path = f"metrics.{metric.id}"
         if table_roles.get(metric.fact_table_id) != TableRole.FACT:

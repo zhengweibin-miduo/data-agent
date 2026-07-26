@@ -38,8 +38,10 @@ class SourceLeaseStore:
     @asynccontextmanager
     async def mutation(self, source: str) -> AsyncIterator[None]:
         """短暂序列化浏览器记忆变更与活动图任务。"""
+        # 步骤一：为本次浏览器变更生成唯一令牌，并映射到与图任务共享的来源键。
         token = f"mutation:{uuid4()}"
         key = self._keys.source(source)
+        # 步骤二：以 NX 和短 TTL 获取临时租约，避免与活动 DDL 图并发修改同一来源。
         acquired = await RedisBaseStore.awaitable(
             self._redis.set(
                 key,
@@ -48,6 +50,7 @@ class SourceLeaseStore:
                 nx=True,
             )
         )
+        # 步骤三：租约未取得时返回稳定冲突，禁止绕过来源级互斥继续写入。
         if not acquired:
             raise DataAgentError(
                 "source_busy",
@@ -55,6 +58,8 @@ class SourceLeaseStore:
                 "该逻辑数据源有活动任务",
                 http_status=409,
             )
+        # 步骤四：向调用方开放受保护区间，并在任何退出路径按令牌比较后释放，
+        # 避免误删已经被其他所有者重新取得的租约。
         try:
             yield
         finally:

@@ -26,7 +26,9 @@ class TEIEmbeddingClient:
     @classmethod
     def initialize(cls) -> TEIEmbeddings:
         """初始化并返回客户端，重复调用时复用现有实例。"""
+        # 步骤一：以共享实例作为幂等门禁，避免重复创建 TEI HTTP 客户端。
         if cls._client is None:
+            # 步骤二：规范化自托管端点，并只注入支持 URL 的异步推理客户端。
             endpoint = f"{app_config.tei.url.rstrip('/')}/embed"
             cls._client = TEIEmbeddings.model_construct(
                 client=None,
@@ -54,8 +56,10 @@ class TEIEmbeddingClient:
     @classmethod
     async def close(cls) -> None:
         """关闭客户端并清除当前实例。"""
+        # 步骤一：未初始化或已关闭时直接返回，保持关闭操作幂等。
         if cls._client is None:
             return
 
+        # 步骤二：关闭底层异步推理客户端后清除共享引用，允许后续重新初始化。
         await cls._client.async_client.close()
         cls._client = None

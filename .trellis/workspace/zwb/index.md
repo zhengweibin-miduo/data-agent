@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
+- **Total Sessions**: 26
 - **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~840 | Active |
+| `journal-1.md` | ~873 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-07-26 | 统一核心流程与 CRUD 中文步骤注释 | `3b57a54` | `chore/add-core-flow-comments-20260726` |
 | 25 | 2026-07-26 | 安装项目级架构与前端设计技能 | `3eabf2c` | `chore/install-architecture-skills-20260726` |
 | 24 | 2026-07-26 | 审查并完善项目核心流程注释 | `a84c445`, `ef06fb9` | `chore/review-comments-20260725` |
 | 23 | 2026-07-23 | 重建 Mem0 风格长期记忆生命周期 | `fd945b2` | `refactor/mem0-memory-lifecycle-20260723` |

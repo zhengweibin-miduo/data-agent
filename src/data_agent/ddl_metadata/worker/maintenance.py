@@ -23,20 +23,23 @@ async def dispatch_pending(ctx: dict[Any, Any]) -> None:
 
 async def expire_waiting(ctx: dict[Any, Any]) -> None:
     """周期性拒绝过期等待并删除对应检查点。"""
+    # 步骤一：先让权威任务状态原子进入过期终态并写入 checkpoint 清理 outbox。
     jobs = cast(DDLJobStore, ctx["jobs"])
     await jobs.expire_waiting()
+    # 步骤二：再尝试消费清理 outbox；失败会保留请求供后续周期重放。
     await cleanup_checkpoints(ctx)
 
 
 async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
     """重试删除所有已进入终态的 LangGraph 线程。"""
+    # 步骤一：读取终态转换写入的清理 outbox；没有待处理项时立即结束。
     jobs = cast(DDLJobStore, ctx["jobs"])
     job_ids = await jobs.pending_checkpoint_cleanup()
     if not job_ids:
         return
-    checkpointer = CheckpointStore.get_client()
-    # 终态转换只写清理 outbox；线程删除成功后才确认，确保 worker 崩溃或 Redis
+    # 步骤二：逐项删除 checkpoint；失败不确认，确保 worker 崩溃或 Redis
     # 短暂失败时维护任务仍能重放，而不会静默遗留或提前丢失 checkpoint。
+    checkpointer = CheckpointStore.get_client()
     for job_id in job_ids:
         try:
             await checkpointer.adelete_thread(job_id)
@@ -51,6 +54,7 @@ async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
                 retryable=True,
             ).warning("终态检查点清理延后")
             continue
+        # 步骤三：只有线程删除成功后才确认 outbox，避免提前丢失唯一清理请求。
         await jobs.acknowledge_checkpoint_cleanup(job_id)
 
 

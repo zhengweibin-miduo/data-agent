@@ -54,7 +54,8 @@ class MemorySearchService:
             limit or app_config.memory.search_limit,
             app_config.memory.search_limit,
         )
-        # 派生索引只贡献候选和排名信号，MySQL exact 与后续回查始终保留权威性。
+        # 步骤一：优先采用调用方给出的精确 UID；未提供时再查询 MySQL，
+        # 使两个派生索引都失败时仍保留可验证的精确基线。
         rankings: list[tuple[str, Sequence[str]]] = []
         degraded: list[MemoryIndexTarget] = []
         if exact_uids:
@@ -69,6 +70,8 @@ class MemorySearchService:
                     limit=bounded_limit,
                 )
 
+        # 步骤二：BM25 与向量路径并发且各自限时，
+        # 单个异常只移除对应信号，不影响另一索引和基线。
         async def es_search() -> list[str]:
             index = MemoryElasticsearchIndex(ElasticsearchClient.get_client())
             return await index.search(
@@ -115,6 +118,8 @@ class MemorySearchService:
             else:
                 rankings.append((signal, result))
 
+        # 步骤三：索引只提供候选 UID；
+        # 统一回到同租户 MySQL 权威行，并读取各目标尚未收敛的 outbox 状态。
         candidate_uids = {
             *baseline_uids,
             *(uid for _signal, uids in rankings for uid in uids),
@@ -138,7 +143,8 @@ class MemorySearchService:
             "elasticsearch": MemoryIndexTarget.ELASTICSEARCH,
             "qdrant": MemoryIndexTarget.QDRANT,
         }
-        # 待投影目标可能仍指向旧版本，必须先剔除其信号再执行 RRF 融合。
+        # 步骤四：某目标仍有待处理的 desired state 时，其命中可能是旧投影，
+        # 只剔除该目标的排名信号。
         confirmed_rankings = [
             (
                 signal,
@@ -150,12 +156,15 @@ class MemorySearchService:
             )
             for signal, uids in rankings
         ]
+        # 步骤五：将精确基线与已确认信号做稳定 RRF；
+        # 融合分数只决定候选顺序，不赋予内容权威性。
         fused = reciprocal_rank_fusion(
             [("mysql_exact", baseline_uids), *confirmed_rankings],
             constant=app_config.memory.rrf_constant,
             exact_uids=set(baseline_uids),
         )
-        # RRF 分数不能绕过版本、hash、过期时间，以及调用方提供的对象白名单。
+        # 步骤六：返回前连续校验租户、状态、版本、内容哈希、有效期
+        # 和对象白名单，拒绝所有陈旧命中。
         items: list[MemorySearchHit] = []
         for uid, score, signals in fused:
             detail = by_uid.get(uid)
@@ -195,7 +204,7 @@ class MemorySearchService:
             )
         items.sort(key=lambda item: (-item.score, item.memory.uid))
         items = items[:bounded_limit]
-        # 访问热度不影响本次结果正确性，统计失败不得撤销已完成的权威过滤。
+        # 步骤七：以尽力而为方式记录访问热度，统计失败不得撤销权威过滤结果。
         if items:
             try:
                 async with MySQLDatabase.session() as session:

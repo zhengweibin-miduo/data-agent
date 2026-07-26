@@ -75,7 +75,12 @@ class DDLJobStore:
         return self._keys.source(source)
 
     async def submit(self, request: DDLJobRequest) -> JobRecord:
-        """原子写入任务和 outbox 后才报告受理。"""
+        """原子建立任务、来源租约和 dispatch outbox 后才报告受理。
+
+        权威 Hash 与可恢复调度请求先提交；公开事件属于尽力通知，即使发布
+        失败也由后续读取权威投影修复，而不会撤销已经成立的受理承诺。
+        """
+        # 步骤一：先按 UTF-8 字节上限拒绝过大 DDL，避免为不可受理请求创建状态。
         max_ddl_bytes = app_config.api.max_ddl_bytes
         if (
             len(request.ddl) > max_ddl_bytes
@@ -87,9 +92,9 @@ class DDLJobStore:
                 "DDL 超过配置的字节限制",
                 http_status=422,
             )
+        # 步骤二：生成不透明任务标识，并由原子脚本同时建立权威 Hash、来源租约
+        # 与 dispatch outbox；脚本还保证同一逻辑来源只能有一个活动任务。
         job_id = str(uuid4())
-        # 任务、来源租约和 dispatch outbox 共同构成受理边界；后续公开事件只是
-        # 可由权威 Hash 修复的通知，发布失败不能撤销已经持久化的受理结果。
         accepted = await self._state.submit(job_id, request, datetime.now(UTC))
         if not accepted:
             raise DataAgentError(
@@ -98,12 +103,15 @@ class DDLJobStore:
                 "该逻辑数据源已有活动任务",
                 http_status=409,
             )
+        # 步骤三：从权威 Hash 回读公开投影，确保返回值不携带原始 DDL 或内部字段。
         record = await self.get(job_id)
+        # 步骤四：权威状态成立后再尽力发布排队通知，发布失败不撤销受理结果。
         await self._publish_safely(
             record,
             JobEventType.PROGRESS,
             JobEventStage.QUEUED,
         )
+        # 步骤五：返回已持久化的公开记录，由 API 层据此报告 HTTP 202。
         return record
 
     async def get(self, job_id: str) -> JobRecord:
@@ -143,11 +151,13 @@ class DDLJobStore:
         stage: JobEventStage,
     ) -> None:
         """发布不包含节点输入、输出或错误的稳定业务进度。"""
+        # 步骤一：先读取权威公开投影；读取失败只记录安全告警，不影响已完成业务。
         try:
             record = await self.get(job_id)
         except RedisError as error:
             _log_event_publish_failure(job_id, stage, error)
             return
+        # 步骤二：使用权威投影构造通知，避免把 worker 内部载荷写入公开 Stream。
         await self._publish_safely(record, JobEventType.PROGRESS, stage)
 
     async def execution_input(self, job_id: str) -> DDLJobRequest:
@@ -168,10 +178,11 @@ class DDLJobStore:
         fields: Mapping[str, str] | None = None,
     ) -> bool:
         """按集中状态表执行修订感知的原子转换。"""
-        # 状态表限制合法边，revision 则充当并发 worker 的 CAS 门闩；只有原子
-        # 转换胜出的调用方才重新读取并发布当前投影，旧执行不能覆盖权威状态。
+        # 步骤一：先用集中状态表拒绝非法边，避免不同调用方各自解释生命周期。
         if target not in _ALLOWED_TRANSITIONS[expected]:
             raise ValueError(f"非法任务状态转换: {expected}->{target}")
+        # 步骤二：由 Redis 脚本以 revision 作为 CAS 门闩执行转换，旧 worker
+        # 因而不能覆盖更新或终态的权威记录。
         changed = await self._state.transition(
             job_id,
             revision,
@@ -179,17 +190,21 @@ class DDLJobStore:
             target,
             fields=fields,
         )
+        # 步骤三：只有原子转换胜出的调用方才回读并尽力发布新的公开投影。
         if changed and target in _STATUS_EVENT_TYPES:
             await self._publish_current_safely(
                 job_id,
                 _STATUS_EVENT_TYPES[target],
                 _stage_for_status(target),
             )
+        # 步骤四：把 CAS 是否胜出返回给 worker，由上层决定继续执行或退出。
         return changed
 
     async def mark_running(self, job_id: str, revision: int) -> bool:
         """Pending -> running，并增加尝试次数。"""
+        # 步骤一：读取当前尝试次数，确保公开计数基于权威记录递增。
         record = await self.get(job_id)
+        # 步骤二：通过统一转换入口原子进入 running，并携带新的尝试次数。
         return await self.transition(
             job_id,
             revision,
@@ -206,9 +221,11 @@ class DDLJobStore:
         question_round: int,
     ) -> bool:
         """Running -> waiting_input，并登记显式截止时间。"""
+        # 步骤一：按统一等待时长计算绝对截止时间，供 API 与过期扫描共享。
         expires_at = datetime.now(UTC) + timedelta(
             seconds=app_config.redis.waiting_timeout_seconds
         )
+        # 步骤二：原子保存问题集、轮次和截止时间后进入 waiting_input。
         return await self.transition(
             job_id,
             revision,
@@ -229,9 +246,9 @@ class DDLJobStore:
         request: AnswerRequest,
     ) -> tuple[JobRecord, bool]:
         """原子验证回答并安排下一修订；返回是否首次受理。"""
+        # 步骤一：读取当前权威问题轮次，作为业务校验和 Lua CAS 的输入。
         record = await self.get(job_id)
-        # 当前问题 ID 先做业务校验，revision、question_set_id、截止时间和载荷
-        # 哈希再由 Redis 脚本原子裁决，使重复提交幂等而过期轮次不能恢复图。
+        # 步骤二：在等待态先拒绝重复或未知问题 ID，避免无效载荷进入原子协议。
         if record.status == JobStatus.WAITING_INPUT:
             current_question_ids = {
                 question.question_id for question in record.questions or []
@@ -252,6 +269,8 @@ class DDLJobStore:
                         "unknown_ids": ",".join(sorted(unknown)),
                     },
                 )
+        # 步骤三：生成规范回答载荷及摘要，再由脚本原子裁决 revision、
+        # question_set_id、截止时间和载荷哈希，使重复提交幂等且过期轮次不能恢复图。
         answer_json, answer_hash = JobCodec.answers_payload(request.answers)
         result = await self._state.submit_answers(
             job_id,
@@ -261,6 +280,7 @@ class DDLJobStore:
             answer_json=answer_json,
             answer_hash=answer_hash,
         )
+        # 步骤四：把 Lua 返回码投影为稳定业务错误，保留超时与陈旧回答的差异。
         if result == -1:
             raise DataAgentError(
                 "answer_timeout",
@@ -275,6 +295,7 @@ class DDLJobStore:
                 "回答修订或问题集合已过期",
                 http_status=409,
             )
+        # 步骤五：回读脚本更新后的权威投影，仅对首次受理尽力发布排队通知。
         updated = await self.get(job_id)
         if result == 1:
             await self._publish_safely(
@@ -282,6 +303,7 @@ class DDLJobStore:
                 JobEventType.PROGRESS,
                 JobEventStage.QUEUED,
             )
+        # 步骤六：返回最新投影及首次受理标志，让 API 区分幂等重放。
         return updated, result == 1
 
     async def mark_terminal(
@@ -294,13 +316,14 @@ class DDLJobStore:
         error: JobError | None = None,
     ) -> bool:
         """Running -> 终态并释放来源租约、设置结果保留期。"""
+        # 步骤一：只把安全结果或错误投影编码进终态字段，不携带内部异常文本。
         fields: dict[str, str] = {}
         if result is not None:
             fields["result_json"] = result.model_dump_json()
         if error is not None:
             fields["error_json"] = error.model_dump_json()
-        # 转换成功时，终态、来源租约释放、结果保留和 checkpoint 清理 outbox
-        # 原子生效；线程删除由可重放维护任务完成，不依赖当前 worker。
+        # 步骤二：由原子转换同时写终态、释放来源租约、设置结果保留期并登记
+        # checkpoint 清理 outbox；线程删除交给可重放维护任务完成。
         return await self.transition(
             job_id,
             revision,
@@ -325,6 +348,7 @@ class DDLJobStore:
 
     async def expire_waiting(self) -> list[str]:
         """拒绝已到期等待轮次；检查点清理由 worker cron 协调。"""
+        # 步骤一：按当前时间读取所有已越过截止时间的修订感知等待成员。
         now = time.time()
         members = cast(
             list[str],
@@ -336,6 +360,7 @@ class DDLJobStore:
                 )
             ),
         )
+        # 步骤二：逐项执行 CAS 终态转换，只有仍处于对应等待修订的任务会被拒绝。
         expired: list[str] = []
         for member in members:
             job_id, revision_text = member.rsplit(":", 1)
@@ -354,6 +379,7 @@ class DDLJobStore:
             )
             if changed:
                 expired.append(job_id)
+        # 步骤三：只返回实际完成转换的任务，供维护任务协调后续清理。
         return expired
 
     async def pending_checkpoint_cleanup(self, limit: int = 100) -> list[str]:
@@ -371,11 +397,13 @@ class DDLJobStore:
         stage: JobEventStage,
     ) -> None:
         """读取转换后的权威投影并以非阻断副作用发布。"""
+        # 步骤一：转换成功后重新读取权威投影，避免发布调用方持有的陈旧状态。
         try:
             record = await self.get(job_id)
         except RedisError as error:
             _log_event_publish_failure(job_id, stage, error)
             return
+        # 步骤二：把通知作为非阻断副作用发布，失败时保留已经提交的状态转换。
         await self._publish_safely(record, event_type, stage)
 
     async def _publish_safely(

@@ -28,7 +28,13 @@ class MetadataSnapshotService:
         metrics: list[MetricMetadata],
         candidates: list[MemoryCandidate] | None = None,
     ) -> None:
-        """提交最终通过确定性校验的完整快照。"""
+        """在单一事务中提交验证通过的 Meta 与权威记忆快照。
+
+        先计算本次提交仍有效的对象作用域指纹，再过期不兼容记忆、同步
+        Meta，最后写入权威记忆及其 ES/Qdrant desired-state outbox；任一步
+        失败都由同一 managed Session 回滚。
+        """
+        # 步骤一：优先使用上游已验证候选，否则从最终快照构建同版本权威候选。
         accepted = candidates or build_accepted_memories(
             schema,
             metadata,
@@ -40,6 +46,7 @@ class MetadataSnapshotService:
                 projection=app_config.memory.projection_version,
             ),
         )
+        # 步骤二：计算本次表和列仍有效的作用域指纹，并保留整体 schema 指纹。
         fingerprints = {
             object_id: scope_fingerprint(schema, object_id)
             for object_id in (
@@ -48,8 +55,11 @@ class MetadataSnapshotService:
             )
         }
         valid_fingerprints = set(fingerprints.values()) | {schema.schema_fingerprint}
+        # 步骤三：进入唯一 managed Session，使 Meta、记忆、事件、关联和双索引
+        # desired-state outbox 共享同一提交或回滚边界。
         async with MySQLDatabase.session() as session:
             metadata_repository = MetadataRepository(session)
+            # 步骤四：先计算本次提交范围内可能受结构变化影响的记忆键。
             expiration_memory_keys = (
                 await metadata_repository.fingerprint_expiration_memory_keys(
                     schema,
@@ -57,10 +67,13 @@ class MetadataSnapshotService:
                 )
             )
             memory_repository = MemoryRepository(session)
+            # 步骤五：在写入新快照前过期指纹不再兼容的权威记忆版本。
             await memory_repository.expire_fingerprint_bound(
                 schema.source,
                 valid_fingerprints,
                 memory_keys=expiration_memory_keys,
             )
+            # 步骤六：同步严格受本次提交表约束的 Meta 快照及其关联清理。
             await metadata_repository.synchronize(schema, metadata, metrics)
+            # 步骤七：最后写入权威记忆、审计事件、关系和双索引 outbox。
             await memory_repository.upsert_candidates(accepted)

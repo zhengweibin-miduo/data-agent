@@ -38,10 +38,12 @@ class LLMMetadataGenerator:
         payload: dict[str, object],
     ) -> OutputT:
         """调用配置的结构化输出方法，禁止文本降级。"""
+        # 步骤一：按配置绑定 Pydantic 输出类型，禁止回退到文本或宽松 JSON 解析。
         runnable = self._client.with_structured_output(
             output_type,
             method=app_config.llm.structured_output_method,
         )
+        # 步骤二：在进程级并发预算内发送有界结构化载荷。
         async with self._semaphore:
             value = await runnable.ainvoke(
                 [
@@ -56,6 +58,7 @@ class LLMMetadataGenerator:
                     ),
                 ]
             )
+        # 步骤三：再次确认返回对象属于目标契约，异常交由节点的修复预算处理。
         if not isinstance(value, output_type):
             raise TypeError(f"模型未返回 {output_type.__name__}")
         return cast(OutputT, value)

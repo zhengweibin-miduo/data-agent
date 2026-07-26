@@ -137,6 +137,7 @@ class APISettings(SettingsModel):
         origins: list[HttpUrl],
     ) -> list[HttpUrl]:
         """只允许本机浏览器 Origin。"""
+        # 步骤一：逐个解析 Origin 主机，仅允许 localhost 或 IP 回环地址通过。
         for origin in origins:
             host = origin.host or ""
             if host == "localhost":
@@ -147,6 +148,7 @@ class APISettings(SettingsModel):
                 is_loopback = False
             if not is_loopback:
                 raise ValueError("api.cors_origins 只能配置本机 Origin")
+        # 步骤二：返回保留原始顺序与类型的已校验 Origin 列表。
         return origins
 
 
@@ -306,19 +308,23 @@ class AppSettings(SettingsModel):
     @model_validator(mode="after")
     def validate_source_lease_window(self) -> "AppSettings":
         """校验来源租约和跨数据库边界。"""
+        # 步骤一：确保来源租约覆盖 worker 执行与人工等待两种最长占用窗口。
         minimum = max(
             self.redis.waiting_timeout_seconds,
             self.redis.worker_job_timeout_seconds,
         )
         if self.memory.source_lease_seconds < minimum:
             raise ValueError("memory.source_lease_seconds 不能短于 worker 或等待超时")
+        # 步骤二：确认连接地址含 Meta 默认库，并让权威记忆使用不同数据库。
         mysql_database = make_url(self.mysql.url).database
         if mysql_database is None:
             raise ValueError("mysql.url 必须包含默认 Meta 数据库")
         if mysql_database.casefold() == self.memory.database.casefold():
             raise ValueError("memory.database 不能与 mysql.url 的默认数据库相同")
+        # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")
+        # 步骤四：返回完成跨配置约束校验的根配置实例。
         return self
 
     @classmethod
@@ -334,9 +340,11 @@ class AppSettings(SettingsModel):
         Returns:
             校验后的应用配置。
         """
+        # 步骤一：以 UTF-8 打开明确目标文件，让文件与 YAML 解析异常原样传播。
         with Path(path).open(encoding="utf-8") as file:
+            # 步骤二：解析 YAML 后一次性交给 Pydantic 完成字段与跨配置约束校验。
             return cls.model_validate(yaml.safe_load(file))
 
 
-# 仅加载一次，供所有应用模块共享。
+# 步骤一：模块导入时只加载一次配置，供所有应用组件共享同一校验结果。
 app_config = AppSettings.from_yaml()

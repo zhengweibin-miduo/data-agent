@@ -70,6 +70,15 @@
   non-obvious arguments, results, exceptions, side effects, transactions,
   concurrency, and lifecycle constraints when applicable.
 - Inline comments explain rationale and invariants, not visible code behavior.
+- Business flows, including CRUD methods, use concise numbered Chinese step
+  comments at filtering, validation, read, write, state-transition,
+  transaction, persistence, and read-back boundaries. Production code does not
+  keep standalone unnumbered explanatory comments: preserve their useful
+  rationale by merging it into the relevant numbered step, or delete it when
+  redundant. Tool directives such as `noqa`, type-ignore, and coverage comments
+  are exempt. The comments must let a reader reconstruct the flow without
+  narrating every expression, and must not use `TODO` for behavior that is
+  already implemented.
 - English-only imperative-mood and terminal-punctuation rules may be disabled
   for Chinese prose; missing-public-object Ruff rules must remain enabled.
 
