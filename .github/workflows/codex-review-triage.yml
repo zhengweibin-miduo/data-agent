@@ -14,16 +14,28 @@ concurrency:
 
 jobs:
   triage:
-    # 只对 Codex 的发言做响应，且必须是非草稿 PR。
+    # 只对白名单内的审查 bot 做响应，且必须是非草稿 PR。
+    #
+    # 白名单来自仓库变量 REVIEW_BOTS（逗号分隔的 bot login），与下方 allowed_bots 共用
+    # 同一份配置。变量未设置时表达式恒为 false，即 fail-closed，不会误放行。
+    # 两侧都用逗号包裹后再比较，避免 `codex-connector[bot]` 这类子串意外命中。
+    #
     # draft 判断对两种事件取不同字段；字段缺失时为 null（!= true 成立），即失败时放行而非静默跳过。
+    #
+    # 本仓库为公开仓库：任何人都能 fork 并开 PR，审查 bot 会自动评审这些 PR。本 job 会
+    # 检出 PR 代码并携带 secrets 运行，因此必须排除外部来源，否则 fork 中的文件内容可
+    # 构成 prompt injection 面。pull_request_review 用 head.repo 判断；issue_comment 的
+    # 事件载荷没有 head.repo，改以 PR 作者必须是仓库所有者作为等价约束。
     if: >
       github.event.pull_request.draft != true &&
       github.event.issue.draft != true &&
       ((github.event_name == 'pull_request_review' &&
-        github.event.review.user.login == 'chatgpt-codex-connector[bot]') ||
+        contains(format(',{0},', vars.REVIEW_BOTS), format(',{0},', github.event.review.user.login)) &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
        (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
-        github.event.comment.user.login == 'chatgpt-codex-connector[bot]'))
+        contains(format(',{0},', vars.REVIEW_BOTS), format(',{0},', github.event.comment.user.login)) &&
+        github.event.issue.author_association == 'OWNER'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -50,12 +62,17 @@ jobs:
           # Pro/Max 订阅认证。token 由 `claude setup-token` 生成，
           # 登出 Claude Code 会使其失效，届时重新生成并更新该 secret。
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 本 workflow 由 bot 触发，而 action 默认「不允许任何 bot」（空值），
+          # 不显式授权则每次都会被拒绝执行。公开仓库下禁止使用 '*'：
+          # 那会让任意外部 App 都能以自己控制的 prompt 调起本 action。
+          allowed_bots: ${{ vars.REVIEW_BOTS }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+            REVIEWER: ${{ github.event.review.user.login || github.event.comment.user.login }}
 
-            Codex（chatgpt-codex-connector[bot]）刚刚对这个 PR 提出了评审意见。
-            你的任务不是重新评审代码，而是**裁决 Codex 的每一条意见是否真的需要修复**。
+            上面 REVIEWER 指定的审查 bot 刚刚对这个 PR 提出了评审意见。
+            你的任务不是重新评审代码，而是**裁决它的每一条意见是否真的需要修复**。
 
             开始前必须先完整读取根目录 `code_review.md`，裁决分类、项目既定事实、
             优先级口径和回复格式全部以该文件为准，不要另立标准。
@@ -74,10 +91,10 @@ jobs:
                  -f owner='${{ github.repository_owner }}' \
                  -f repo='${{ github.event.repository.name }}' \
                  -F pr=${{ github.event.pull_request.number || github.event.issue.number }}
-               只处理 isResolved == false 且首条评论作者为 chatgpt-codex-connector[bot] 的线程。
-               本仓库可由人工重复发起 Codex 评审，同一线程可能被多次触发裁决：
+               只处理 isResolved == false 且首条评论作者为上面 REVIEWER 的线程。
+               本仓库可由人工重复发起评审，同一线程可能被多次触发裁决：
                若线程内已存在以 `**[裁决]` 开头的回复，说明上一轮已处理，直接跳过，
-               除非 Codex 在该线程里追加了新的反驳论据。全部线程都已裁决过时，
+               除非 REVIEWER 在该线程里追加了新的反驳论据。全部线程都已裁决过时，
                不要发汇总评论，直接结束。
             2. 对每一条意见，**必须实际打开对应文件读取上下文**再判断，不要只凭 Codex 的描述下结论。
                同时检查 diff 确认该问题是否由本 PR 引入：
