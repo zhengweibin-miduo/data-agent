@@ -938,3 +938,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: 清理记忆检索排序与索引效率问题
+
+**Date**: 2026-07-26
+**Task**: 清理记忆检索排序与索引效率问题
+**Branch**: `fix/memory-search-hygiene-20260726`
+
+### Summary
+
+record_access 自赋值 updated_at 抑制 onupdate，消除读路径改变读路径排序的反馈；确认 RRF 精确加成是刻意设计而非重复计分，补 docstring 与三个锁定测试。find_exact_query 索引问题因需 schema 变更且项目无迁移机制而记入 spec 待定。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1331e38` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
