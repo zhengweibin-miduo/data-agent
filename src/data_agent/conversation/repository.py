@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import delete, func, or_, select, text, update
@@ -657,10 +656,10 @@ class ConversationRepository:
         # 高频重试，同时保证任务仍有下一次可领取时间。
         attempts = claim.attempts + 1
         delay = min(2 ** min(attempts, 20), max_backoff_seconds)
-        available = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=delay)
 
         # 步骤二：仅持有当前 lease token 的 worker 能释放租约并登记失败；
-        # 已被重领的任务不会被陈旧异常覆盖新的租约状态。
+        # 已被重领的任务不会被陈旧异常覆盖新的租约状态。退避时间由数据库端
+        # 生成，与领取条件的 now() 使用同一时钟，避免会话时区偏移使退避失效。
         await self._session.execute(
             update(conversation_memory_outbox)
             .where(
@@ -669,7 +668,11 @@ class ConversationRepository:
             )
             .values(
                 attempts=attempts,
-                available_at=available,
+                available_at=func.timestampadd(
+                    text("SECOND"),
+                    delay,
+                    func.now(),
+                ),
                 lease_token=None,
                 lease_expires_at=None,
                 last_error_type=error_type[:128],

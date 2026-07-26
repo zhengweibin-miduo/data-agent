@@ -44,6 +44,57 @@ class JobOutboxStore:
         # 步骤三：返回本批已确认调度数量，供维护任务观测推进结果。
         return dispatched
 
+    async def enqueue_activation(
+        self,
+        job_id: str,
+        revision: int,
+        at: float,
+    ) -> None:
+        """重新登记一个修订感知的激活请求。
+
+        dispatch 使用 revision 感知的确定性 arq ID 入队，因此对仍在 arq 队列中的
+        任务重复登记是幂等空操作，不会产生第二个有效激活。
+        """
+        await RedisBaseStore.awaitable(
+            self._redis.zadd(
+                self._keys.dispatch,
+                {self._keys.activation_member(job_id, revision): at},
+            )
+        )
+
+    async def dispatch_one(
+        self,
+        queue: ArqRedis,
+        job_id: str,
+        revision: int,
+    ) -> bool:
+        """只调度指定激活请求，不扫描整个 outbox。
+
+        受理路径用它把"等待 dispatch cron 下一次触发"的时延降到零。outbox 成员
+        仍是崩溃兜底，确定性 arq ID 保证与 cron 重复调度同一激活时互为幂等空操作。
+
+        Args:
+            queue: arq 队列连接。
+            job_id: 任务标识。
+            revision: 激活对应的修订号。
+
+        Returns:
+            是否确认移除了对应 outbox 成员。
+        """
+        # 步骤一：以 revision 感知的确定性 arq ID 幂等入队。
+        member = self._keys.activation_member(job_id, revision)
+        await queue.enqueue_job(
+            "run_ddl_job",
+            job_id,
+            revision,
+            _job_id=self._keys.arq_job_id(job_id, revision),
+        )
+        # 步骤二：入队成功后才移除本激活的 outbox 成员，崩溃时仍由 cron 重放。
+        removed = await RedisBaseStore.awaitable(
+            self._redis.zrem(self._keys.dispatch, member)
+        )
+        return bool(removed)
+
     async def pending_checkpoint_cleanup(self, limit: int = 100) -> list[str]:
         """读取待删除的终态 LangGraph 线程。"""
         return cast(

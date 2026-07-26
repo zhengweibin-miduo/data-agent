@@ -212,6 +212,14 @@ class RedisSettings(SettingsModel):
         gt=0,
         description="单个 arq 任务允许执行的最长秒数。",
     )
+    job_stall_grace_seconds: int = Field(
+        gt=0,
+        description="判定任务停滞时在单次执行超时之上额外等待的秒数。",
+    )
+    max_job_attempts: int = Field(
+        gt=0,
+        description="停滞任务被重新激活的累计尝试次数上限。",
+    )
 
 
 class LLMSettings(SettingsModel):
@@ -271,6 +279,14 @@ class MemorySettings(SettingsModel):
     outbox_max_backoff_seconds: int = Field(
         gt=0,
         description="记忆索引发件箱失败重试的最大退避秒数。",
+    )
+    outbox_claim_lease_seconds: int = Field(
+        gt=0,
+        description="记忆索引发件箱单批领取的租约秒数，超时后未确认项自动可重领。",
+    )
+    outbox_max_attempts: int = Field(
+        gt=0,
+        description="记忆索引发件箱单项转入死信前允许的最大失败次数。",
     )
     retrieval_timeout_seconds: float = Field(
         gt=0,
@@ -343,13 +359,15 @@ class AppSettings(SettingsModel):
     @model_validator(mode="after")
     def validate_source_lease_window(self) -> "AppSettings":
         """校验来源租约和跨数据库边界。"""
-        # 步骤一：确保来源租约覆盖 worker 执行与人工等待两种最长占用窗口。
-        minimum = max(
-            self.redis.waiting_timeout_seconds,
-            self.redis.worker_job_timeout_seconds,
+        # 步骤一：租约只在激活开始时续期，此后可能先执行满 worker 超时再进入人工
+        # 等待，两段占用串联而非互斥，因此租约必须覆盖它们的和。
+        minimum = (
+            self.redis.waiting_timeout_seconds + self.redis.worker_job_timeout_seconds
         )
         if self.memory.source_lease_seconds < minimum:
-            raise ValueError("memory.source_lease_seconds 不能短于 worker 或等待超时")
+            raise ValueError(
+                "memory.source_lease_seconds 不能短于 worker 超时与等待超时之和"
+            )
         # 步骤二：确认连接地址含 Meta 默认库，并让权威记忆使用不同数据库。
         mysql_database = make_url(self.mysql.url).database
         if mysql_database is None:

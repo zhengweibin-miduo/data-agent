@@ -205,3 +205,36 @@ def test_redis_socket_timeout_must_outlive_sse_heartbeat() -> None:
         AppSettings.model_validate(payload).redis.socket_timeout_seconds,
         heartbeat + 1,
     )
+
+
+def test_source_lease_must_cover_execution_and_waiting_sum() -> None:
+    """来源租约必须覆盖 worker 超时与等待超时之和，而不是二者的较大值。"""
+    payload = app_config.model_dump(mode="json")
+    worker_timeout = int(payload["redis"]["worker_job_timeout_seconds"])
+    waiting_timeout = int(payload["redis"]["waiting_timeout_seconds"])
+    # 取二者较大值加一：旧的 max 语义会接受该配置，串联占用窗口下租约仍会
+    # 先于回答截止时间过期，因此新的求和语义必须拒绝它。
+    payload["memory"]["source_lease_seconds"] = max(worker_timeout, waiting_timeout) + 1
+    try:
+        AppSettings.model_validate(payload)
+    except ValidationError as error:
+        check_exception("租约窗口校验捕获校验错误", error, ValidationError)
+        check_condition(
+            "校验消息指向求和约束",
+            "之和" in str(error),
+            actual=str(error),
+            expected="包含求和约束说明",
+        )
+    else:
+        fail_check(
+            "租约窗口校验",
+            actual=max(worker_timeout, waiting_timeout) + 1,
+            expected="拒绝短于 worker 超时与等待超时之和的租约",
+        )
+    # 恰好等于两段窗口之和的配置必须被接受，避免把约束收得过紧。
+    payload["memory"]["source_lease_seconds"] = worker_timeout + waiting_timeout
+    check_equal(
+        "求和边界值被接受",
+        AppSettings.model_validate(payload).memory.source_lease_seconds,
+        worker_timeout + waiting_timeout,
+    )

@@ -29,4 +29,6 @@ class DataAgentError(Exception):
         self.stage = stage
         self.retryable = retryable
         self.http_status = http_status
-        self.details = details or {"message": message}
+        # details 会经 API 响应与公开事件流投影给调用方，因此不回填内部 message；
+        # 未显式声明可公开详情的错误只暴露稳定的 code 与 stage。
+        self.details = dict(details) if details else {}

@@ -66,7 +66,6 @@ def _record(
         ),
         created_at=datetime(2026, 7, 19, tzinfo=UTC),
         updated_at=datetime(2026, 7, 19, 0, 1, tzinfo=UTC),
-        graph_version="v1",
     )
 
 

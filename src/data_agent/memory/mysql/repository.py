@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from sqlalchemy import RowMapping, and_, func, or_, select, true, update
+from sqlalchemy import RowMapping, and_, func, or_, select, text, true, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1287,6 +1287,17 @@ class MemoryRepository:
                     select(agent_memory.c.id, agent_memory.c.uid)
                     .where(
                         agent_memory.c.purge_requested_at.is_not(None),
+                        # 隔离期：清理请求必须已经静置超过一个领取租约。outbox 行被
+                        # 另一 worker 确认删除后门禁即放行，但此时可能仍有在途领取
+                        # 尚未结算；权威行一旦消失，迟到写入就再也无法登记持久的
+                        # 收敛请求，只能靠一次性补偿删除。留出隔离期让在途领取先
+                        # 失效，使收敛请求总能落到权威行上。
+                        agent_memory.c.purge_requested_at
+                        <= func.timestampadd(
+                            text("SECOND"),
+                            -app_config.memory.outbox_claim_lease_seconds,
+                            func.now(),
+                        ),
                         ~agent_memory.c.uid.in_(
                             select(memory_index_outbox.c.memory_uid)
                         ),

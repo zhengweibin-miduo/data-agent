@@ -1,8 +1,17 @@
 """记忆派生索引期望状态仓储。"""
 
-from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
-from sqlalchemy import RowMapping, delete, func, select, update
+from sqlalchemy import (
+    RowMapping,
+    delete,
+    exists,
+    func,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,12 +57,15 @@ class MemoryIndexOutboxRepository:
                 "projection_version": app_config.memory.projection_version,
                 "attempts": 0,
                 "available_at": func.now(),
+                "lease_token": None,
                 "last_error_type": None,
             }
             for uid in memory_uids
             for target in MemoryIndexTarget
         ]
-        # 步骤二：按 UID 与目标幂等覆盖状态，并重置重试进度。
+        # 步骤二：按 UID 与目标幂等覆盖状态，并重置重试进度。覆盖必须同时作废领取
+        # 代次令牌：否则 attempts 被重置为 0 后，仍持有旧令牌的迟到 worker 还能命中
+        # 这一行并把新期望直接写到死信上限，使最新内容再也不被领取。
         statement = insert(memory_index_outbox).values(values)
         await self._session.execute(
             statement.on_duplicate_key_update(
@@ -61,6 +73,7 @@ class MemoryIndexOutboxRepository:
                 projection_version=statement.inserted.projection_version,
                 attempts=0,
                 available_at=func.now(),
+                lease_token=None,
                 last_error_type=None,
             )
         )
@@ -88,38 +101,179 @@ class MemoryIndexOutboxRepository:
         return result
 
     async def claim_outbox(self, limit: int) -> list[MemoryOutboxItem]:
-        """通过行锁有界领取可执行索引期望状态。"""
-        # 步骤一：按可用时间跳锁领取有界任务，使并发 dispatcher 不重复处理。
+        """通过行锁有界领取可执行索引期望状态并写入领取租约。"""
+        # 步骤一：按可用时间跳锁领取有界任务，使并发 dispatcher 不重复处理；
+        # 已达死信阈值的行保留在表中但不再参与领取，避免确定性故障无限重试。
         rows = (
-            await self._session.execute(
-                select(memory_index_outbox)
-                .where(memory_index_outbox.c.available_at <= func.now())
-                .order_by(memory_index_outbox.c.updated_at)
-                .limit(limit)
-                .with_for_update(skip_locked=True)
+            (
+                await self._session.execute(
+                    select(memory_index_outbox)
+                    .where(
+                        memory_index_outbox.c.available_at <= func.now(),
+                        memory_index_outbox.c.attempts
+                        < app_config.memory.outbox_max_attempts,
+                    )
+                    .order_by(memory_index_outbox.c.updated_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
             )
-        ).mappings()
-        # 步骤二：将锁定行转换为调用方可执行的类型化 outbox 项。
-        return [
+            .mappings()
+            .all()
+        )
+        if not rows:
+            return []
+        # 步骤二：为本批生成不可复用的领取代次令牌。仅靠 (uid, target, operation,
+        # projection_version) 甚至再加 attempts 都无法区分"同一四元组被重新写入并被
+        # 另一个 worker 重新领取"的新一代期望：迟到 worker 的结算会命中新行，既可能
+        # 把新内容推进死信，也会缩短新领取者的租约造成重复处理。
+        lease_token = uuid4().hex
+        items = [
             MemoryOutboxItem(
                 memory_uid=str(row["memory_uid"]),
                 target=MemoryIndexTarget(str(row["target"])),
                 operation=MemoryIndexOperation(str(row["operation"])),
                 projection_version=str(row["projection_version"]),
                 attempts=int(row["attempts"]),
+                lease_token=lease_token,
             )
             for row in rows
         ]
-
-    async def acknowledge_outbox(self, item: MemoryOutboxItem) -> None:
-        """仅确认仍与已处理期望状态相同的 outbox 行。"""
-        # 步骤一：按完整期望条件确认，避免迟到 worker 删除后来覆盖的新状态。
+        # 步骤三：把租约与代次令牌一并写入已领取行，使调用方能在提交后释放行锁再
+        # 执行外部写入；租约到期而未确认的行会自动重新可领取，无需额外恢复通道。
         await self._session.execute(
+            update(memory_index_outbox)
+            .where(
+                tuple_(
+                    memory_index_outbox.c.memory_uid,
+                    memory_index_outbox.c.target,
+                ).in_([(item.memory_uid, item.target.value) for item in items])
+            )
+            .values(
+                available_at=func.timestampadd(
+                    text("SECOND"),
+                    app_config.memory.outbox_claim_lease_seconds,
+                    func.now(),
+                ),
+                lease_token=lease_token,
+            )
+        )
+        return items
+
+    async def dead_letter_count(self) -> int:
+        """统计已达死信阈值、不再参与领取的期望状态行数。"""
+        # 步骤一：只做计数，供调度器暴露需要人工介入的积压规模。
+        return int(
+            (
+                await self._session.execute(
+                    select(func.count())
+                    .select_from(memory_index_outbox)
+                    .where(
+                        memory_index_outbox.c.attempts
+                        >= app_config.memory.outbox_max_attempts
+                    )
+                )
+            ).scalar_one()
+        )
+
+    async def acknowledge_outbox(
+        self,
+        item: MemoryOutboxItem,
+        *,
+        content_hash: str | None,
+    ) -> bool:
+        """仅在派生索引已与权威内容一致时确认 outbox 行。
+
+        外部写入发生在事务之外，期间权威内容可能再次变更并写入新的期望状态。
+        因为新旧期望的 (uid, target, operation, projection_version) 完全相同，
+        只按期望条件确认会删除这份新期望，使刚写入的陈旧内容永久留在派生索引。
+        因此确认额外要求权威行仍与本次实际写入的内容一致：不一致时保留期望状态，
+        该行会在领取租约到期后（或写入方重置可用时间后）被重新处理。
+
+        Args:
+            item: 已处理的期望状态。
+            content_hash: 本次写入派生索引的权威内容哈希；删除派生文档时为 None。
+
+        Returns:
+            是否确认了该期望状态。
+        """
+        # 步骤一：按本次实际执行的动作构造权威一致性条件。写入路径要求权威行仍为
+        # 同一内容且仍处于 ACTIVE；删除路径要求权威行确实不再是可检索的 ACTIVE 行。
+        active_row = select(agent_memory.c.uid).where(
+            agent_memory.c.uid == item.memory_uid,
+            agent_memory.c.status == MemoryStatus.ACTIVE.value,
+        )
+        if content_hash is None:
+            consistent = ~exists(active_row)
+        else:
+            consistent = exists(
+                active_row.where(agent_memory.c.content_hash == content_hash)
+            )
+        # 步骤二：期望条件与权威一致性同时满足才删除，避免迟到 worker 既删除后来
+        # 覆盖的新状态，又留下与权威内容不一致的派生文档。
+        result = await self._session.execute(
             delete(memory_index_outbox).where(
                 memory_index_outbox.c.memory_uid == item.memory_uid,
                 memory_index_outbox.c.target == item.target.value,
                 memory_index_outbox.c.operation == item.operation.value,
                 memory_index_outbox.c.projection_version == item.projection_version,
+                memory_index_outbox.c.lease_token == item.lease_token,
+                consistent,
+            )
+        )
+        return bool(getattr(result, "rowcount", 0))
+
+    async def enqueue_convergence(
+        self,
+        memory_uid: str,
+        target: MemoryIndexTarget,
+    ) -> None:
+        """确认失败后按当前权威状态为单个目标重建收敛请求。
+
+        确认失败意味着本次写入已经与权威内容不一致：可能是内容再次变更，也可能是
+        并发删除的 DELETE 期望已被另一个 worker 确认并删除了 outbox 行。后者若不
+        重建请求，迟到写入的陈旧内容就会永久留在派生索引里，没有任何后续请求能
+        纠正它。
+
+        已存在 outbox 行时只纠正操作与投影版本，不重置 `attempts` 与
+        `available_at`，避免覆盖那一行自己的退避进度与死信预算。
+
+        Args:
+            memory_uid: 需要重新收敛的权威记忆 UID。
+            target: 需要重新收敛的派生索引目标。
+
+        权威行已被物理清理时同样登记一条 DELETE 收敛请求：outbox 刻意不设向
+        `agent_memory` 的外键，因此这条请求可以独立存在，由后续周期按普通 outbox
+        项重试直至成功。这样补偿不再是一次性远程调用——瞬时索引故障或进程退出后
+        仍有持久待办可重放，用户已删除的内容不会永久留在派生索引里。
+        """
+        # 步骤一：按当前权威状态派生目标操作；权威行已不存在时同样收敛为删除。
+        status = (
+            await self._session.execute(
+                select(agent_memory.c.status).where(agent_memory.c.uid == memory_uid)
+            )
+        ).scalar_one_or_none()
+        operation = (
+            MemoryIndexOperation.UPSERT
+            if status is not None and str(status) == MemoryStatus.ACTIVE.value
+            else MemoryIndexOperation.DELETE
+        )
+        statement = insert(memory_index_outbox).values(
+            {
+                "memory_uid": memory_uid,
+                "target": target.value,
+                "operation": operation.value,
+                "projection_version": app_config.memory.projection_version,
+                "attempts": 0,
+                "available_at": func.now(),
+                "last_error_type": None,
+            }
+        )
+        # 步骤二：行已被删除时新建收敛请求；行仍在时只纠正操作，保留其退避进度。
+        await self._session.execute(
+            statement.on_duplicate_key_update(
+                operation=statement.inserted.operation,
+                projection_version=statement.inserted.projection_version,
             )
         )
 
@@ -133,17 +287,26 @@ class MemoryIndexOutboxRepository:
         # 步骤一：根据已尝试次数计算有上限的指数退避时间。
         attempts = item.attempts + 1
         delay = min(2 ** min(attempts, 20), max_backoff_seconds)
-        available_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=delay)
-        # 步骤二：仅更新同一 UID 与目标的重试元数据，并截断安全异常类型。
+        # 步骤二：只更新仍属于本次领取的那一代期望状态。代次令牌在每次领取时重新
+        # 生成，`set_desired_state` 的覆盖与其他 worker 的重新领取都会让它改变，因此
+        # 迟到 worker 的失败回写不会命中新一代——否则它既可能把新内容的期望直接推到
+        # 死信上限使其再不被领取，也会把新领取者的租约缩短成一次退避间隔而造成重复处理。
         await self._session.execute(
             update(memory_index_outbox)
             .where(
                 memory_index_outbox.c.memory_uid == item.memory_uid,
                 memory_index_outbox.c.target == item.target.value,
+                memory_index_outbox.c.operation == item.operation.value,
+                memory_index_outbox.c.projection_version == item.projection_version,
+                memory_index_outbox.c.lease_token == item.lease_token,
             )
             .values(
                 attempts=attempts,
-                available_at=available_at,
+                available_at=func.timestampadd(
+                    text("SECOND"),
+                    delay,
+                    func.now(),
+                ),
                 last_error_type=error_type[:128],
             )
         )
@@ -227,14 +390,31 @@ class MemoryIndexOutboxRepository:
         """为活动 UID 重新生成双目标 UPSERT 期望状态。"""
         if not uids:
             return
-        # 步骤一：仅推进当前 ACTIVE 权威行的投影版本。
+        # 步骤一：锁定复核仍处于 ACTIVE 的权威行。扫描阶段不持锁，期间可能有行被
+        # 软删除或墓碑化；只有在本事务内锁定成功的 ACTIVE 行才允许重建 UPSERT
+        # 期望，否则会把并发删除已提交的 DELETE 期望覆盖成 UPSERT。
+        active_uids = {
+            str(uid)
+            for uid in (
+                await self._session.execute(
+                    select(agent_memory.c.uid)
+                    .where(
+                        agent_memory.c.uid.in_(uids),
+                        agent_memory.c.status == MemoryStatus.ACTIVE.value,
+                    )
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        }
+        if not active_uids:
+            return
+        # 步骤二：只推进已锁定 ACTIVE 行的投影版本。
         await self._session.execute(
             update(agent_memory)
-            .where(
-                agent_memory.c.uid.in_(uids),
-                agent_memory.c.status == MemoryStatus.ACTIVE.value,
-            )
+            .where(agent_memory.c.uid.in_(active_uids))
             .values(projection_version=app_config.memory.projection_version)
         )
-        # 步骤二：为同批 UID 重建两个目标的 UPSERT 期望。
-        await self.set_desired_state(uids, MemoryIndexOperation.UPSERT)
+        # 步骤三：只为已锁定 ACTIVE 行重建两个目标的 UPSERT 期望。
+        await self.set_desired_state(active_uids, MemoryIndexOperation.UPSERT)

@@ -67,6 +67,70 @@ Each context receives a fresh Session bound to the shared engine. Normal exit
 commits; exceptional exit rolls back and re-raises the original exception;
 the Session closes on both paths. The factory uses `expire_on_commit=False`.
 
+### Row locks must never span an external call
+
+A transaction that holds row locks while calling Elasticsearch, Qdrant, TEI, or
+a model endpoint blocks every writer of those rows for the duration of the
+remote call. Because all authoritative writers touch `memory_index_outbox` and
+`conversation_memory_outbox` inside their own transactions, one slow remote call
+turns into user-visible write latency or `lock_wait_timeout` failures.
+
+Background workers that combine database claims with remote calls use three
+phases instead of one transaction:
+
+1. **Claim (short transaction).** Select claimable rows `FOR UPDATE SKIP LOCKED`
+   and immediately write a lease, then commit to release the locks. The lease is
+   expressed with existing columns — push `available_at` forward for
+   `memory_index_outbox`, write `lease_token` plus `lease_expires_at` for
+   `conversation_memory_outbox` — so a crashed worker's rows become claimable
+   again when the lease expires, with no separate recovery channel.
+2. **Remote work (no transaction).** Perform the external calls.
+3. **Settle (one short transaction per item).** Acknowledge or back off.
+
+Because the lock is gone during phase 2, the claimed state may be stale by the
+time phase 3 runs. Settlement must therefore re-verify authority rather than
+assume the claim still holds:
+
+- Acknowledgement matches the full desired-state identity
+  (`memory_uid`, `target`, `operation`, `projection_version`) **and** asserts the
+  authoritative row still agrees with what was actually written — the same
+  `content_hash` and `status = ACTIVE` for a write, or no ACTIVE row at all for a
+  delete. A concurrent content change writes a fresh desired state with the same
+  identity; acknowledging on identity alone would retire that new request and
+  leave the stale payload in the derived index permanently.
+- Back-off matches the full desired-state identity too, so a late worker cannot
+  postpone a desired state that has already been overwritten.
+- A failed consistency check is not a failure: leave the row untouched and let
+  the next cycle re-process it. Do not consume the retry budget for it.
+
+### Timers belong to the database
+
+Claim conditions compare against `func.now()`, so any deadline written by the
+application must come from the same clock. Compute lease and back-off deadlines
+with `func.timestampadd(text("SECOND"), seconds, func.now())`; never write
+`datetime.now(UTC).replace(tzinfo=None) + timedelta(...)`. A database session in
+a non-UTC time zone silently shifts naive Python deadlines, which either makes
+exponential back-off fire immediately or defers work by hours.
+
+### Every outbox needs a dead-letter bound
+
+Deterministic failures (a vector dimension mismatch, a payload the index
+rejects) never succeed on retry. Claim queries therefore exclude rows whose
+`attempts` reached the configured maximum. Such rows stay in the table so they
+keep shadowing stale search hits and keep blocking physical purge, and the
+dispatcher logs the backlog size — silence must not be mistaken for success.
+Only remote-call failures increment `attempts`; lease expiry and superseded
+settlements must not.
+
+### Re-verify a lockless scan under lock before acting on it
+
+A cursor scan that runs without locks (`scan_active`) may return rows that a
+concurrent transaction deletes before the scan's result is used. Any write
+derived from such a scan re-selects the rows `FOR UPDATE` inside the writing
+transaction and acts only on those still matching the required status. Rebuild
+does this so a scanned-then-deleted UID cannot have its committed DELETE desired
+state overwritten back into an UPSERT.
+
 ## Repository and Query Pattern
 
 Health checks use SQLAlchemy `text()` for a small connection probe:
