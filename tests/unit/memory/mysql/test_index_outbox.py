@@ -13,6 +13,7 @@ from data_agent.models.memory import (
     MemoryIndexOperation,
     MemoryIndexTarget,
     MemoryOutboxItem,
+    MemoryStatus,
 )
 from tests.helpers.checks import check_condition, check_equal
 
@@ -35,6 +36,10 @@ class _FakeResult:
     def all(self) -> list[str]:
         """返回预置标量集合。"""
         return self._values
+
+    def scalar_one_or_none(self) -> str | None:
+        """返回预置标量的首项，用于单值查询。"""
+        return self._values[0] if self._values else None
 
 
 class _RecordingSession:
@@ -160,3 +165,58 @@ async def test_claim_outbox_filters_dead_letters_and_writes_lease() -> None:
         expected="领取条件包含 attempts 上限",
     )
     check_equal("空批次不写入租约", len(session.statements), 1)
+
+
+async def test_retry_outbox_only_targets_the_claimed_generation() -> None:
+    """失败回写只能命中本次领取的那一代期望状态。"""
+    session = _RecordingSession([])
+    repository = MemoryIndexOutboxRepository(cast(AsyncSession, session))
+    item = MemoryOutboxItem(
+        memory_uid="uid-a",
+        target=MemoryIndexTarget.ELASTICSEARCH,
+        operation=MemoryIndexOperation.UPSERT,
+        projection_version="v2",
+        attempts=9,
+    )
+
+    await repository.retry_outbox(item, "TimeoutError", 3600)
+
+    rendered = _rendered(session.statements[0])
+    compact = rendered.replace(" ", "")
+    # set_desired_state 覆盖同一行时会把 attempts 重置为 0、available_at 拉回当前
+    # 时刻；这两个条件因此能把迟到回写挡在新一代期望之外，避免它把新内容直接推到
+    # 死信上限。
+    check_condition(
+        "要求尝试次数未变",
+        "attempts=%s" in compact and "attempts_1" in str(rendered),
+        actual=rendered,
+        expected="WHERE 包含 attempts 等值条件",
+    )
+    check_condition(
+        "要求领取租约仍未到期",
+        "available_at>now()" in compact,
+        actual=rendered,
+        expected="WHERE 包含 available_at > now()",
+    )
+
+
+async def test_enqueue_convergence_preserves_existing_retry_state() -> None:
+    """重建收敛请求只纠正操作，不重置已有行的退避进度。"""
+    session = _RecordingSession([MemoryStatus.ACTIVE.value])
+    repository = MemoryIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.enqueue_convergence("uid-a", MemoryIndexTarget.QDRANT)
+
+    rendered = _rendered(session.statements[1])
+    check_condition(
+        "按权威状态派生 UPSERT",
+        "UPSERT" in rendered,
+        actual=rendered,
+        expected="ACTIVE 权威行派生 UPSERT 操作",
+    )
+    check_condition(
+        "冲突时不重置尝试次数与可用时间",
+        "attempts = %s" not in rendered.split("ON DUPLICATE KEY UPDATE")[1],
+        actual=rendered,
+        expected="ON DUPLICATE 只更新 operation 与 projection_version",
+    )

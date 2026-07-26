@@ -268,3 +268,13 @@ async def test_reap_stalled_isolates_single_candidate_failure() -> None:
 
     check_equal("故障候选之后的任务仍被回收", reaped, ["job-7"])
     check_equal("后续候选完成激活登记", outbox.activations, [("job-7", 3)])
+
+
+async def test_heartbeat_refreshes_activity_index() -> None:
+    """每次 arq 激活开始都必须刷新活动索引，避免自动重试被误判为停滞。"""
+    records = {"job-8": _record("job-8", JobStatus.RUNNING, revision=1, attempt=1)}
+    store, _, activity, _ = _store(records, [])
+
+    await store.heartbeat("job-8")
+
+    check_equal("刷新活动索引推进时间", activity.touched, ["job-8"])

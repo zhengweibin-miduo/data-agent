@@ -401,6 +401,15 @@ class DDLJobStore:
         # 步骤五：只返回实际完成转换的任务，供维护任务协调后续清理。
         return expired
 
+    async def heartbeat(self, job_id: str) -> None:
+        """刷新任务在活动索引中的推进时间。
+
+        每次 arq 激活开始时调用。任务在整个执行期间停留在 RUNNING、不产生状态
+        转换，因此活动索引的分数只在激活边界推进；arq 自动重试同一激活时若不刷新，
+        停滞判定会从第一次执行开始计时而误伤刚开始的重试。
+        """
+        await self._activity.touch(job_id, time.time())
+
     async def reap_stalled(self, limit: int = 100) -> list[str]:
         """回收被基础设施重试预算耗尽后遗留的停滞任务。
 

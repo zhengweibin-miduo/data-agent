@@ -80,17 +80,13 @@ class MemoryIndexDispatcher:
         if not items:
             await self._report_dead_letters()
             return 0
-        # 步骤二：在不持有 outbox 行锁的短事务中读出权威投影。此处读到的内容可能
-        # 在外部写入期间再次变更，最终一致性由确认阶段的权威一致性复核保证。
-        async with MySQLDatabase.session() as session:
-            repository = MemoryIndexOutboxRepository(session)
-            projections: dict[str, MemoryProjection | None] = {}
-            for uid in sorted({item.memory_uid for item in items}):
-                projections[uid] = await repository.projection(uid)
-        # 步骤三：在事务之外逐项执行外部写入，各自用独立短事务确认或退避。
+        # 步骤二：逐项处理，投影读取也在逐项隔离边界之内。投影会解码历史 JSON，
+        # 一条无法解码的权威行若在批次级读取，异常会逃出 dispatch 并中止整批：
+        # 本批已被推进租约的行都不会退避、不会计入尝试次数，租约到期后同一错误
+        # 无限重现，足以阻断全部记忆索引同步。
         processed = 0
         for item in items:
-            if await self._synchronize(item, projections.get(item.memory_uid)):
+            if await self._synchronize(item):
                 processed += 1
         # 步骤四：批次未被填满说明可领取队列已排空，此时才统计死信积压，
         # 避免在饱和运行时对 outbox 反复做全表计数。
@@ -108,15 +104,16 @@ class MemoryIndexDispatcher:
         if dead_letters:
             _log_index_dead_letters(dead_letters)
 
-    async def _synchronize(
-        self,
-        item: MemoryOutboxItem,
-        projection: MemoryProjection | None,
-    ) -> bool:
-        """执行单项外部写入并在独立短事务中确认或退避。"""
-        writable = _writable_projection(item, projection)
+    async def _synchronize(self, item: MemoryOutboxItem) -> bool:
+        """执行单项投影读取、外部写入，并在独立短事务中确认或退避。"""
         try:
-            # 步骤一：先在事务之外完成目标对应的幂等外部写入。
+            # 步骤一：读取权威投影并完成外部写入。投影解码失败与外部调用失败共用
+            # 同一个退避出口，任一确定性错误都只影响本项，不会中止整批。
+            async with MySQLDatabase.session() as session:
+                projection = await MemoryIndexOutboxRepository(session).projection(
+                    item.memory_uid
+                )
+            writable = _writable_projection(item, projection)
             await self._apply(item, writable)
         except Exception as error:
             # 步骤二：单目标失败只退避自身行，保留期望状态供后续重试。
@@ -129,14 +126,17 @@ class MemoryIndexDispatcher:
             _log_index_sync_deferred(item.memory_uid)
             return False
         # 步骤三：按本次实际写入的内容确认；权威内容在外部写入期间再次变更时
-        # 不确认，保留新期望状态由后续周期重新同步。
+        # 不确认，并按当前权威状态重建该目标的收敛请求——否则并发删除遇到较慢的
+        # 外部调用时，迟到写入会把已删除内容重新写进派生索引且再无 outbox 请求
+        # 可以纠正它，造成永久残留。
         async with MySQLDatabase.session() as session:
-            acknowledged = await MemoryIndexOutboxRepository(
-                session
-            ).acknowledge_outbox(
+            repository = MemoryIndexOutboxRepository(session)
+            acknowledged = await repository.acknowledge_outbox(
                 item,
                 content_hash=(writable.content_hash if writable is not None else None),
             )
+            if not acknowledged:
+                await repository.enqueue_convergence(item.memory_uid, item.target)
         if not acknowledged:
             _log_index_sync_superseded(item.memory_uid)
         return acknowledged

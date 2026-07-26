@@ -210,6 +210,58 @@ class MemoryIndexOutboxRepository:
         )
         return bool(getattr(result, "rowcount", 0))
 
+    async def enqueue_convergence(
+        self,
+        memory_uid: str,
+        target: MemoryIndexTarget,
+    ) -> None:
+        """确认失败后按当前权威状态为单个目标重建收敛请求。
+
+        确认失败意味着本次写入已经与权威内容不一致：可能是内容再次变更，也可能是
+        并发删除的 DELETE 期望已被另一个 worker 确认并删除了 outbox 行。后者若不
+        重建请求，迟到写入的陈旧内容就会永久留在派生索引里，没有任何后续请求能
+        纠正它。
+
+        已存在 outbox 行时只纠正操作与投影版本，不重置 `attempts` 与
+        `available_at`，避免覆盖那一行自己的退避进度与死信预算。
+
+        Args:
+            memory_uid: 需要重新收敛的权威记忆 UID。
+            target: 需要重新收敛的派生索引目标。
+        """
+        # 步骤一：权威行已被物理清理时无处可收敛，且外键不允许挂空引用，直接返回。
+        status = (
+            await self._session.execute(
+                select(agent_memory.c.status).where(agent_memory.c.uid == memory_uid)
+            )
+        ).scalar_one_or_none()
+        if status is None:
+            return
+        # 步骤二：按当前权威状态派生目标操作——仍为 ACTIVE 则写入，否则删除。
+        operation = (
+            MemoryIndexOperation.UPSERT
+            if str(status) == MemoryStatus.ACTIVE.value
+            else MemoryIndexOperation.DELETE
+        )
+        statement = insert(memory_index_outbox).values(
+            {
+                "memory_uid": memory_uid,
+                "target": target.value,
+                "operation": operation.value,
+                "projection_version": app_config.memory.projection_version,
+                "attempts": 0,
+                "available_at": func.now(),
+                "last_error_type": None,
+            }
+        )
+        # 步骤三：行已被删除时新建收敛请求；行仍在时只纠正操作，保留其退避进度。
+        await self._session.execute(
+            statement.on_duplicate_key_update(
+                operation=statement.inserted.operation,
+                projection_version=statement.inserted.projection_version,
+            )
+        )
+
     async def retry_outbox(
         self,
         item: MemoryOutboxItem,
@@ -220,8 +272,11 @@ class MemoryIndexOutboxRepository:
         # 步骤一：根据已尝试次数计算有上限的指数退避时间。
         attempts = item.attempts + 1
         delay = min(2 ** min(attempts, 20), max_backoff_seconds)
-        # 步骤二：仅更新仍与已处理期望完全一致的行，避免迟到 worker 推迟后来
-        # 覆盖的新期望；退避时间由数据库端生成，与领取条件使用同一时钟。
+        # 步骤二：只更新仍属于本次领取的那一代期望状态。除完整期望条件外还要求
+        # 尝试次数未变且领取租约仍未到期：`set_desired_state` 覆盖同一行时会把
+        # `attempts` 重置为 0 并把 `available_at` 拉回当前时刻，因此迟到 worker 的
+        # 失败回写不会命中——否则它会把新内容的期望直接推到死信上限，使该内容
+        # 再也不被领取，派生索引长期保留陈旧数据。
         await self._session.execute(
             update(memory_index_outbox)
             .where(
@@ -229,6 +284,8 @@ class MemoryIndexOutboxRepository:
                 memory_index_outbox.c.target == item.target.value,
                 memory_index_outbox.c.operation == item.operation.value,
                 memory_index_outbox.c.projection_version == item.projection_version,
+                memory_index_outbox.c.attempts == item.attempts,
+                memory_index_outbox.c.available_at > func.now(),
             )
             .values(
                 attempts=attempts,
