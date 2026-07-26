@@ -907,6 +907,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 - None - task complete
 
 
+## Session 28: 移除审查问题修复回复模板
+
+**Date**: 2026-07-26
+**Task**: 移除审查问题修复回复模板
+**Branch**: `docs/remove-review-fix-template-20260726`
+
+### Summary
+
+删除未接入自动化流程的 GitHub 审查问题修复回复模板，同步收窄 code_review.md 与 AGENTS.md 的现行规范声明，并保留 P0/P1 inline 审查格式。
 ## Session 28: 统一 worker 的可重试错误判定
 
 **Date**: 2026-07-26
@@ -934,6 +943,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 
 | Hash | Message |
 |------|---------|
+| `4423a3c` | (see git log) |
 | `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 
