@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 新增活动任务索引与停滞巡检回收被 arq 重试预算耗尽的任务；记忆索引 dispatcher 改三段式短事务并在确认阶段复核权威一致性；UPSERT 收敛为权威状态、重建锁定复核 ACTIVE；outbox 退避改数据库端时钟并加死信上限；来源租约校验改求和、ANSWER 续期校验属主；DataAgentError.details 不再回填内部 message。新增 18 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+## Session 28: 修复记忆检索与投影的遗留正确性缺陷
+
+**Date**: 2026-07-26
+**Task**: 修复记忆检索与投影的遗留正确性缺陷
+**Branch**: `fix/memory-correctness-defects-20260726`
+
+### Summary
+
+event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在越过一页后永久错误）；移除权威回查阶段的 projection_version 行级否决，消除版本升级窗口内的检索全量黑障；setup 复核既有索引的 dynamic 与 memory_zh 分析器，防止 recreate 竞态下动态映射静默降级。新增 6 个单元测试。
 
 ### Main Changes
 
@@ -959,6 +968,7 @@ JobRecord 移除内部 graph_version 并改走内部读取路径；受理回答�
 | Hash | Message |
 |------|---------|
 | `cc7df84` | (see git log) |
+| `a5cd384` | (see git log) |
 
 ### Testing
 
