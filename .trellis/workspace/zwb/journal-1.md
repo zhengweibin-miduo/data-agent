@@ -905,3 +905,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 修复配置文件路径解析与加载入口
+
+**Date**: 2026-07-26
+**Task**: 修复配置文件路径解析与加载入口
+**Branch**: `fix/config-path-resolution-20260726`
+
+### Summary
+
+新增 resolve_config_path 四级解析（显式实参/DATA_AGENT_CONFIG/工作目录/源码树），显式指定缺失时直接失败不回退，全部缺失时报错列出候选绝对路径；新增 get_settings 缓存与 reset_settings。修复 wheel 安装后 parents[2] 指向 Lib 目录导致入口无法启动的问题，已在临时 venv 实测通过。新增 5 个单元测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `97cd19d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
