@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 30
-- **Last Active**: 2026-07-26
+- **Total Sessions**: 37
+- **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~940 | Active |
+| `journal-1.md` | ~1192 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,13 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-07-27 | 补齐外部服务超时与会话轮次租约 | `75e07e9` | `fix/service-timeouts-turn-lease-20260726` |
+| 36 | 2026-07-27 | 修复架构审查发现的可靠性与一致性缺陷 | `7c67f06`, `bd80e72` | `fix/arch-review-reliability-20260726` |
+| 35 | 2026-07-27 | 为精确基线检索建立文本哈希索引 | `57d2f8f` | `perf/exact-query-text-hash-20260727` |
+| 34 | 2026-07-27 | 清理记忆检索排序与索引效率问题 | `a9b2b2e` | `fix/memory-search-hygiene-20260726` |
+| 33 | 2026-07-27 | 校验记忆索引分析器绑定 | `fca09a0` | `fix/memory-index-analyzer-verification-20260727` |
+| 32 | 2026-07-27 | 修复配置文件路径解析与加载入口 | `582510b` | `fix/config-path-resolution-20260726` |
+| 31 | 2026-07-27 | 补齐领域模型字段描述 | `8b4c487` | `fix/model-field-descriptions-20260726` |
 | 1 | 2026-07-26 | 移除审查问题修复回复模板 | `4423a3c` | `docs/remove-review-fix-template-20260726` |
 | 2 | 2026-07-26 | 项目日志 AOP 上下文改造 | `ccbe542`, `5470f01` | `refactor/logger-aop-context-20260726` |
 | 3 | 2026-07-26 | 统一核心流程与 CRUD 中文步骤注释 | `3b57a54` | `chore/add-core-flow-comments-20260726` |
