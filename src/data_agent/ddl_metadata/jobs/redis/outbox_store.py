@@ -19,12 +19,15 @@ class JobOutboxStore:
 
     async def dispatch(self, queue: ArqRedis, limit: int = 100) -> int:
         """把 outbox 激活幂等写入 arq 后删除已处理项。"""
+        # 步骤一：按有界批次读取待调度激活，避免一次维护循环占用过多队列资源。
         members = cast(
             list[str],
             await RedisBaseStore.awaitable(
                 self._redis.zrange(self._keys.dispatch, 0, limit - 1)
             ),
         )
+        # 步骤二：使用 revision 感知的确定性 arq ID 幂等入队，成功后才移除
+        # 对应 outbox 成员，使崩溃重放不会产生第二个有效激活。
         dispatched = 0
         for member in members:
             job_id, revision_text = member.rsplit(":", 1)
@@ -38,6 +41,7 @@ class JobOutboxStore:
                 self._redis.zrem(self._keys.dispatch, member)
             )
             dispatched += 1
+        # 步骤三：返回本批已确认调度数量，供维护任务观测推进结果。
         return dispatched
 
     async def pending_checkpoint_cleanup(self, limit: int = 100) -> list[str]:

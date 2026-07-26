@@ -26,12 +26,14 @@ class MemoryIndexDispatcher:
     async def dispatch(self) -> int:
         """有界领取并处理一个 outbox 批次。"""
         processed = 0
+        # 步骤一：在当前事务中按配置上限领取待同步的期望状态。
         async with MySQLDatabase.session() as session:
             repository = MemoryIndexOutboxRepository(session)
             items = await repository.claim_outbox(app_config.memory.outbox_batch_size)
-            # ES/Qdrant 独立确认；单目标失败只退避自身行，不得阻断或代替另一目标。
+            # 步骤二：逐项处理 ES/Qdrant；两个目标独立确认，互不替代。
             for item in items:
                 try:
+                    # 步骤三：从 MySQL 重建当前投影，再执行目标对应的幂等写入。
                     projection = await repository.projection(item.memory_uid)
                     if item.target == MemoryIndexTarget.ELASTICSEARCH:
                         index = MemoryElasticsearchIndex(
@@ -51,9 +53,11 @@ class MemoryIndexDispatcher:
                                 [projection.memory_text]
                             )
                             await index.upsert(projection, vector[0])
+                    # 步骤四：仅在外部写入成功后确认当前目标。
                     await repository.acknowledge_outbox(item)
                     processed += 1
                 except Exception as error:
+                    # 步骤五：单目标失败只退避自身行，保留期望状态供后续重试。
                     await repository.retry_outbox(
                         item,
                         type(error).__name__,

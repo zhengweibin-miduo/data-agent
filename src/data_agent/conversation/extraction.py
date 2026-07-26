@@ -60,16 +60,18 @@ def _validated_candidates(
     result: ExtractionResult,
 ) -> list[MemoryCandidate]:
     """用消息归属、角色、顺序和精确 quote 校验模型候选。"""
-    # 模型输出不具备权威性；只有能回查到本批原始消息、角色和顺序的精确用户
-    # quote（以及对助手结论的明确后续确认）才允许写入长期记忆。
     by_uid = {message.uid: message for message in claim.messages}
     accepted: list[MemoryCandidate] = []
     accepted_scopes: set[str] = set()
     for candidate in result.candidates:
+        # 步骤一：先规范化候选值与逻辑键，空白模型输出不进入证据校验。
         value = candidate.value.strip()
         memory_key = candidate.key.strip().casefold()
         if not value or not memory_key:
             continue
+
+        # 步骤二：证据 UID 必须全部属于本次领取的同租户会话窗口，且基础证据
+        # 只能引用用户消息，避免模型伪造 UID 或把助手陈述当作用户事实。
         evidence = [by_uid.get(uid) for uid in candidate.evidence_message_uids]
         if any(message is None for message in evidence) or any(
             message is not None and message.role != MessageRole.USER
@@ -77,6 +79,9 @@ def _validated_candidates(
         ):
             continue
         user_messages = [message for message in evidence if message is not None]
+
+        # 步骤三：支持原文必须逐字存在于已验证的用户消息中，并直接包含候选值；
+        # 语义近似或脱离原文的模型归纳不能获得长期记忆权威性。
         quoting = [
             message
             for message in user_messages
@@ -86,6 +91,9 @@ def _validated_candidates(
             continue
         if value.casefold() not in candidate.supporting_user_quote.casefold():
             continue
+
+        # 步骤四：若候选源自助手结论，既要核验助手精确原文，也要找到时间上更晚、
+        # 明确复述该结论的用户消息；单独的助手陈述或模糊应答均不能构成确认。
         assistant_uid = candidate.confirmed_assistant_message_uid
         if assistant_uid is not None:
             assistant = by_uid.get(assistant_uid)
@@ -111,6 +119,9 @@ def _validated_candidates(
             evidence_message_uids=candidate.evidence_message_uids,
             confirmed_assistant_message_uid=assistant_uid,
         )
+
+        # 步骤五：同批结果按“类别 + 规范化键”占用一个逻辑作用域，避免模型用
+        # 多条候选争夺同一用户事实的活动版本。
         category = user_memory_category(candidate.category)
         logical_key = f"{category}:{memory_key}"
         if logical_key in accepted_scopes:
@@ -123,6 +134,9 @@ def _validated_candidates(
         )
         policy = category_policy(category)
         content_json = canonical_content_json(content)
+
+        # 步骤六：证据与作用域均通过后才构建权威候选；用户、会话和首条精确
+        # quote 的消息标识共同保留来源，稳定指纹和内容摘要供后续生命周期决策使用。
         accepted.append(
             MemoryCandidate(
                 uid=memory_uid(
@@ -162,6 +176,7 @@ class ConversationMemoryExtractor:
 
     async def dispatch(self) -> int:
         """处理一个有界提炼批次。"""
+        # 步骤一：绑定结构化输出契约并以配置批量上限约束本轮模型调用总量。
         processed = 0
         structured = self._model.with_structured_output(
             ExtractionResult,
@@ -169,6 +184,7 @@ class ConversationMemoryExtractor:
         )
         remaining = app_config.conversation.extraction_batch_size
         while remaining > 0:
+            # 步骤二：用短事务领取不超过并发上限的任务，提交 lease 后再离开数据库。
             async with MySQLDatabase.session() as session:
                 claims = await ConversationRepository(session).claim_extractions(
                     limit=min(remaining, app_config.llm.max_concurrency),
@@ -177,6 +193,8 @@ class ConversationMemoryExtractor:
                 )
             if not claims:
                 break
+
+            # 步骤三：并发处理本波已领取任务，并按领取数而非成功数消耗批次预算。
             results = await asyncio.gather(
                 *(self._process_claim(structured, claim) for claim in claims)
             )
@@ -193,9 +211,8 @@ class ConversationMemoryExtractor:
         claim: ClaimedExtraction,
     ) -> int:
         """处理刚领取的一条任务并按 token 完成或退避。"""
-        # 模型调用不占用数据库事务；成功时候选记忆与摘要确认同事务提交，
-        # 任一步失败都保留 outbox，并释放 lease 后退避重试。
         try:
+            # 步骤一：在数据库事务外组装有界证据并调用结构化模型，避免长时间持锁。
             payload = {
                 "summary": claim.summary,
                 "messages": [
@@ -214,6 +231,8 @@ class ConversationMemoryExtractor:
                     HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
                 ]
             )
+
+            # 步骤二：校验模型结果后，在新事务中原子写入候选记忆、摘要和 outbox 完成态。
             result = ExtractionResult.model_validate(value)
             candidates = _validated_candidates(claim, result)
             async with MySQLDatabase.session() as session:
@@ -227,6 +246,7 @@ class ConversationMemoryExtractor:
                     raise RuntimeError("提炼 lease 已失效")
             return 1
         except Exception as error:
+            # 步骤三：任一步失败都保留 outbox，并仅由当前 lease 持有者释放租约后退避。
             async with MySQLDatabase.session() as session:
                 await ConversationRepository(session).retry_extraction(
                     claim,

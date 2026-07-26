@@ -15,7 +15,9 @@ class CheckpointStore:
     @classmethod
     async def initialize(cls) -> AsyncRedisSaver:
         """创建检查点客户端并初始化 Redis 索引。"""
+        # 步骤一：以共享实例是否存在作为幂等门禁，避免重复进入异步资源上下文。
         if cls._client is None:
+            # 步骤二：创建并显式进入 saver 上下文，使后续设置操作使用同一连接资源。
             client = AsyncRedisSaver(
                 app_config.redis.url,
                 checkpoint_prefix=f"{app_config.redis.key_prefix}:checkpoint",
@@ -24,11 +26,13 @@ class CheckpointStore:
                 ),
             )
             await client.__aenter__()
+            # 步骤三：初始化索引；失败时立即退出部分进入的上下文并保留原始异常。
             try:
                 await client.asetup()
             except BaseException:
                 await client.__aexit__(None, None, None)
                 raise
+            # 步骤四：仅在设置完整成功后发布共享实例，防止消费者取得半初始化客户端。
             cls._client = client
         return cls._client
 
@@ -44,7 +48,9 @@ class CheckpointStore:
     @classmethod
     async def close(cls) -> None:
         """关闭检查点客户端及其连接。"""
+        # 步骤一：先摘除共享引用，使关闭期间的新初始化不会被旧资源覆盖。
         client = cls._client
         cls._client = None
+        # 步骤二：仅退出本次捕获的 saver 上下文，未初始化或重复关闭保持幂等。
         if client is not None:
             await client.__aexit__(None, None, None)

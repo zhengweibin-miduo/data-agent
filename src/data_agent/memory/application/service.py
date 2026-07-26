@@ -70,7 +70,7 @@ class MemoryService:
         leases: MemoryMutationLeaseProvider,
         references: MemoryReferenceValidator,
     ) -> None:
-        """绑定 DDL 来源租约与外部引用校验 interface。"""
+        """绑定 DDL 来源租约与外部引用校验接口。"""
         self._leases = leases
         self._references = references
         self._search = MemorySearchService()
@@ -119,11 +119,13 @@ class MemoryService:
         user_id: str | None = None,
     ) -> MemoryDetail:
         """按稳定 UID 从 MySQL 读取权威详情。"""
+        # 步骤一：按租户边界读取权威记录。
         async with MySQLDatabase.session() as session:
             memory = await MemoryRepository(session).get_by_uid(
                 uid,
                 user_id=user_id,
             )
+        # 步骤二：统一把缺失或租户不匹配投影为安全的不存在错误。
         if memory is None:
             raise DataAgentError(
                 "memory_not_found",
@@ -142,6 +144,7 @@ class MemoryService:
         limit: int,
     ) -> MemoryHistoryPage:
         """读取有界只追加历史。"""
+        # 步骤一：按租户边界和分页窗口读取只追加事件。
         async with MySQLDatabase.session() as session:
             page = await MemoryRepository(session).history(
                 uid,
@@ -149,6 +152,7 @@ class MemoryService:
                 offset=offset,
                 limit=limit,
             )
+        # 步骤二：避免通过历史接口泄露记录是否属于其他租户。
         if page is None:
             raise DataAgentError(
                 "memory_not_found",
@@ -167,6 +171,7 @@ class MemoryService:
         user_id: str | None = None,
     ) -> MemoryUpdateResponse:
         """记录用户确认修正；DDL 修正需重处理后才应用到 Meta。"""
+        # 步骤一：读取当前权威版本，并在进入写事务前快速拒绝无效状态。
         target = await self._get_stored(uid, user_id=user_id)
         if target.detail.status != MemoryStatus.ACTIVE:
             raise DataAgentError(
@@ -182,6 +187,7 @@ class MemoryService:
                 "目标记忆版本已发生变化",
                 http_status=409,
             )
+        # 步骤二：固定原类别、作用域和证据归属，并拒绝内容完全相同的修正。
         normalized = self._normalize_content(target.detail, content)
         if memory_content_hash(normalized) == target.detail.content_hash:
             raise DataAgentError(
@@ -190,7 +196,8 @@ class MemoryService:
                 "修正内容与当前事实相同",
                 http_status=409,
             )
-        # 两类修正都立即创建活动记忆版本；DDL 修正额外与同来源工作流串行，
+        # 步骤三：两类修正都立即创建活动版本；用户记忆不参与 DDL 来源竞争。
+        # DDL 修正额外与同来源工作流串行，
         # 并用 requires_reprocess 提示调用方重新生成 Meta。
         if user_id is not None:
             return await self._replace_memory(
@@ -215,6 +222,7 @@ class MemoryService:
         user_id: str | None = None,
     ) -> MemoryDeleteResponse:
         """执行可审计软删除；DDL 记忆使用来源租约，用户级记忆使用独立事务。"""
+        # 步骤一：读取目标并在加锁前快速拒绝陈旧版本。
         target = await self._get_stored(uid, user_id=user_id)
         if target.detail.record_version != expected_version:
             raise DataAgentError(
@@ -223,8 +231,8 @@ class MemoryService:
                 "目标记忆版本已发生变化",
                 http_status=409,
             )
-        # 删除保留历史并投递索引 DELETE，而不物理移除权威记录；来源租约仅用于
-        # 防止 DDL 工作流并发重建覆盖删除。
+        # 步骤二：用户记忆在独立事务中锁定并复核版本，再执行带索引 DELETE
+        # 期望状态的软删除，保留完整审计历史。
         if user_id is not None:
             async with MySQLDatabase.session() as session:
                 current = await MemoryRepository(session).get_by_uid(
@@ -248,6 +256,8 @@ class MemoryService:
                     )
                 await MemoryRepository(session).soft_delete(current)
             return MemoryDeleteResponse(memory_uid=uid)
+        # 步骤三：DDL 记忆先获取来源租约，再在锁内复核并软删除，
+        # 防止并发工作流重建覆盖删除状态。
         async with self._leases.mutation_lease(target.detail.source):
             async with MySQLDatabase.session() as session:
                 repository = MemoryRepository(session)
@@ -276,11 +286,13 @@ class MemoryService:
         user_id: str | None = None,
     ) -> StoredMemory:
         """读取内部主键与权威详情。"""
+        # 步骤一：按租户边界读取内部主键和权威详情。
         async with MySQLDatabase.session() as session:
             memory = await MemoryRepository(session).get_by_uid(
                 uid,
                 user_id=user_id,
             )
+        # 步骤二：统一隐藏缺失与跨租户访问的差异。
         if memory is None:
             raise DataAgentError(
                 "memory_not_found",
@@ -295,8 +307,7 @@ class MemoryService:
         target: MemoryDetail,
         content: MemoryContent,
     ) -> MemoryContent:
-        """固定类别和对象身份，阻止修正越过原作用域。"""
-        # 修正只能改变事实内容，原类别、scope key、对象身份与证据归属均不可迁移。
+        """固定原类别、作用域键、对象身份与证据归属，阻止修正迁移作用域。"""
         if type(content) is not type(target.content):
             raise DataAgentError(
                 "memory_category_conflict",
@@ -374,6 +385,7 @@ class MemoryService:
         expected_version: int,
     ) -> MemoryUpdateResponse:
         """以新活动版本替代旧事实并保留完整历史。"""
+        # 步骤一：基于规范内容和原作用域构建内容寻址的新版本候选。
         content_json = canonical_content_json(content)
         policy = category_policy(target.detail.category)
         uid_source = (
@@ -421,7 +433,7 @@ class MemoryService:
             decision=MemoryDecision.UPDATE,
             actor_type=MemoryActorType.USER,
         )
-        # 入口校验不能替代锁内复核；新版本、历史事件与活动槽位必须原子提交。
+        # 步骤二：锁定当前活动版本并复核状态，入口校验不能替代事务内校验。
         async with MySQLDatabase.session() as session:
             repository = MemoryRepository(session)
             current = await repository.get_by_uid(
@@ -440,6 +452,8 @@ class MemoryService:
                     "目标记忆已发生变化",
                     http_status=409,
                 )
+            # 步骤三：DDL 内容先验证外部引用，再原子写入新版本、历史事件、
+            # 活动槽位和双目标索引期望状态。
             if user_id is None:
                 await self._references.validate(session, content)
             await repository.upsert_candidates([candidate])
@@ -450,6 +464,7 @@ class MemoryService:
                     "修正内容与已删除或未生效的历史事实冲突",
                     http_status=409,
                 )
+            # 步骤四：在同一事务中回读事件历史，供响应返回已提交的事件编号。
             history = await repository.history(
                 candidate.uid,
                 user_id=user_id,

@@ -43,6 +43,8 @@ async def stream_job_events(
     cursor: str,
 ) -> AsyncGenerator[str, None]:
     """先发权威快照，再阻塞续接 Redis Stream 并修复缺失通知。"""
+    # 步骤一：每次连接先以 Job Hash 的公开投影建立基线；Stream 只是通知日志，
+    # 因此不能用客户端游标后的第一条通知替代当前权威状态。
     snapshot = jobs.snapshot_event(record, cursor)
     yield encode_sse(snapshot)
     if record.status in _TERMINAL_STATUSES:
@@ -56,6 +58,7 @@ async def stream_job_events(
     )
     try:
         while not await request.is_disconnected():
+            # 步骤二：游标只随已发送事件前进，使断线重连可以继续读取未消费的通知。
             events = await jobs.read_events(
                 record.job_id,
                 cursor,
@@ -73,6 +76,8 @@ async def stream_job_events(
 
             if await request.is_disconnected():
                 return
+            # 步骤三：阻塞读取超时后重读权威 Hash；若状态转换后的通知发布失败，
+            # 投影差异会补发 snapshot；无差异才发送不改变业务游标的心跳。
             latest = await jobs.get(record.job_id)
             repaired = jobs.snapshot_event(latest, cursor)
             projection = _data_projection(repaired.data)
@@ -85,6 +90,8 @@ async def stream_job_events(
             else:
                 yield ": heartbeat\n\n"
     except (RedisError, DataAgentError, ValueError) as error:
+        # 步骤四：响应启动后已无法改写 HTTP 状态，只发送基于最后公开坐标的固定错误，
+        # 不泄露 Redis 异常或内部载荷，随后结束连接让客户端安全重连。
         logger.bind(
             trace_id=record.job_id,
             component="ddl_metadata.api",

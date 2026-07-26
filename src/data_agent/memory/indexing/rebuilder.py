@@ -24,6 +24,7 @@ class MemoryIndexRebuilder:
         confirmed_qdrant_collection: str,
     ) -> None:
         """仅在调用方逐字确认两个配置目标后重建派生索引。"""
+        # 步骤一：逐字校验两个目标，防止误删非项目资源。
         expected = (
             app_config.elasticsearch.memory_index,
             app_config.qdrant.memory_collection,
@@ -33,18 +34,22 @@ class MemoryIndexRebuilder:
                 "索引重建目标确认不匹配: "
                 f"Elasticsearch={expected[0]}, Qdrant={expected[1]}"
             )
+        # 步骤二：确认后只重建配置中的 ES 索引和 Qdrant 集合。
         await MemoryElasticsearchIndex(ElasticsearchClient.get_client()).recreate()
         await MemoryQdrantIndex(QdrantClient.get_client()).recreate()
 
     async def enqueue_batch(self, after_id: int = 0) -> MemoryRebuildResult:
         """按权威主键游标生成一个双目标 UPSERT 批次。"""
+        # 步骤一：按权威主键游标有界扫描活动记忆。
         async with MySQLDatabase.session() as session:
             repository = MemoryIndexOutboxRepository(session)
             rows = await repository.scan_active(
                 after_id=after_id,
                 limit=app_config.memory.rebuild_batch_size,
             )
+            # 步骤二：为本批 UID 写入两个派生目标的 UPSERT 期望状态。
             await repository.enqueue_rebuild({str(row["uid"]) for row in rows})
+        # 步骤三：仅在本批已满时返回下一游标，空余批次表示扫描结束。
         return MemoryRebuildResult(
             processed=len(rows),
             next_after_id=(

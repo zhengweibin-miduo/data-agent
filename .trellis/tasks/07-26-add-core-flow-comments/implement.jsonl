@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端范围、模块职责和质量入口"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "后端模块职责与依赖方向"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "中文 Docstring 与行内注释契约"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "会话事务与有界上下文契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Meta 快照、权威记忆与 outbox 原子事务契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "DDL 受理、重试与终态清理契约"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Redis job、checkpoint、SSE 与资源生命周期契约"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流与边界注释方法"}
+{"file": ".trellis/tasks/07-26-add-core-flow-comments/research/core-flow-comment-map.md", "reason": "六类核心流程的精确注释落点与排除范围"}

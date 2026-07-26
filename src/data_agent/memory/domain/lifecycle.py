@@ -28,8 +28,7 @@ def decide_memory(
     delete_requested: bool = False,
     merge_requested: bool = False,
 ) -> MemoryDecision:
-    """在模型辅助比较前完成可确定的五类决策。"""
-    # 先裁决删除、空槽位和幂等分支，避免 tombstone 或同内容被误判为新增版本。
+    """先裁决删除、空槽位和幂等分支，避免墓碑或同内容被误判为新增版本。"""
     if delete_requested:
         return MemoryDecision.DELETE if has_active else MemoryDecision.NOOP
     if not has_active:

@@ -9,7 +9,7 @@ def reciprocal_rank_fusion(
     constant: int,
     exact_uids: set[str] | None = None,
 ) -> list[tuple[str, float, list[str]]]:
-    """按稳定 UID tie-break 融合不同分数量纲的排名。"""
+    """按稳定 UID 打破并列，融合不同分数量纲的排名。"""
     scores: dict[str, float] = {}
     signals: dict[str, set[str]] = {}
     for signal, uids in rankings:

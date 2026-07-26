@@ -86,6 +86,8 @@ def _inline_role(
 
 def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     """把单个 CREATE TABLE AST 转为物理表。"""
+    # 步骤一：先确定完整表身份并生成稳定 ID，同时汇总表级约束；后续列解析才能把
+    # 列级与表级声明合并成唯一结构角色。
     schema = create.this
     if not isinstance(schema, exp.Schema) or not isinstance(schema.this, exp.Table):
         raise DataAgentError(
@@ -102,6 +104,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     )
     identifier = table_id(source, qualified_name.casefold())
     table_primary, table_foreign = _constraint_column_names(schema)
+    # 步骤二：逐列执行名称去重、角色优先级和类型完整性校验，再投影为物理列模型。
     columns: list[PhysicalColumn] = []
     seen_columns: set[str] = set()
     for item in schema.expressions:
@@ -137,6 +140,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
                 structural_role=role,
             )
         )
+    # 步骤三：列集合完成后再校验表级约束引用，避免接受指向不存在列的物理结构。
     if not columns:
         raise DataAgentError(
             "empty_table",
@@ -167,6 +171,7 @@ def _parse_ddl_sync(
     limits: APISettings = app_config.api,
 ) -> PhysicalSchema:
     """在线程中解析并规范化有界 MySQL CREATE TABLE DDL。"""
+    # 步骤一：在进入 SQLGlot 前按 UTF-8 字节限制输入，并把语法错误收敛为安全业务错误。
     encoded_size = len(ddl.encode("utf-8"))
     if encoded_size > limits.max_ddl_bytes:
         raise DataAgentError(
@@ -189,6 +194,8 @@ def _parse_ddl_sync(
     if not statements:
         raise DataAgentError("empty_ddl", "parse_ddl", "DDL 不能为空")
 
+    # 步骤二：整批语句必须全部是 CREATE TABLE；混入其他 SQL 时拒绝整个快照，
+    # 不对其中一部分表做部分解析或持久化。
     creates: list[exp.Create] = []
     for statement in statements:
         if (
@@ -212,6 +219,7 @@ def _parse_ddl_sync(
             },
         )
 
+    # 步骤三：表级投影完成后统一检查跨语句重复表和全局列数上限。
     tables = [_parse_table(source, create) for create in creates]
     normalized_tables = [table.qualified_name.casefold() for table in tables]
     if len(set(normalized_tables)) != len(normalized_tables):
@@ -232,6 +240,8 @@ def _parse_ddl_sync(
             },
         )
 
+    # 步骤四：DDL 哈希描述规范化语句文本；Schema 指纹只描述物理表列投影。
+    # 两者分离，使格式变化与真实结构变化拥有不同的稳定判定依据。
     canonical_ddl = ";\n".join(
         create.sql(dialect="mysql", pretty=True) for create in creates
     )

@@ -63,7 +63,7 @@ def _filter_conditions(
 
 
 class MemoryQdrantIndex:
-    """管理项目专用 Qdrant 记忆 collection。"""
+    """管理项目专用 Qdrant 记忆集合。"""
 
     def __init__(self, client: AsyncQdrantClient) -> None:
         """绑定共享异步客户端。"""
@@ -71,7 +71,8 @@ class MemoryQdrantIndex:
         self._collection = app_config.qdrant.memory_collection
 
     async def setup(self) -> None:
-        """幂等创建 collection 与过滤 payload 索引。"""
+        """幂等创建集合与过滤载荷索引。"""
+        # 步骤一：集合不存在时按当前向量维度和距离度量创建。
         if not await self._client.collection_exists(self._collection):
             await self._client.create_collection(
                 collection_name=self._collection,
@@ -80,6 +81,7 @@ class MemoryQdrantIndex:
                     distance=Distance(app_config.qdrant.distance),
                 ),
             )
+        # 步骤二：幂等补齐严格作用域检索需要的载荷索引。
         for field in (
             "source",
             "user_id",
@@ -97,9 +99,11 @@ class MemoryQdrantIndex:
             )
 
     async def recreate(self) -> None:
-        """只重建项目配置的专用 collection。"""
+        """只重建项目配置的专用集合。"""
+        # 步骤一：仅删除配置明确指定的项目专用集合。
         if await self._client.collection_exists(self._collection):
             await self._client.delete_collection(self._collection)
+        # 步骤二：按当前向量与过滤配置重新创建集合。
         await self.setup()
 
     async def upsert(
@@ -108,8 +112,10 @@ class MemoryQdrantIndex:
         vector: list[float],
     ) -> None:
         """校验向量维度后按稳定点 ID 幂等覆盖。"""
+        # 步骤一：写入前校验向量维度与集合配置一致。
         if len(vector) != app_config.qdrant.vector_size:
             raise ValueError("TEI embedding 维度与 Qdrant 配置不一致")
+        # 步骤二：以稳定点 ID 幂等覆盖向量和有界投影载荷。
         await self._client.upsert(
             collection_name=self._collection,
             points=[
@@ -140,8 +146,10 @@ class MemoryQdrantIndex:
         user_id: str | None = None,
     ) -> list[str]:
         """在严格作用域过滤后执行向量检索。"""
+        # 步骤一：先校验查询向量维度，避免错误向量进入远端检索。
         if len(vector) != app_config.qdrant.vector_size:
             raise ValueError("TEI query embedding 维度与 Qdrant 配置不一致")
+        # 步骤二：在来源、租户、类别、状态和版本过滤后执行向量查询。
         result = await self._client.query_points(
             collection_name=self._collection,
             query=vector,
@@ -149,6 +157,7 @@ class MemoryQdrantIndex:
             limit=limit,
             with_payload=["memory_uid"],
         )
+        # 步骤三：只返回具备稳定记忆 UID 的候选，不信任派生载荷内容。
         return [
             str(point.payload["memory_uid"])
             for point in result.points

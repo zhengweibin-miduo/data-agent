@@ -203,11 +203,16 @@ class MemoryRepository:
         """幂等写入已接受事实、历史、关联和双目标 outbox。"""
         if not candidates:
             return
+        # 步骤一：统一执行类别策略并校验批次活动槽，
+        # 避免同一事务内的候选彼此争用唯一 ACTIVE 位置。
         for candidate in candidates:
             validate_candidate_policy(candidate)
         active_keys = [_active_key(candidate) for candidate in candidates]
         if len(active_keys) != len(set(active_keys)):
             raise ValueError("同一批次不能包含重复的活动记忆槽")
+
+        # 步骤二：识别不可复活的 DELETED UID tombstone；
+        # 重放相同内容只能审计为 NOOP，并继续维持删除投影。
         candidate_uids = {candidate.uid for candidate in candidates}
         existing_rows = (
             await self._session.execute(
@@ -247,6 +252,8 @@ class MemoryRepository:
         versioned_uids: dict[str, str] = {}
         scope_deleted_uids: set[str] = set()
         for candidate in accepted_candidates:
+            # 步骤三：锁定同一逻辑事实的全部版本后再决策，
+            # 确保生命周期比较和 ACTIVE 唯一槽基于同一权威快照。
             base_uid = candidate.uid
             active_key = _active_key(candidate)
             scope_rows = list(
@@ -357,6 +364,9 @@ class MemoryRepository:
                 )
             else:
                 candidate.supersedes_uids = []
+
+            # 步骤四：历史内容再次成为当前事实时创建新 UID；
+            # 先腾空旧活动槽，稍后再写入新权威版本。
             record_version = 1 + max(
                 (int(row["record_version"]) for row in scope_rows),
                 default=0,
@@ -375,6 +385,8 @@ class MemoryRepository:
                     .values(active_key=None)
                 )
 
+        # 步骤五：改写同批候选对刚版本化事实的引用，
+        # 所有关联必须改写到新 UID 后再做目标存在性校验。
         for candidate in accepted_candidates:
             candidate.derived_from_uids = [
                 versioned_uids.get(uid, uid) for uid in candidate.derived_from_uids
@@ -389,6 +401,7 @@ class MemoryRepository:
             if candidate.decision not in {MemoryDecision.DELETE, MemoryDecision.NOOP}
         ]
 
+        # 步骤六：为 NOOP 和 DELETE 写入权威历史，并让 DELETE 撤销活动槽及双索引期望。
         if noop_rows:
             await self._session.execute(
                 insert(agent_memory_event).values(
@@ -439,6 +452,7 @@ class MemoryRepository:
                 MemoryIndexOperation.DELETE,
             )
 
+        # 步骤七：仅将产生新版本的候选写入权威表，避免原地改写既有内容。
         if accepted_candidates:
             statement = insert(agent_memory).values(
                 [
@@ -476,6 +490,8 @@ class MemoryRepository:
                 ]
             )
             await self._session.execute(statement)
+
+        # 步骤八：从权威表解析全部关联端点，缺失目标时回滚以避免悬空关系。
         all_uids = {
             uid
             for candidate in accepted_candidates
@@ -498,6 +514,7 @@ class MemoryRepository:
         if missing:
             raise ValueError(f"记忆关联目标不存在: {','.join(sorted(missing))}")
 
+        # 步骤九：先为新权威版本追加事件，再建立三类记忆关系。
         new_candidates = [
             candidate
             for candidate in accepted_candidates
@@ -544,6 +561,8 @@ class MemoryRepository:
                 )
             )
 
+        # 步骤十：替代关系落库后再把已腾空活动槽的旧版本标记为 SUPERSEDED，
+        # 并要求两个派生索引删除旧 UID。
         superseded = {
             uid
             for candidate in accepted_candidates
@@ -611,6 +630,9 @@ class MemoryRepository:
                 superseded,
                 MemoryIndexOperation.DELETE,
             )
+
+        # 步骤十一：写入新版本 UPSERT，并维持重放 tombstone 与作用域 tombstone 的
+        # DELETE 期望；旧替代版本的 DELETE 已在状态终结后写入同一调用方事务。
         await self._outbox.set_desired_state(
             {candidate.uid for candidate in accepted_candidates},
             MemoryIndexOperation.UPSERT,
@@ -632,6 +654,7 @@ class MemoryRepository:
         """批量读取一组精确作用域的活动权威记忆。"""
         if not scope_fingerprints:
             return {}
+        # 步骤一：把每个逻辑作用域与其结构指纹绑定为精确匹配条件。
         conditions = [
             and_(
                 agent_memory.c.memory_key == scope,
@@ -639,6 +662,7 @@ class MemoryRepository:
             )
             for scope, fingerprint in scope_fingerprints.items()
         ]
+        # 步骤二：按版本和有效期读取有界的 ACTIVE 权威行。
         rows = (
             await self._session.execute(
                 select(agent_memory)
@@ -658,6 +682,7 @@ class MemoryRepository:
                 .limit(len(conditions) * per_scope_limit)
             )
         ).mappings()
+        # 步骤三：按作用域分组，并再次执行单作用域数量上限。
         result = {scope: [] for scope in scope_fingerprints}
         for row in rows:
             scope = str(row["memory_key"])
@@ -675,6 +700,7 @@ class MemoryRepository:
         limit: int = 500,
     ) -> list[StoredMemory]:
         """读取完整模式指纹下的兼容活动记忆。"""
+        # 步骤一：按来源、完整指纹、类别、版本和有效期读取有界权威结果。
         rows = (
             await self._session.execute(
                 select(agent_memory)
@@ -704,6 +730,7 @@ class MemoryRepository:
         """批量读取一组记忆的指定出向关联目标 UID。"""
         if not memory_ids:
             return {}
+        # 步骤一：连接关联表与目标权威行，批量读取指定类型的出向关系。
         linked = agent_memory.alias("linked")
         rows = (
             await self._session.execute(
@@ -720,6 +747,7 @@ class MemoryRepository:
                 )
             )
         ).all()
+        # 步骤二：按源记忆主键聚合目标 UID，并为无关联输入保留空集合。
         result = {memory_id: set() for memory_id in memory_ids}
         for memory_id, uid in rows:
             result[int(memory_id)].add(str(uid))
@@ -733,6 +761,7 @@ class MemoryRepository:
         for_update: bool = False,
     ) -> StoredMemory | None:
         """读取一条权威记忆及有界关联。"""
+        # 步骤一：在租户边界内读取权威行，并按调用方要求获取更新锁。
         statement = select(agent_memory).where(
             agent_memory.c.uid == uid,
             (
@@ -744,8 +773,10 @@ class MemoryRepository:
         if for_update:
             statement = statement.with_for_update()
         row = (await self._session.execute(statement)).mappings().one_or_none()
+        # 步骤二：权威行不存在时立即返回，避免继续读取无归属关联。
         if row is None:
             return None
+        # 步骤三：在同一租户边界内有界读取该记忆的双向关联。
         identifier = int(row["id"])
         source_memory = agent_memory.alias("source_memory")
         linked_memory = agent_memory.alias("linked_memory")
@@ -804,6 +835,7 @@ class MemoryRepository:
         """批量回查活动权威内容，保持输入 UID 的稳定顺序。"""
         if not uids:
             return []
+        # 步骤一：在租户、状态和有效期边界内批量回查权威行。
         rows = (
             await self._session.execute(
                 select(agent_memory).where(
@@ -821,6 +853,7 @@ class MemoryRepository:
                 )
             )
         ).mappings()
+        # 步骤二：按输入 UID 顺序回排结果，并自然排除缺失或失效记录。
         by_uid = {
             str(row["uid"]): StoredMemory(int(row["id"]), _parse_detail(row))
             for row in rows
@@ -837,6 +870,7 @@ class MemoryRepository:
         limit: int,
     ) -> list[str]:
         """以 scope key 或完整投影文本执行安全的 MySQL 精确基线检索。"""
+        # 步骤一：构造来源、租户、状态、版本和精确文本的权威过滤条件。
         filters = [
             agent_memory.c.source == source,
             (
@@ -857,6 +891,7 @@ class MemoryRepository:
         ]
         if categories:
             filters.append(agent_memory.c.category.in_(categories))
+        # 步骤二：按最新更新时间读取有界 UID，作为派生索引不可用时的基线。
         return [
             str(uid)
             for uid in (
@@ -878,9 +913,11 @@ class MemoryRepository:
         limit: int,
     ) -> MemoryHistoryPage | None:
         """读取有界只追加历史。"""
+        # 步骤一：先解析当前租户可见的权威记忆，以确定逻辑事实作用域。
         memory = await self.get_by_uid(uid, user_id=user_id)
         if memory is None:
             return None
+        # 步骤二：按逻辑事实作用域读取有界追加事件，并多取一条判断后续页。
         rows = list(
             (
                 await self._session.execute(
@@ -910,6 +947,7 @@ class MemoryRepository:
                 )
             ).mappings()
         )
+        # 步骤三：将数据库事件解码为公开历史，并返回稳定分页元数据。
         events = [
             MemoryEvent(
                 id=int(row["id"]),
@@ -948,6 +986,7 @@ class MemoryRepository:
         """单调记录真正进入结果集的活动记忆访问。"""
         if not uids:
             return
+        # 步骤一：仅在来源、租户和 ACTIVE 边界内原子递增访问计数。
         await self._session.execute(
             update(agent_memory)
             .where(
@@ -968,6 +1007,7 @@ class MemoryRepository:
 
     async def expire_due(self, limit: int = 100) -> int:
         """批量过期到期记忆并投递派生索引删除。"""
+        # 步骤一：以跳锁批次领取到期 ACTIVE 行，让并发任务不重复处理同一版本。
         rows = list(
             (
                 await self._session.execute(
@@ -989,6 +1029,7 @@ class MemoryRepository:
         )
         if not rows:
             return 0
+        # 步骤二：复用共享生命周期写入，原子完成过期、审计和索引删除期望。
         return await self._expire_rows(rows)
 
     async def expire_fingerprint_bound(
@@ -1002,12 +1043,15 @@ class MemoryRepository:
         """失效指定作用域内与当前 DDL 指纹集合不再匹配的活动记忆。"""
         if memory_keys is not None and not memory_keys:
             return 0
+        # 步骤一：只在本次提交的 source/可选 memory_key 范围内构造失配条件，
+        # 不能越界清理未提交的 DDL 事实。
         fingerprint_filter = true()
         if valid_fingerprints:
             fingerprint_filter = or_(
                 agent_memory.c.schema_fingerprint.is_(None),
                 ~agent_memory.c.schema_fingerprint.in_(valid_fingerprints),
             )
+        # 步骤二：跳锁领取有界的指纹失配 ACTIVE 行。
         rows = list(
             (
                 await self._session.execute(
@@ -1036,12 +1080,14 @@ class MemoryRepository:
         )
         if not rows:
             return 0
+        # 步骤三：复用共享生命周期写入，原子完成过期、审计和索引删除期望。
         return await self._expire_rows(rows)
 
     async def _expire_rows(self, rows: list[RowMapping]) -> int:
         """应用共享过期状态、历史和索引删除。"""
         identifiers = {int(row["id"]) for row in rows}
         uids = {str(row["uid"]) for row in rows}
+        # 步骤一：先撤销权威 ACTIVE 槽并标记为 EXPIRED。
         await self._session.execute(
             update(agent_memory)
             .where(
@@ -1050,6 +1096,7 @@ class MemoryRepository:
             )
             .values(status=MemoryStatus.EXPIRED.value, active_key=None)
         )
+        # 步骤二：为每个过期版本追加系统审计事件。
         await self._session.execute(
             insert(agent_memory_event).values(
                 [
@@ -1065,13 +1112,16 @@ class MemoryRepository:
                 ]
             )
         )
+        # 步骤三：覆盖双目标 DELETE 期望，使状态、审计和投影在调用方事务中共同提交。
         await self._outbox.set_desired_state(uids, MemoryIndexOperation.DELETE)
         return len(rows)
 
     async def soft_delete(self, memory: StoredMemory) -> None:
         """软删除权威记忆并写历史及双目标 DELETE outbox。"""
+        # 步骤一：已删除记录直接返回，保持重复请求幂等。
         if memory.detail.status == MemoryStatus.DELETED:
             return
+        # 步骤二：先让 MySQL 权威行不可召回并释放 ACTIVE 唯一槽。
         await self._session.execute(
             update(agent_memory)
             .where(
@@ -1088,6 +1138,7 @@ class MemoryRepository:
                 deleted_at=func.now(),
             )
         )
+        # 步骤三：追加用户删除事件，保留被删除内容的审计证据。
         await self._session.execute(
             insert(agent_memory_event).values(
                 memory_id=memory.id,
@@ -1098,6 +1149,7 @@ class MemoryRepository:
                 actor_type=MemoryActorType.USER.value,
             )
         )
+        # 步骤四：覆盖双目标 DELETE 期望，异步收敛两个可重建索引。
         await self._outbox.set_desired_state(
             {memory.detail.uid},
             MemoryIndexOperation.DELETE,
@@ -1105,6 +1157,8 @@ class MemoryRepository:
 
     async def tombstone_user(self, user_id: str) -> None:
         """立即隐藏用户记忆并投递双目标删除期望。"""
+        # 步骤一：锁定用户全部尚未进入 purge 的版本，
+        # 阻止并发更新在整用户删除期间重新建立 ACTIVE 行。
         rows = (
             await self._session.execute(
                 select(
@@ -1125,6 +1179,8 @@ class MemoryRepository:
             return
         identifiers = {int(row["id"]) for row in values}
         uids = {str(row["uid"]) for row in values}
+        # 步骤二：tombstone 立即切断召回并标记物理清理请求，
+        # 但实体仍保留到两个派生目标均确认 DELETE。
         await self._session.execute(
             update(agent_memory)
             .where(
@@ -1138,6 +1194,8 @@ class MemoryRepository:
                 purge_requested_at=func.now(),
             )
         )
+        # 步骤三：仅为原 ACTIVE 版本新增删除事件；
+        # 已终结版本也需进入 outbox/purge，但不重复伪造生命周期事件。
         active = [
             row for row in values if str(row["status"]) == MemoryStatus.ACTIVE.value
         ]
@@ -1157,10 +1215,13 @@ class MemoryRepository:
                     ]
                 )
             )
+        # 步骤四：为全部版本覆盖双目标 DELETE 期望，作为物理清理前置门禁。
         await self._outbox.set_desired_state(uids, MemoryIndexOperation.DELETE)
 
     async def purge_ready_user_memories(self, limit: int = 100) -> int:
         """两个派生目标均确认删除后物理清理用户级 tombstone。"""
+        # 步骤一：只领取 outbox 已清空的 UID，确认两个目标均完成删除；
+        # 跳锁领取使多个 purge worker 可安全并行。
         rows = list(
             (
                 await self._session.execute(
@@ -1180,6 +1241,7 @@ class MemoryRepository:
         if not rows:
             return 0
         identifiers = {int(row["id"]) for row in rows}
+        # 步骤二：先移除双向关联和追加事件，最后删除权威实体以满足外键顺序。
         await self._session.execute(
             agent_memory_link.delete().where(
                 or_(
