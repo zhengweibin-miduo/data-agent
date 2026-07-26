@@ -57,83 +57,93 @@ class JobEventStage(StrEnum):
 class JobError(ContractModel):
     """公开安全错误。"""
 
-    code: str
-    stage: str
-    retryable: bool
-    attempt: int = 0
-    details: dict[str, str] = Field(default_factory=dict)
+    code: str = Field(description="代码或错误代码。")
+    stage: str = Field(description="业务阶段。")
+    retryable: bool = Field(description="错误是否可重试。")
+    attempt: int = Field(default=0, description="处理尝试次数。")
+    details: dict[str, str] = Field(default_factory=dict, description="附加详情。")
 
 
 class JobResult(ContractModel):
     """成功任务结果摘要。"""
 
-    ddl_hash: str
-    table_count: int
-    column_count: int
-    metric_count: int
+    ddl_hash: str = Field(description="DDL 内容哈希。")
+    table_count: int = Field(description="表数量。")
+    column_count: int = Field(description="列数量。")
+    metric_count: int = Field(description="指标数量。")
 
 
 class JobRecord(ContractModel):
     """Redis 中公开任务投影。"""
 
-    job_id: str
-    source: str
-    status: JobStatus
-    revision: int = 0
-    attempt: int = 0
-    question_round: int = 0
-    question_set_id: str | None = None
-    questions: list[MetricQuestion] | None = None
-    result: JobResult | None = None
-    error: JobError | None = None
-    created_at: datetime
-    updated_at: datetime
-    expires_at: datetime | None = None
-    graph_version: str
+    job_id: str = Field(description="任务唯一标识。")
+    source: str = Field(description="数据来源标识。")
+    status: JobStatus = Field(description="当前状态。")
+    revision: int = Field(default=0, description="对象修订号。")
+    attempt: int = Field(default=0, description="处理尝试次数。")
+    question_round: int = Field(default=0, description="当前澄清问题轮次。")
+    question_set_id: str | None = Field(default=None, description="问题集标识。")
+    questions: list[MetricQuestion] | None = Field(
+        default=None, description="问题列表。"
+    )
+    result: JobResult | None = Field(default=None, description="处理结果。")
+    error: JobError | None = Field(default=None, description="错误信息。")
+    created_at: datetime = Field(description="创建时间。")
+    updated_at: datetime = Field(description="最近更新时间。")
+    expires_at: datetime | None = Field(default=None, description="过期时间。")
+    graph_version: str = Field(description="工作流图版本。")
 
 
 class JobEventData(ContractModel):
     """SSE 中只包含公开任务投影的类型化数据。"""
 
-    job_id: str
-    revision: int = Field(ge=0)
-    attempt: int = Field(ge=0)
-    status: JobStatus
-    stage: JobEventStage
-    emitted_at: datetime
-    questions: list[MetricQuestion] | None = None
-    result: JobResult | None = None
-    error: JobError | None = None
+    job_id: str = Field(description="任务唯一标识。")
+    revision: int = Field(ge=0, description="对象修订号。")
+    attempt: int = Field(ge=0, description="处理尝试次数。")
+    status: JobStatus = Field(description="当前状态。")
+    stage: JobEventStage = Field(description="业务阶段。")
+    emitted_at: datetime = Field(description="事件发出时间。")
+    questions: list[MetricQuestion] | None = Field(
+        default=None, description="问题列表。"
+    )
+    result: JobResult | None = Field(default=None, description="处理结果。")
+    error: JobError | None = Field(default=None, description="错误信息。")
 
 
 class JobEvent(ContractModel):
     """带 Redis Stream 游标的公开任务事件。"""
 
-    event_id: str
-    event_type: JobEventType
-    data: JobEventData
+    event_id: str = Field(description="事件唯一标识。")
+    event_type: JobEventType = Field(description="事件类型。")
+    data: JobEventData = Field(description="扩展数据。")
 
 
 class DDLJobRequest(ContractModel):
     """DDL 任务提交请求。"""
 
-    source: str = Field(min_length=1, max_length=128, pattern=r"^[\w.-]+$")
-    dialect: Literal["mysql"] = "mysql"
-    ddl: str = Field(min_length=1)
+    source: str = Field(
+        min_length=1, max_length=128, pattern=r"^[\w.-]+$", description="数据来源标识。"
+    )
+    dialect: Literal["mysql"] = Field(default="mysql", description="DDL 方言。")
+    ddl: str = Field(min_length=1, description="DDL 文本。")
 
 
 class DDLJobAccepted(ContractModel):
     """DDL 任务受理响应。"""
 
-    job_id: str
-    status: Literal[JobStatus.PENDING] = JobStatus.PENDING
-    status_url: str
-    events_url: str | None = None
+    job_id: str = Field(description="任务唯一标识。")
+    status: Literal[JobStatus.PENDING] = Field(
+        default=JobStatus.PENDING, description="当前状态。"
+    )
+    status_url: str = Field(description="任务状态查询地址。")
+    events_url: str | None = Field(default=None, description="任务事件流地址。")
 
 
 class AnswerRequest(ContractModel):
     """问题回答提交请求。"""
 
-    revision: int = Field(ge=0)
-    question_set_id: str
-    answers: list[MetricAnswer] = Field(min_length=1, max_length=100)
+    revision: int = Field(ge=0, description="对象修订号。")
+    question_set_id: str = Field(description="问题集标识。")
+    answers: list[MetricAnswer] = Field(
+        min_length=1, max_length=100, description="回答列表。"
+    )
