@@ -137,8 +137,16 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             {7, 17, 27, 37, 47, 57},
         ],
     )
-    check_equal("worker startup", WorkerSettings.__dict__["on_startup"], startup)
-    check_equal("worker shutdown", WorkerSettings.__dict__["on_shutdown"], shutdown)
+    check_equal(
+        "worker startup 在注册 seam 外部织入原函数",
+        WorkerSettings.__dict__["on_startup"].__wrapped__,
+        startup,
+    )
+    check_equal(
+        "worker shutdown 在注册 seam 外部织入原函数",
+        WorkerSettings.__dict__["on_shutdown"].__wrapped__,
+        shutdown,
+    )
     check_equal(
         "worker 并发",
         WorkerSettings.max_jobs,

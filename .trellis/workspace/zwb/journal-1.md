@@ -871,3 +871,37 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: 项目日志 AOP 上下文改造
+
+**Date**: 2026-07-26
+**Task**: 项目日志 AOP 上下文改造
+**Branch**: `refactor/logger-aop-context-20260726`
+
+### Summary
+
+业务日志仅保留级别与完整中文消息，AOP 在 FastAPI、arq 和 LangGraph 组合层自动补充安全上下文，并完成架构、注释与异步语义验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ccbe542` | (see git log) |
+| `5470f01` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

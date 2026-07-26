@@ -20,6 +20,12 @@ from data_agent.models.memory import (
 from data_agent.settings import app_config
 
 
+def _log_index_sync_deferred(task_id: str) -> None:
+    """记录一个派生索引项目的安全退避结果。"""
+    del task_id
+    logger.warning("记忆索引同步失败，当前项目已进入退避并等待自动重试")
+
+
 class MemoryIndexDispatcher:
     """独立确认 ES/Qdrant 投影期望状态。"""
 
@@ -63,9 +69,5 @@ class MemoryIndexDispatcher:
                         type(error).__name__,
                         app_config.memory.outbox_max_backoff_seconds,
                     )
-                    logger.bind(trace_id="-").warning(
-                        "记忆索引同步延后 target={} error_type={}",
-                        item.target.value,
-                        type(error).__name__,
-                    )
+                    _log_index_sync_deferred(item.memory_uid)
         return processed

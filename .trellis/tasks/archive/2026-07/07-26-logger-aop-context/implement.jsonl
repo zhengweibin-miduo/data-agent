@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端层入口与验证门禁"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "composition root 与框架接入边界"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "现有 Loguru、formatter、异常安全和日志契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "异常传播、Retry、取消和安全错误信息"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "类型、测试和质量验证要求"}
+{"file": ".trellis/tasks/07-26-logger-aop-context/research/logging-context-inventory.md", "reason": "现有字段来源与 AOP 接入点盘点"}

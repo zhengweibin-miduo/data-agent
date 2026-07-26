@@ -1,21 +1,24 @@
 # Logging Guidelines
 
-## Scenario: Structured Application Logging
+## Scenario: AOP Application Logging
 
 ### 1. Scope / Trigger
 
-Use this contract whenever application code emits logs or changes logging
-sinks. Loguru is configured once by `data_agent.logging`; feature and
-infrastructure modules reuse the exported `logger` and must not configure their
-own sinks.
+Use this contract whenever application code emits logs or an execution entry
+establishes logging context. Loguru is configured once by
+`data_agent.logging`; feature and infrastructure modules never configure sinks.
 
-Call `setup_logging()` once from the owning process lifecycle before the first
-application event. The FastAPI lifespan and arq worker startup own this call.
-Service, repository, graph, and route modules never add sinks.
+Business code owns only the level and the complete Chinese message:
 
-Every enabled console or file sink uses `enqueue=True`, so formatting,
-serialization, terminal/file writes, rotation, and retention execute on
-Loguru's queue consumer instead of an async caller's event-loop thread.
+```python
+logger.warning("对话长期记忆提炼延后，任务将在退避后自动重试")
+```
+
+Business log calls must not use `logger.bind()`, `logger.contextualize()`,
+`logger.opt()`, logging Policy / Classifier / Outcome objects, or structured
+field arguments. Time, source location, request/job correlation, component,
+operation and safe exception metadata are injected by Loguru records and AOP
+execution boundaries.
 
 ### 2. Configuration
 
@@ -29,155 +32,140 @@ Configuration comes from `app_config.logging`:
 - `file.format: text | json`
 - `file.path: Path`, `file.rotation: str`, `file.retention: str`
 
-Sink rendering is explicit and is never inferred from the environment name.
-The checked-in defaults use readable colored text on the console and one flat
-JSON object per UTF-8 file line.
+Call `setup_logging()` once from the owning process lifecycle. Every enabled
+sink uses `enqueue=True`; shutdown must await `logger.complete()`.
 
-### 3. Canonical Event Schema
+### 3. Record Ownership
 
-Every JSON record contains these flat fields:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `timestamp` | string | ISO-8601 UTC event time |
-| `severity` | string | Loguru severity name |
-| `message` | string | Concise Chinese human-readable description |
-| `event_name` | string | Stable dot-separated application event |
-| `service_name` | string | Configured service resource |
-| `deployment_environment` | string | Configured deployment resource |
-| `component` | string | Stable emitting application component |
-| `trace_id` | string | Public job/request correlation ID or `-` |
-| `logger_name` | string | Emitting Python module |
-| `function_name` | string | Emitting Python function |
-| `line_number` | integer | Emitting source line |
-| `process_id` | integer | Emitting process |
-
-Optional approved fields are bounded operational metadata:
+Loguru records and the formatter provide:
 
 ```text
-operation, outcome, node_name, job_status, attempt, revision,
-question_round, duration_ms, table_count, column_count, metric_count,
-question_count, rebuild_count, succeeded_count, failed_count,
-error_code, error_type, stage, retryable, worker_role, stack_trace
+timestamp, severity, message, logger_name, function_name, line_number,
+process_id, service_name, deployment_environment
 ```
 
-Field keys use `snake_case`. Event names use stable dot-separated domain names.
-Dynamic job IDs, source names, record IDs, revisions, and error types belong in
-fields and must never be part of an event name or field name.
+AOP execution boundaries provide bounded context when available:
 
-Missing application context uses safe fallbacks:
-`event_name="application.log"`, `component="application"`, and
-`trace_id="-"`. Application-owned call sites bind their real event and
-component values.
-
-### 4. Event Catalog and Levels
-
-| Event name | Level | Purpose |
-| --- | --- | --- |
-| `application.lifecycle.started` | `INFO` | API or worker initialized |
-| `application.lifecycle.stopped` | `INFO` | API or worker stopped |
-| `ddl_metadata.job.accepted` | `INFO` | New DDL job durably accepted |
-| `ddl_metadata.job.answers_submitted` | `INFO` | Answer revision accepted |
-| `ddl_metadata.workflow.node.started` | `INFO` | Major workflow node began |
-| `ddl_metadata.job.execution.completed` | `INFO`/`WARNING`/`ERROR` | Worker outcome |
-| `ddl_metadata.job.retry_scheduled` | `WARNING` | Recoverable retry scheduled |
-| `ddl_metadata.checkpoint.cleanup_deferred` | `WARNING` | Cleanup retry needed |
-| `ddl_metadata.memory.payload_rebuild_failed` | `WARNING` | One rebuild item failed |
-| `ddl_metadata.memory.index_initialization_deferred` | `WARNING` | A derived memory index could not initialize yet |
-
-Use `INFO` for process lifecycle, major long-running node starts, and successful
-business outcomes. Use `WARNING` for recoverable degradation and business
-rejection. Use `ERROR` for terminal failures. Use `logger.exception()` or
-`logger.opt(exception=error)` only inside an exception handler when an
-unexpected handled exception needs a traceback. `diagnose=False` is mandatory
-so local variables are not rendered.
-
-Attempts, rounds, duration, counts, outcomes, and error metadata are fields on
-the owning event. Do not emit noisy function entry/exit logs, duplicate Uvicorn
-access logs, routine read-only request events, or a redundant start/success pair
-when one outcome event carries the useful state.
-
-### 5. Correlation and Concurrency
-
-DDL jobs bind the stable public job ID as `trace_id` across API, graph, worker,
-and cleanup records. Reuse the immutable bound logger within one operation:
-
-```python
-job_logger = logger.bind(
-    trace_id=job_id,
-    component="ddl_metadata.worker",
-)
+```text
+trace_id, component, operation, request_id, job_id, task_id, node_name,
+attempt, revision, worker_role
 ```
 
-Never use `logger.configure(extra=...)` with a per-request or per-job value.
-Process-wide defaults may contain service/environment and safe fallbacks only.
-Independent bound loggers must be used for concurrent requests and jobs.
+The record patcher detects an active `except` context without requiring
+`logger.opt(exception=...)`. It adds `error_type`; ERROR/CRITICAL records may
+also contain a bounded stack trace whose exception message and local variables
+are omitted.
+
+Missing context uses safe fallbacks such as `trace_id="-"`,
+`component="application"` and `operation="-"`. A missing or malformed context
+must never make the business log call fail.
+
+### 4. Levels and Messages
+
+- `INFO`: process lifecycle, major long operation starts and successful
+  business outcomes.
+- `WARNING`: recoverable degradation, deferred work and business rejection.
+- `ERROR`: terminal system failure.
+
+Messages must identify the business action, result and next behavior. A short
+message such as `"失败"` or `"延后"` is not sufficient. When a safe business
+error code is already part of the domain result, include it in the message.
+Runtime exception class and stack metadata are supplied by AOP and must not be
+manually formatted into the message.
+
+Do not emit noisy generic function entry/exit pairs, duplicate Uvicorn access
+logs, or routine read-only events with no operational value.
+
+### 5. AOP Boundaries
+
+`logging_context()` is an infrastructure primitive backed by `ContextVar`.
+It merges an immutable context and resets the exact token in `finally`.
+Never mutate per-request or per-job data through global
+`logger.configure(extra=...)`.
+
+`logging_boundary()` preserves the original callable behavior while applying
+context for the real execution lifetime. Its `component`, `operation`, and
+`context_factory` arguments are all optional. With no arguments, component
+comes from the wrapped callable module after removing the project root-package
+prefix, and operation comes from its qualified name. Context comes from
+`inspect.signature()` binding plus an exact field allowlist read only from
+direct parameters, mappings, declared Pydantic fields, and dataclass fields.
+Reflection must not inspect the call stack, local variables, arbitrary
+attributes, or properties.
+
+Business classes, functions, and route handlers never carry
+`@logging_boundary` and never call `logging_context()` directly. Weave wrappers
+only where the application registers execution with a framework:
+
+- FastAPI middleware covers the complete request and streamed response.
+- application composition wraps process lifespans;
+- `WorkerSettings` wraps arq functions, cron callbacks, and lifecycle hooks;
+- LangGraph nodes are wrapped at each `graph.add_node()` registration;
+- Async-generator context is active during iteration, not only when the
+  generator object is created.
+- Nested boundaries inherit outer values and override only their own fields.
+
+When no execution boundary supplies component or operation, the Loguru record
+patcher derives them from the record module and function before formatting.
+
+Wrappers must preserve the original return value, exception object,
+`CancelledError`, `GeneratorExit`, `arq.Retry`, function signature and
+generator semantics. Context extraction and record patching are observability
+enhancements; their own failure must not affect business execution.
 
 ### 6. Security and Cardinality
 
 Never log:
 
-- passwords, API keys, access tokens, or complete connection URLs;
-- raw DDL or source documents;
-- prompts, user answers, memory content, full model responses, or hidden
-  reasoning;
-- arbitrary request bodies, exception locals, or unbounded payloads.
+- passwords, API keys, access tokens or complete connection URLs;
+- raw DDL, source documents, prompts, user answers or memory content;
+- full model responses, hidden reasoning, request bodies or exception locals;
+- unbounded collections or arbitrary objects.
 
-Structured tracebacks retain bounded frame information but omit the exception
-message because transport exceptions may embed credentials or complete URLs.
-
-Safe fields include public status transitions, revisions, attempts, rounds,
-bounded counts, elapsed milliseconds, stable error codes, exception type, and
-retryability. Large values must be replaced with approved bounded counts,
-sizes, or hashes from the existing privacy contract.
+Safe metadata includes public IDs, statuses, revisions, attempts, bounded
+counts, stable error codes, exception class names and retryability. Stack traces
+must be bounded and replace the exception message with a fixed omission marker.
 
 ### 7. Correct Usage
 
-```python
-from loguru import logger
+Correct business code:
 
+```python
+try:
+    await extractor.dispatch()
+except Exception:
+    logger.warning("对话长期记忆提炼延后，任务将在退避后自动重试")
+```
+
+The surrounding execution boundary supplies component, operation, trace and
+the active exception type.
+
+Incorrect business code:
+
+```python
 logger.bind(
-    trace_id=job_id,
-    component="ddl_metadata.workflow",
-    event_name="ddl_metadata.workflow.node.started",
-    operation="persist_snapshot",
-    outcome="started",
-    node_name="persist_snapshot",
-    attempt=attempt,
-).info("开始持久化快照")
+    trace_id=lease_token,
+    component="conversation.extraction",
+    operation="extract_conversation_memory",
+    error_type=type(error).__name__,
+).warning("提炼延后")
 ```
 
-Incorrect usage embeds queryable data in the message or creates
-high-cardinality event names:
-
-```python
-logger.info("node=persist_snapshot attempt={}", attempt)
-logger.bind(event_name=f"ddl_metadata.job.{job_id}.failed").error("失败")
-```
-
-### 8. Validation and Error Matrix
+### 8. Validation Matrix
 
 | Condition | Required behavior |
 | --- | --- |
-| Missing or unknown YAML logging field | Pydantic rejects configuration during startup |
-| Missing application context | Emit safe fallbacks; logging must not fail |
-| Console or file sink disabled | Do not add that sink |
-| Both sinks disabled | Complete setup without adding a sink |
-| Invalid level, rotation, or retention | Let Loguru fail startup |
-| File directory cannot be created | Let the filesystem error fail startup |
-| Exception record | Remain one physical JSON line with bounded stack text |
-| API or worker shutdown succeeds | Emit the final stopped event, then await `logger.complete()` |
-| A resource close fails during shutdown | Await `logger.complete()` in `finally`, then propagate the original close error |
+| Plain `logger.warning(message)` inside a boundary | Inherit boundary context |
+| Nested boundary exits | Restore the exact outer context |
+| Concurrent requests/jobs | Never exchange trace or operation fields |
+| Warning inside `except` | Add safe `error_type`, without stack trace |
+| Error inside `except` | Add safe `error_type` and bounded sanitized stack |
+| Async generator streams after route return | Retain context during iteration |
+| Context factory or patcher fails | Preserve business return/exception semantics |
+| API or worker shutdown succeeds | Emit final message, then await `logger.complete()` |
 
-The logging unit tests must cover strict configuration, idempotent sink setup,
-text rendering, per-line JSON parsing, canonical fields, typed application
-fields, UTF-8, concurrent context isolation, queued sink registration,
-deterministic completion before file reads/removal, lifecycle drain ordering,
-close-failure propagation, and structured exceptions without diagnose
-local-variable leakage. Logging tests must not use fixed sleeps to wait for
-queued records.
-
-When entry-point wiring changes, run `python -m data_agent.main` and inspect the
-console and file outputs. When graph or worker logging changes, exercise an
-interrupt/resume flow and verify no raw DDL, answers, prompts, model payloads,
-credentials, or complete URLs appear.
+Logging tests must cover JSON/text rendering, context defaults, nested reset,
+async concurrency isolation, exception sanitization, sync/async/generator
+wrappers, HTTP streaming scope, queued sink completion and shutdown ordering.
+Run Ruff, Pyright, non-integration tests, compileall and settings loading after
+changing logging infrastructure or AOP wiring.

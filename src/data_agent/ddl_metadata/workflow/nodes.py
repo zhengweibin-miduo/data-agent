@@ -69,14 +69,7 @@ class DDLWorkflowNodes:
     async def parse_node(self, state: DDLGraphState) -> DDLGraphState:
         """解析 DDL 并初始化工作流状态。"""
         # 步骤一：记录稳定公开阶段，再调用线程外解析边界生成确定性物理 Schema。
-        logger.bind(
-            trace_id=_state_string(state, "job_id"),
-            component="ddl_metadata.workflow",
-            event_name="ddl_metadata.workflow.node.started",
-            operation="parse_ddl",
-            outcome="started",
-            node_name="parse_ddl",
-        ).info("开始解析 DDL")
+        logger.info("DDL 解析已开始，完成后将加载并校验可复用记忆")
         try:
             schema = await parse_ddl(
                 _state_string(state, "source"),
@@ -100,14 +93,7 @@ class DDLWorkflowNodes:
     async def load_memory_node(self, state: DDLGraphState) -> DDLGraphState:
         """加载并重校验兼容的长期记忆。"""
         # 步骤一：恢复物理 Schema，并让记忆加载器按当前 AST 重新裁决兼容内容。
-        logger.bind(
-            trace_id=_state_string(state, "job_id"),
-            component="ddl_metadata.workflow",
-            event_name="ddl_metadata.workflow.node.started",
-            operation="load_and_validate_memory",
-            outcome="started",
-            node_name="load_and_validate_memory",
-        ).info("开始加载并校验记忆")
+        logger.info("记忆加载与兼容性校验已开始，完成后将分类元数据")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         try:
             context = await self._dependencies.memory_context.load(schema)
@@ -140,17 +126,9 @@ class DDLWorkflowNodes:
 
     async def classify_node(self, state: DDLGraphState) -> DDLGraphState:
         """生成或修复表列语义分类。"""
-        logger.bind(
-            trace_id=_state_string(state, "job_id"),
-            component="ddl_metadata.workflow",
-            event_name="ddl_metadata.workflow.node.started",
-            operation="classify_metadata",
-            outcome="started",
-            node_name="classify_metadata",
-            attempt=state.get("semantic_attempts", 0) + 1,
-        ).info("开始分类元数据")
         # 步骤一：恢复确定性物理结构、上轮校验问题和兼容记忆，再把三类有界输入
         # 交给模型；模型只能补充语义，不能改写解析器已经确定的表列身份。
+        logger.info("元数据分类已开始，完成后将校验分类结果")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         issues = [
             ValidationIssue.model_validate(issue)
@@ -223,17 +201,9 @@ class DDLWorkflowNodes:
 
     async def plan_questions_node(self, state: DDLGraphState) -> DDLGraphState:
         """规划当前轮次的指标澄清问题。"""
-        logger.bind(
-            trace_id=_state_string(state, "job_id"),
-            component="ddl_metadata.workflow",
-            event_name="ddl_metadata.workflow.node.started",
-            operation="plan_metric_questions",
-            outcome="started",
-            node_name="plan_metric_questions",
-            question_round=state.get("question_round", 0) + 1,
-        ).info("开始规划指标问题")
         # 步骤一：指标只服务于事实表；没有事实表时直接跳过问答与指标生成，避免模型
         # 为不适用的表结构臆造业务指标。
+        logger.info("指标问题规划已开始，完成后将等待回答或继续生成指标")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         metadata = SemanticMetadata.model_validate(state.get("semantic_metadata"))
         fact_ids = {
@@ -333,17 +303,9 @@ class DDLWorkflowNodes:
 
     async def generate_metrics_node(self, state: DDLGraphState) -> DDLGraphState:
         """根据语义与回答生成指标。"""
-        logger.bind(
-            trace_id=_state_string(state, "job_id"),
-            component="ddl_metadata.workflow",
-            event_name="ddl_metadata.workflow.node.started",
-            operation="generate_metrics",
-            outcome="started",
-            node_name="generate_metrics",
-            attempt=state.get("metric_attempts", 0) + 1,
-        ).info("开始生成指标")
         # 步骤一：从 checkpoint 恢复完整语义、跨轮问题/回答及上轮校验问题，使修复调用
         # 只针对已知缺陷，不丢失用户已经提供的业务证据。
+        logger.info("指标生成已开始，完成后将校验指标定义")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         metadata = SemanticMetadata.model_validate(state.get("semantic_metadata"))
         questions = [
@@ -509,16 +471,9 @@ class DDLWorkflowNodes:
 
     async def persist_node(self, state: DDLGraphState) -> DDLGraphState:
         """原子持久化最终快照。"""
-        logger.bind(
-            trace_id=_state_string(state, "job_id"),
-            component="ddl_metadata.workflow",
-            event_name="ddl_metadata.workflow.node.started",
-            operation="persist_snapshot",
-            outcome="started",
-            node_name="persist_snapshot",
-        ).info("开始持久化快照")
         # 步骤一：持久化入口再次恢复所有强类型产物，确保 checkpoint 中的 JSON 在进入
         # 唯一写出口前仍满足当前契约。
+        logger.info("元数据快照持久化已开始，完成后将发布任务终态")
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         metadata = SemanticMetadata.model_validate(state.get("semantic_metadata"))
         questions = [

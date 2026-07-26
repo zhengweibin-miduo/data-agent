@@ -154,8 +154,8 @@ class DDLJobStore:
         # 步骤一：先读取权威公开投影；读取失败只记录安全告警，不影响已完成业务。
         try:
             record = await self.get(job_id)
-        except RedisError as error:
-            _log_event_publish_failure(job_id, stage, error)
+        except RedisError:
+            _log_event_publish_failure(job_id)
             return
         # 步骤二：使用权威投影构造通知，避免把 worker 内部载荷写入公开 Stream。
         await self._publish_safely(record, JobEventType.PROGRESS, stage)
@@ -400,8 +400,8 @@ class DDLJobStore:
         # 步骤一：转换成功后重新读取权威投影，避免发布调用方持有的陈旧状态。
         try:
             record = await self.get(job_id)
-        except RedisError as error:
-            _log_event_publish_failure(job_id, stage, error)
+        except RedisError:
+            _log_event_publish_failure(job_id)
             return
         # 步骤二：把通知作为非阻断副作用发布，失败时保留已经提交的状态转换。
         await self._publish_safely(record, event_type, stage)
@@ -419,8 +419,8 @@ class DDLJobStore:
                 event_type,
                 _event_data(record, stage),
             )
-        except RedisError as error:
-            _log_event_publish_failure(record.job_id, stage, error)
+        except RedisError:
+            _log_event_publish_failure(record.job_id)
 
 
 _ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
@@ -481,19 +481,7 @@ def _event_data(record: JobRecord, stage: JobEventStage) -> JobEventData:
     )
 
 
-def _log_event_publish_failure(
-    job_id: str,
-    stage: JobEventStage,
-    error: RedisError,
-) -> None:
+def _log_event_publish_failure(job_id: str) -> None:
     """记录不包含任务输入和异常文本的安全事件写入告警。"""
-    logger.bind(
-        trace_id=job_id,
-        component="ddl_metadata.jobs",
-        event_name="ddl_metadata.job.event_publish_failed",
-        operation="publish_job_event",
-        outcome="degraded",
-        stage=stage.value,
-        retryable=True,
-        error_type=type(error).__name__,
-    ).warning("DDL 任务公开事件写入失败，将由权威快照修复")
+    del job_id
+    logger.warning("DDL 任务公开事件写入失败，客户端可通过权威快照恢复状态")

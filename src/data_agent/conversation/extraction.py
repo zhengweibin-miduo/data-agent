@@ -253,13 +253,5 @@ class ConversationMemoryExtractor:
                     type(error).__name__,
                     app_config.memory.outbox_max_backoff_seconds,
                 )
-            logger.bind(
-                trace_id=claim.lease_token,
-                component="conversation.extraction",
-                event_name="conversation.memory.extraction_deferred",
-                operation="extract_conversation_memory",
-                outcome="deferred",
-                error_type=type(error).__name__,
-                retryable=True,
-            ).warning("对话长期记忆提炼延后")
+            logger.warning("对话长期记忆提炼失败，任务已释放租约并将在退避后自动重试")
             return 0

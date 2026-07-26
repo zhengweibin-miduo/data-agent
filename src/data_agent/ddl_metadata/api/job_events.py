@@ -89,18 +89,10 @@ async def stream_job_events(
                     return
             else:
                 yield ": heartbeat\n\n"
-    except (RedisError, DataAgentError, ValueError) as error:
+    except (RedisError, DataAgentError, ValueError):
         # 步骤四：响应启动后已无法改写 HTTP 状态，只发送基于最后公开坐标的固定错误，
         # 不泄露 Redis 异常或内部载荷，随后结束连接让客户端安全重连。
-        logger.bind(
-            trace_id=record.job_id,
-            component="ddl_metadata.api",
-            event_name="ddl_metadata.job.event_stream_failed",
-            operation="stream_job_events",
-            outcome="degraded",
-            retryable=True,
-            error_type=type(error).__name__,
-        ).warning("DDL 任务事件流读取失败，客户端可安全重连")
+        logger.warning("DDL 任务事件流读取失败，客户端可使用最后公开游标安全重连")
         yield encode_sse(_stream_error(last_data, cursor))
 
 

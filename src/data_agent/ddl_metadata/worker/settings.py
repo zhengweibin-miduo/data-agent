@@ -1,5 +1,8 @@
 """arq worker 发现设置。"""
 
+from collections.abc import Callable
+from typing import Any
+
 from arq import cron, func
 from arq.connections import RedisSettings
 
@@ -14,7 +17,13 @@ from data_agent.ddl_metadata.worker.maintenance import (
     extract_conversation_memory,
     purge_user_memories,
 )
+from data_agent.logging import logging_boundary
 from data_agent.settings import app_config
+
+
+def _observed(function: Callable[..., Any]) -> Callable[..., Any]:
+    """在 arq 注册 seam 外部织入零配置日志边界。"""
+    return logging_boundary()(function)
 
 
 class WorkerSettings:
@@ -22,7 +31,7 @@ class WorkerSettings:
 
     functions = [
         func(
-            run_ddl_job,
+            _observed(run_ddl_job),
             keep_result=0,
             timeout=app_config.redis.worker_job_timeout_seconds,
             max_tries=3,
@@ -30,33 +39,33 @@ class WorkerSettings:
     ]
     cron_jobs = [
         cron(
-            dispatch_pending,
+            _observed(dispatch_pending),
             second={0, 10, 20, 30, 40, 50},
             run_at_startup=True,
         ),
-        cron(expire_waiting, minute=None, second=0),
-        cron(expire_memories, minute=None, second=1),
+        cron(_observed(expire_waiting), minute=None, second=0),
+        cron(_observed(expire_memories), minute=None, second=1),
         cron(
-            cleanup_checkpoints,
+            _observed(cleanup_checkpoints),
             second={5, 15, 25, 35, 45, 55},
         ),
         cron(
-            dispatch_memory_index_outbox,
+            _observed(dispatch_memory_index_outbox),
             second={2, 12, 22, 32, 42, 52},
             run_at_startup=True,
         ),
         cron(
-            extract_conversation_memory,
+            _observed(extract_conversation_memory),
             second={4, 14, 24, 34, 44, 54},
             run_at_startup=True,
         ),
         cron(
-            purge_user_memories,
+            _observed(purge_user_memories),
             second={7, 17, 27, 37, 47, 57},
         ),
     ]
-    on_startup = startup
-    on_shutdown = shutdown
+    on_startup = _observed(startup)
+    on_shutdown = _observed(shutdown)
     redis_settings = RedisSettings.from_dsn(app_config.redis.url)
     max_jobs = app_config.redis.worker_concurrency
     job_timeout = app_config.redis.worker_job_timeout_seconds
