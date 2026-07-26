@@ -7,9 +7,10 @@ from typing import TypeVar, cast
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from data_agent.ddl_metadata.models.memory import MemoryContent
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.infrastructure.llm_client import LLMClient
+from data_agent.models.memory import MemoryContent
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
     MetricAnswer,
     MetricOutput,
     MetricQuestion,
@@ -17,7 +18,6 @@ from data_agent.ddl_metadata.models.semantic import (
     SemanticMetadata,
     ValidationIssue,
 )
-from data_agent.infrastructure.llm_client import LLMClient
 from data_agent.settings import app_config
 
 OutputT = TypeVar("OutputT", bound=BaseModel)

@@ -1,7 +1,13 @@
 """模型元数据确定性校验检查。"""
 
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.ddl_metadata.validation import (
+    finalize_and_validate_metrics,
+    validate_metadata,
+    validate_metric_questions,
+)
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
     ColumnRole,
     MetricAnswer,
     MetricMetadata,
@@ -10,12 +16,6 @@ from data_agent.ddl_metadata.models.semantic import (
     SemanticMetadata,
     SemanticTable,
     TableRole,
-)
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.validation import (
-    finalize_and_validate_metrics,
-    validate_metadata,
-    validate_metric_questions,
 )
 from tests.helpers.checks import check_condition, check_equal
 

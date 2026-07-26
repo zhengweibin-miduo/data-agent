@@ -2,15 +2,22 @@
 
 from sqlalchemy import delete, or_, select
 
-from data_agent.ddl_metadata.identifiers import metric_id
-from data_agent.ddl_metadata.memory.mysql.tables import (
+from data_agent.ddl_metadata.persistence.tables import (
+    column_info,
+    column_metric,
+    metric_info,
+    table_info,
+)
+from data_agent.identifiers import metric_id
+from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.memory.mysql.tables import (
     agent_memory,
     agent_memory_event,
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
     ColumnRole,
     MetricAnswer,
     MetricMetadata,
@@ -20,14 +27,7 @@ from data_agent.ddl_metadata.models.semantic import (
     SemanticTable,
     TableRole,
 )
-from data_agent.ddl_metadata.persistence.schema import metadata
-from data_agent.ddl_metadata.persistence.tables import (
-    column_info,
-    column_metric,
-    metric_info,
-    table_info,
-)
-from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.persistence.schema import metadata
 
 
 async def ensure_schema() -> None:

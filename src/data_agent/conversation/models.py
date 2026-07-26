@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from data_agent.ddl_metadata.models.base import ContractModel
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.models.base import ContractModel
+from data_agent.models.memory import (
     MemoryDetail,
     UserMemoryCategory,
 )

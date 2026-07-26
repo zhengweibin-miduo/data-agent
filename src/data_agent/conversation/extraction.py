@@ -18,24 +18,23 @@ from data_agent.conversation.models import (
     MessageRole,
 )
 from data_agent.conversation.repository import ConversationRepository
-from data_agent.conversation.service import CONVERSATION_MEMORY_SOURCE
-from data_agent.ddl_metadata.identifiers import memory_uid, stable_id
-from data_agent.ddl_metadata.memory.domain.payloads import (
+from data_agent.identifiers import CONVERSATION_MEMORY_SOURCE, memory_uid, stable_id
+from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.memory.domain.payloads import (
     build_memory_text,
     canonical_content_json,
     memory_content_hash,
 )
-from data_agent.ddl_metadata.memory.domain.policies import (
+from data_agent.memory.domain.policies import (
     category_policy,
     user_memory_category,
 )
-from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.memory.mysql.repository import MemoryRepository
+from data_agent.models.memory import (
     MemoryCandidate,
     MemoryTrust,
     UserMemoryContent,
 )
-from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
 
 _AMBIGUOUS_CONFIRMATIONS = {

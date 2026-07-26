@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端包范围、活动路径和规范路由"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "模块所有权、依赖方向和硬迁移约束"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "共享 MetaData、SQLAlchemy Core 和 schema 兼容约束"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "会话与长期记忆跨层契约及必须保留的行为"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "业务错误、HTTP 映射、worker 传播与清理约束"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "MySQL、Redis、ES、Qdrant、TEI 生命周期与 adapter 约束"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码、测试、Compose 与 CI 质量门禁"}
+{"file": ".trellis/tasks/07-25-review-project-structure/research/project-structure-review.md", "reason": "已核验的问题证据、非问题和修复顺序"}

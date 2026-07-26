@@ -6,13 +6,13 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.models.jobs import (
     JobError,
     JobRecord,
     JobResult,
     JobStatus,
 )
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.models.semantic import (
     MetricAnswer,
     MetricQuestion,
 )

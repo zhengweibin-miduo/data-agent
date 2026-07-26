@@ -15,7 +15,7 @@ from data_agent.conversation.models import (
     MessageRole,
     StartTurnRequest,
 )
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.models.memory import (
     UserMemoryCategory,
     UserMemoryContent,
 )

@@ -9,7 +9,8 @@ from redis.asyncio import Redis
 from data_agent.ddl_metadata.jobs.redis.event_store import JobEventStore
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.infrastructure.redis import RedisClient
+from data_agent.models.jobs import (
     AnswerRequest,
     DDLJobRequest,
     JobEventData,
@@ -18,8 +19,7 @@ from data_agent.ddl_metadata.models.jobs import (
     JobResult,
     JobStatus,
 )
-from data_agent.ddl_metadata.models.semantic import MetricAnswer, MetricQuestion
-from data_agent.infrastructure.redis import RedisClient
+from data_agent.models.semantic import MetricAnswer, MetricQuestion
 from data_agent.settings import app_config
 from tests.helpers.checks import check_condition, check_equal
 

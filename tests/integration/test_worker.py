@@ -9,25 +9,25 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.ddl_metadata.worker.job_runner import _RETRYABLE, run_ddl_job
+from data_agent.ddl_metadata.worker.maintenance import cleanup_checkpoints
+from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
+from data_agent.ddl_metadata.workflow.graph import build_ddl_metadata_graph
+from data_agent.errors import DataAgentError
+from data_agent.infrastructure.checkpoint_store import CheckpointStore
+from data_agent.infrastructure.redis import RedisClient
+from data_agent.models.jobs import (
     AnswerRequest,
     DDLJobRequest,
     JobError,
     JobStatus,
 )
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.models.semantic import (
     MetricAnswer,
     MetricQuestion,
 )
-from data_agent.ddl_metadata.worker.job_runner import _RETRYABLE, run_ddl_job
-from data_agent.ddl_metadata.worker.maintenance import cleanup_checkpoints
-from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
-from data_agent.ddl_metadata.workflow.graph import build_ddl_metadata_graph
-from data_agent.infrastructure.checkpoint_store import CheckpointStore
-from data_agent.infrastructure.redis import RedisClient
 from tests.helpers.checks import (
     check_condition,
     check_equal,
@@ -71,9 +71,9 @@ async def _test_job_state_machine() -> None:
         )
         try:
             await store.submit(request)
-        except DDLMetadataError as error:
+        except DataAgentError as error:
             check_exception(
-                "_test_job_state_machine 捕获预期异常", error, DDLMetadataError
+                "_test_job_state_machine 捕获预期异常", error, DataAgentError
             )
             check_equal(
                 "_test_job_state_machine 检查点 2",
@@ -138,9 +138,9 @@ async def _test_job_state_machine() -> None:
         )
         try:
             await store.submit_answers(record.job_id, invalid_answer)
-        except DDLMetadataError as error:
+        except DataAgentError as error:
             check_exception(
-                "_test_job_state_machine 捕获预期异常", error, DDLMetadataError
+                "_test_job_state_machine 捕获预期异常", error, DataAgentError
             )
             check_equal(
                 "_test_job_state_machine 检查点 9",
@@ -166,9 +166,9 @@ async def _test_job_state_machine() -> None:
         )
         try:
             await store.submit_answers(record.job_id, stale)
-        except DDLMetadataError as error:
+        except DataAgentError as error:
             check_exception(
-                "_test_job_state_machine 捕获预期异常", error, DDLMetadataError
+                "_test_job_state_machine 捕获预期异常", error, DataAgentError
             )
             check_equal(
                 "_test_job_state_machine 检查点 10",
@@ -424,11 +424,11 @@ async def _test_answer_expiry_cleanup_outbox() -> None:
                     ],
                 ),
             )
-        except DDLMetadataError as error:
+        except DataAgentError as error:
             check_exception(
                 "_test_answer_expiry_cleanup_outbox 捕获预期异常",
                 error,
-                DDLMetadataError,
+                DataAgentError,
             )
             check_equal(
                 "_test_answer_expiry_cleanup_outbox 检查点 4",
