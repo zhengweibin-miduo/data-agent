@@ -29,6 +29,7 @@ class MemoryIndexDispatcher:
         async with MySQLDatabase.session() as session:
             repository = MemoryIndexOutboxRepository(session)
             items = await repository.claim_outbox(app_config.memory.outbox_batch_size)
+            # ES/Qdrant 独立确认；单目标失败只退避自身行，不得阻断或代替另一目标。
             for item in items:
                 try:
                     projection = await repository.projection(item.memory_uid)

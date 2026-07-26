@@ -35,6 +35,8 @@ async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
     if not job_ids:
         return
     checkpointer = CheckpointStore.get_client()
+    # 终态转换只写清理 outbox；线程删除成功后才确认，确保 worker 崩溃或 Redis
+    # 短暂失败时维护任务仍能重放，而不会静默遗留或提前丢失 checkpoint。
     for job_id in job_ids:
         try:
             await checkpointer.adelete_thread(job_id)

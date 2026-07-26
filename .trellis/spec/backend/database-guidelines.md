@@ -145,12 +145,17 @@ cleanup scope.
 No repository write is permitted while a graph waits for user input or before
 deterministic validation succeeds.
 
-Memory updates use a separate managed transaction: validate category, stable
-memory key, expected record version, and current Meta references, then create a
-new user-confirmed ACTIVE version and mark the old row SUPERSEDED. They do not
-patch Meta directly; the next DDL workflow consumes the new authority. DELETE
-is an audited soft delete plus two DELETE outbox rows. Exact duplicate content
-records NOOP history but creates no version or projection work.
+DDL-scoped memory updates acquire the logical-source mutation lease, then use a
+separate managed transaction to validate category, stable memory key, expected
+record version, and current Meta references. They immediately create a new
+user-confirmed ACTIVE memory version, mark the old row SUPERSEDED, and return
+`requires_reprocess=true`; they do not patch Meta directly, so the next complete
+DDL workflow must consume that authority before Meta changes. User-scoped
+conversation-memory updates lock only the user-owned authority row, create the
+new ACTIVE version immediately, return `requires_reprocess=false`, and do not
+acquire the DDL source lease. DELETE is an audited soft delete plus two DELETE
+outbox rows; only DDL-scoped deletion acquires the source lease. Exact duplicate
+content records NOOP history but creates no version or projection work.
 
 `agent_memory.memory_key` is bounded to 256 characters. Its exact-lookup
 composite index also contains source, category, fingerprint, and status; a 512

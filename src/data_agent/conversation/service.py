@@ -137,6 +137,8 @@ class ConversationService:
         user_id: str,
     ) -> DeleteConversationDataResponse:
         """立即删除会话并 tombstone 该用户长期记忆。"""
+        # 先清除会话及其 outbox，再 tombstone 长期记忆；两步共享事务，
+        # 避免删除请求留下仍可检索的孤立记忆。
         async with MySQLDatabase.session() as session:
             await ConversationRepository(session).delete_user_conversations(user_id)
             await MemoryRepository(session).tombstone_user(user_id)
@@ -172,6 +174,7 @@ class ConversationService:
             },
             limit=app_config.memory.search_limit,
         )
+        # 字符预算从最新消息向前保留，再反转回时间线顺序，确保新上下文优先。
         remaining = app_config.conversation.context_max_chars
         bounded: list[ContextMessage] = []
         for message in reversed(messages):

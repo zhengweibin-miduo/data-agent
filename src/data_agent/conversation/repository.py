@@ -83,7 +83,7 @@ class ConversationRepository:
         before: int | None,
         limit: int,
     ) -> ConversationPage:
-        """按更新时间与主键稳定读取用户会话。"""
+        """按会话自增主键倒序执行稳定 keyset 分页读取用户会话。"""
         filters = [agent_conversation.c.user_id == user_id]
         if before is not None:
             filters.append(agent_conversation.c.id < before)
@@ -166,6 +166,7 @@ class ConversationRepository:
         ]
         if before is not None:
             filters.append(agent_message.c.id < before)
+        # 递减主键游标不受新消息插入影响；多取一条判定续页后再恢复时间线正序。
         rows = list(
             (
                 await self._session.execute(
@@ -192,6 +193,8 @@ class ConversationRepository:
         content: str,
     ) -> tuple[MessageRecord, RowMapping]:
         """门禁并幂等持久化用户消息。"""
+        # 先锁定会话再检查 active_turn_uid，避免并发请求同时通过门禁；
+        # 同一 turn 仅允许相同内容幂等重试，内容变化必须拒绝。
         conversation = await self.get(
             user_id,
             conversation_uid,
@@ -316,6 +319,8 @@ class ConversationRepository:
                 "轮次不是当前在途轮次",
                 http_status=409,
             )
+        # 助手消息、outbox 与清除 active_turn_uid 必须在调用方的同一事务中成败一致，
+        # 任一步失败都不能提前放行下一轮。
         uid = stable_id(
             "message",
             conversation_uid,
@@ -379,6 +384,7 @@ class ConversationRepository:
             filters.append(agent_message.c.id > after_id)
         if through_id is not None:
             filters.append(agent_message.c.id <= through_id)
+        # 摘要游标与 through_id 圈定可见区间；先保留最新窗口，再恢复时间线正序。
         rows = list(
             (
                 await self._session.execute(
@@ -399,6 +405,8 @@ class ConversationRepository:
         message_limit: int,
     ) -> list[ClaimedExtraction]:
         """短事务领取到期任务并加载同租户有界消息。"""
+        # 每个会话只领取最早未完成轮次以顺序推进摘要；过期租约可重领，
+        # skip_locked 则允许其他 worker 继续处理不同会话。
         earlier = conversation_memory_outbox.alias("earlier_extraction")
         earliest_in_conversation = (
             select(func.min(earlier.c.id))
@@ -483,6 +491,8 @@ class ConversationRepository:
         summary: str,
     ) -> bool:
         """按 lease token 确认任务并单调推进摘要游标。"""
+        # 完成时复核 lease token，阻止任务被重新领取后的旧 worker 写入；
+        # 摘要更新与 outbox 删除在同一事务提交，且游标只能前进。
         current = (
             await self._session.execute(
                 select(conversation_memory_outbox.c.id).where(

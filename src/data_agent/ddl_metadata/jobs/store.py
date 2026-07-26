@@ -88,6 +88,8 @@ class DDLJobStore:
                 http_status=422,
             )
         job_id = str(uuid4())
+        # 任务、来源租约和 dispatch outbox 共同构成受理边界；后续公开事件只是
+        # 可由权威 Hash 修复的通知，发布失败不能撤销已经持久化的受理结果。
         accepted = await self._state.submit(job_id, request, datetime.now(UTC))
         if not accepted:
             raise DDLMetadataError(
@@ -166,6 +168,8 @@ class DDLJobStore:
         fields: Mapping[str, str] | None = None,
     ) -> bool:
         """按集中状态表执行修订感知的原子转换。"""
+        # 状态表限制合法边，revision 则充当并发 worker 的 CAS 门闩；只有原子
+        # 转换胜出的调用方才重新读取并发布当前投影，旧执行不能覆盖权威状态。
         if target not in _ALLOWED_TRANSITIONS[expected]:
             raise ValueError(f"非法任务状态转换: {expected}->{target}")
         changed = await self._state.transition(
@@ -226,6 +230,8 @@ class DDLJobStore:
     ) -> tuple[JobRecord, bool]:
         """原子验证回答并安排下一修订；返回是否首次受理。"""
         record = await self.get(job_id)
+        # 当前问题 ID 先做业务校验，revision、question_set_id、截止时间和载荷
+        # 哈希再由 Redis 脚本原子裁决，使重复提交幂等而过期轮次不能恢复图。
         if record.status == JobStatus.WAITING_INPUT:
             current_question_ids = {
                 question.question_id for question in record.questions or []
@@ -293,6 +299,8 @@ class DDLJobStore:
             fields["result_json"] = result.model_dump_json()
         if error is not None:
             fields["error_json"] = error.model_dump_json()
+        # 转换成功时，终态、来源租约释放、结果保留和 checkpoint 清理 outbox
+        # 原子生效；线程删除由可重放维护任务完成，不依赖当前 worker。
         return await self.transition(
             job_id,
             revision,

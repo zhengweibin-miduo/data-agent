@@ -35,6 +35,8 @@ def build_ddl_metadata_graph(
     graph.add_node("validate_metrics", nodes.validate_metrics_node)
     graph.add_node("build_memory_candidates", nodes.build_memories_node)
     graph.add_node("persist_snapshot", nodes.persist_node)
+    # 路由把模型输出夹在确定性校验之间，route 只由当前节点写入；只有完成语义、
+    # 问答和指标校验的 finalized 数据才能构建记忆并抵达唯一持久化出口。
     graph.add_edge(START, "parse_ddl")
     graph.add_conditional_edges("parse_ddl", after_terminal_guard)
     graph.add_conditional_edges("load_and_validate_memory", after_memory)

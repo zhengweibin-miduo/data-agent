@@ -61,6 +61,8 @@ def _validated_candidates(
     result: ExtractionResult,
 ) -> list[MemoryCandidate]:
     """用消息归属、角色、顺序和精确 quote 校验模型候选。"""
+    # 模型输出不具备权威性；只有能回查到本批原始消息、角色和顺序的精确用户
+    # quote（以及对助手结论的明确后续确认）才允许写入长期记忆。
     by_uid = {message.uid: message for message in claim.messages}
     accepted: list[MemoryCandidate] = []
     accepted_scopes: set[str] = set()
@@ -192,6 +194,8 @@ class ConversationMemoryExtractor:
         claim: ClaimedExtraction,
     ) -> int:
         """处理刚领取的一条任务并按 token 完成或退避。"""
+        # 模型调用不占用数据库事务；成功时候选记忆与摘要确认同事务提交，
+        # 任一步失败都保留 outbox，并释放 lease 后退避重试。
         try:
             payload = {
                 "summary": claim.summary,

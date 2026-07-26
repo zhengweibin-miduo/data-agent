@@ -142,7 +142,7 @@ class MemoryService:
         expected_version: int,
         user_id: str | None = None,
     ) -> MemoryUpdateResponse:
-        """记录用户确认修正，要求完整 DDL 重处理后再成为活动事实。"""
+        """记录用户确认修正；DDL 修正需重处理后才应用到 Meta。"""
         target = await self._get_stored(uid, user_id=user_id)
         if target.detail.status != MemoryStatus.ACTIVE:
             raise DDLMetadataError(
@@ -166,6 +166,8 @@ class MemoryService:
                 "修正内容与当前事实相同",
                 http_status=409,
             )
+        # 两类修正都立即创建活动记忆版本；DDL 修正额外与同来源工作流串行，
+        # 并用 requires_reprocess 提示调用方重新生成 Meta。
         if user_id is not None:
             return await self._replace_memory(
                 target,
@@ -188,7 +190,7 @@ class MemoryService:
         expected_version: int,
         user_id: str | None = None,
     ) -> MemoryDeleteResponse:
-        """在来源租约内执行可审计软删除。"""
+        """执行可审计软删除；DDL 记忆使用来源租约，用户级记忆使用独立事务。"""
         target = await self._get_stored(uid, user_id=user_id)
         if target.detail.record_version != expected_version:
             raise DDLMetadataError(
@@ -197,6 +199,8 @@ class MemoryService:
                 "目标记忆版本已发生变化",
                 http_status=409,
             )
+        # 删除保留历史并投递索引 DELETE，而不物理移除权威记录；来源租约仅用于
+        # 防止 DDL 工作流并发重建覆盖删除。
         if user_id is not None:
             async with MySQLDatabase.session() as session:
                 current = await MemoryRepository(session).get_by_uid(
@@ -268,6 +272,7 @@ class MemoryService:
         content: MemoryContent,
     ) -> MemoryContent:
         """固定类别和对象身份，阻止修正越过原作用域。"""
+        # 修正只能改变事实内容，原类别、scope key、对象身份与证据归属均不可迁移。
         if type(content) is not type(target.content):
             raise DDLMetadataError(
                 "memory_category_conflict",
@@ -392,6 +397,7 @@ class MemoryService:
             decision=MemoryDecision.UPDATE,
             actor_type=MemoryActorType.USER,
         )
+        # 入口校验不能替代锁内复核；新版本、历史事件与活动槽位必须原子提交。
         async with MySQLDatabase.session() as session:
             repository = MemoryRepository(session)
             current = await repository.get_by_uid(

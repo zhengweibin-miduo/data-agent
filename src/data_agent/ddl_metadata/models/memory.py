@@ -314,7 +314,7 @@ class MemoryUpdateRequest(ContractModel):
 
 
 class MemoryUpdateResponse(ContractModel):
-    """待重新处理的用户修正响应。"""
+    """用户确认修正响应；requires_reprocess 指示是否需 DDL 重处理。"""
 
     memory_uid: str
     event_id: int
