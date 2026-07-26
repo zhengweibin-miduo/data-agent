@@ -36,6 +36,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # issue_comment 事件默认检出默认分支；显式检出 PR merge ref，确保两种触发都读取待裁决代码。
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/merge
           fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
