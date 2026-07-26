@@ -104,6 +104,10 @@ class _FakeActivityStore:
         self.touched: list[str] = []
         self.dropped: list[str] = []
 
+    async def now(self) -> float:
+        """返回固定的 Redis 服务端时间，保持测试确定性。"""
+        return 1_000_000.0
+
     async def stalled(self, threshold: float, limit: int) -> list[str]:
         """返回预置候选，忽略阈值以保持测试确定性。"""
         return self._candidates

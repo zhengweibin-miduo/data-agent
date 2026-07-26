@@ -1,5 +1,7 @@
 """记忆派生索引期望状态仓储。"""
 
+from uuid import uuid4
+
 from sqlalchemy import (
     RowMapping,
     delete,
@@ -115,7 +117,13 @@ class MemoryIndexOutboxRepository:
             .mappings()
             .all()
         )
-        # 步骤二：将锁定行转换为调用方可执行的类型化 outbox 项。
+        if not rows:
+            return []
+        # 步骤二：为本批生成不可复用的领取代次令牌。仅靠 (uid, target, operation,
+        # projection_version) 甚至再加 attempts 都无法区分"同一四元组被重新写入并被
+        # 另一个 worker 重新领取"的新一代期望：迟到 worker 的结算会命中新行，既可能
+        # 把新内容推进死信，也会缩短新领取者的租约造成重复处理。
+        lease_token = uuid4().hex
         items = [
             MemoryOutboxItem(
                 memory_uid=str(row["memory_uid"]),
@@ -123,13 +131,12 @@ class MemoryIndexOutboxRepository:
                 operation=MemoryIndexOperation(str(row["operation"])),
                 projection_version=str(row["projection_version"]),
                 attempts=int(row["attempts"]),
+                lease_token=lease_token,
             )
             for row in rows
         ]
-        if not items:
-            return []
-        # 步骤三：为已领取行写入领取租约，使调用方能在提交后释放行锁再执行外部
-        # 写入；租约到期而未确认的行会自动重新可领取，无需额外的崩溃恢复通道。
+        # 步骤三：把租约与代次令牌一并写入已领取行，使调用方能在提交后释放行锁再
+        # 执行外部写入；租约到期而未确认的行会自动重新可领取，无需额外恢复通道。
         await self._session.execute(
             update(memory_index_outbox)
             .where(
@@ -143,7 +150,8 @@ class MemoryIndexOutboxRepository:
                     text("SECOND"),
                     app_config.memory.outbox_claim_lease_seconds,
                     func.now(),
-                )
+                ),
+                lease_token=lease_token,
             )
         )
         return items
@@ -205,6 +213,7 @@ class MemoryIndexOutboxRepository:
                 memory_index_outbox.c.target == item.target.value,
                 memory_index_outbox.c.operation == item.operation.value,
                 memory_index_outbox.c.projection_version == item.projection_version,
+                memory_index_outbox.c.lease_token == item.lease_token,
                 consistent,
             )
         )
@@ -279,11 +288,10 @@ class MemoryIndexOutboxRepository:
         # 步骤一：根据已尝试次数计算有上限的指数退避时间。
         attempts = item.attempts + 1
         delay = min(2 ** min(attempts, 20), max_backoff_seconds)
-        # 步骤二：只更新仍属于本次领取的那一代期望状态。除完整期望条件外还要求
-        # 尝试次数未变且领取租约仍未到期：`set_desired_state` 覆盖同一行时会把
-        # `attempts` 重置为 0 并把 `available_at` 拉回当前时刻，因此迟到 worker 的
-        # 失败回写不会命中——否则它会把新内容的期望直接推到死信上限，使该内容
-        # 再也不被领取，派生索引长期保留陈旧数据。
+        # 步骤二：只更新仍属于本次领取的那一代期望状态。代次令牌在每次领取时重新
+        # 生成，`set_desired_state` 的覆盖与其他 worker 的重新领取都会让它改变，因此
+        # 迟到 worker 的失败回写不会命中新一代——否则它既可能把新内容的期望直接推到
+        # 死信上限使其再不被领取，也会把新领取者的租约缩短成一次退避间隔而造成重复处理。
         await self._session.execute(
             update(memory_index_outbox)
             .where(
@@ -291,8 +299,7 @@ class MemoryIndexOutboxRepository:
                 memory_index_outbox.c.target == item.target.value,
                 memory_index_outbox.c.operation == item.operation.value,
                 memory_index_outbox.c.projection_version == item.projection_version,
-                memory_index_outbox.c.attempts == item.attempts,
-                memory_index_outbox.c.available_at > func.now(),
+                memory_index_outbox.c.lease_token == item.lease_token,
             )
             .values(
                 attempts=attempts,

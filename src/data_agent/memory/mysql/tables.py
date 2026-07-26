@@ -150,6 +150,7 @@ memory_index_outbox = Table(
     Column("projection_version", String(32), nullable=False),
     Column("attempts", Integer, nullable=False, server_default="0"),
     Column("available_at", DateTime, nullable=False, server_default=func.now()),
+    Column("lease_token", String(32), nullable=True),
     Column("last_error_type", String(128), nullable=True),
     Column(
         "updated_at",

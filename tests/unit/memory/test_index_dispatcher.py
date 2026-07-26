@@ -111,6 +111,7 @@ def _items(uid: str, operation: MemoryIndexOperation) -> list[MemoryOutboxItem]:
             operation=operation,
             projection_version=app_config.memory.projection_version,
             attempts=0,
+            lease_token="lease-1",
         )
         for target in MemoryIndexTarget
     ]
@@ -508,6 +509,7 @@ async def test_dispatch_compensates_when_authority_row_is_purged(
                 operation=MemoryIndexOperation.UPSERT,
                 projection_version=app_config.memory.projection_version,
                 attempts=0,
+                lease_token="lease-1",
             )
         ],
         projections={"memory-7": _projection("memory-7", MemoryStatus.ACTIVE)},

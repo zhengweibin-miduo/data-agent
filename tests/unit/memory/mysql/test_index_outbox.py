@@ -117,6 +117,7 @@ async def test_acknowledge_outbox_requires_authoritative_consistency() -> None:
         operation=MemoryIndexOperation.UPSERT,
         projection_version="v2",
         attempts=0,
+        lease_token="lease-1",
     )
 
     await repository.acknowledge_outbox(item, content_hash="hash-1")
@@ -177,6 +178,7 @@ async def test_retry_outbox_only_targets_the_claimed_generation() -> None:
         operation=MemoryIndexOperation.UPSERT,
         projection_version="v2",
         attempts=9,
+        lease_token="lease-1",
     )
 
     await repository.retry_outbox(item, "TimeoutError", 3600)
@@ -186,17 +188,19 @@ async def test_retry_outbox_only_targets_the_claimed_generation() -> None:
     # set_desired_state 覆盖同一行时会把 attempts 重置为 0、available_at 拉回当前
     # 时刻；这两个条件因此能把迟到回写挡在新一代期望之外，避免它把新内容直接推到
     # 死信上限。
+    # 仅靠四元组、甚至再加 attempts 与租约时间都无法区分"同一四元组被重新写入并被
+    # 另一个 worker 重新领取"的新一代期望，因此用每次领取重新生成的令牌做 CAS。
     check_condition(
-        "要求尝试次数未变",
-        "attempts=%s" in compact and "attempts_1" in str(rendered),
+        "按领取代次令牌约束回写",
+        "lease_token=%s" in compact,
         actual=rendered,
-        expected="WHERE 包含 attempts 等值条件",
+        expected="WHERE 包含 lease_token 等值条件",
     )
     check_condition(
-        "要求领取租约仍未到期",
-        "available_at>now()" in compact,
+        "绑定本次领取的令牌值",
+        "lease-1" in rendered,
         actual=rendered,
-        expected="WHERE 包含 available_at > now()",
+        expected="参数包含本次领取令牌",
     )
 
 
@@ -220,3 +224,64 @@ async def test_enqueue_convergence_preserves_existing_retry_state() -> None:
         actual=rendered,
         expected="ON DUPLICATE 只更新 operation 与 projection_version",
     )
+
+
+async def test_claim_outbox_writes_fresh_lease_token() -> None:
+    """每次领取都写入新的代次令牌，使迟到结算无法命中新一代。"""
+    row = {
+        "memory_uid": "uid-a",
+        "target": MemoryIndexTarget.ELASTICSEARCH.value,
+        "operation": MemoryIndexOperation.UPSERT.value,
+        "projection_version": "v2",
+        "attempts": 0,
+    }
+    tokens: list[str] = []
+    for _ in range(2):
+        session = _RecordingSession([row])
+        repository = MemoryIndexOutboxRepository(cast(AsyncSession, session))
+        items = await repository.claim_outbox(10)
+        tokens.append(items[0].lease_token)
+        lease = _rendered(session.statements[1])
+        check_condition(
+            "领取语句写入代次令牌",
+            "lease_token" in lease and items[0].lease_token in lease,
+            actual=lease,
+            expected="UPDATE 同时写入 available_at 与 lease_token",
+        )
+    check_condition(
+        "两次领取的令牌互不相同",
+        tokens[0] != tokens[1],
+        actual=tokens,
+        expected="令牌不可复用",
+    )
+
+
+async def test_late_settlement_cannot_touch_a_newly_claimed_generation() -> None:
+    """被重新领取后，旧 worker 的确认与退避都不得命中新一代。"""
+    # W1 领取内容 A → 内容 B 以相同四元组覆盖该行 → W2 领取 B（写入新令牌）。
+    # 此时 W1 的迟到结算若仍能命中，会把 B 推向死信并缩短 W2 的租约。
+    stale = MemoryOutboxItem(
+        memory_uid="uid-a",
+        target=MemoryIndexTarget.ELASTICSEARCH,
+        operation=MemoryIndexOperation.UPSERT,
+        projection_version="v2",
+        attempts=0,
+        lease_token="lease-w1",
+    )
+    session = _RecordingSession([])
+    repository = MemoryIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.retry_outbox(stale, "TimeoutError", 3600)
+    await repository.acknowledge_outbox(stale, content_hash="hash-1")
+
+    for label, statement in (
+        ("退避", session.statements[0]),
+        ("确认", session.statements[1]),
+    ):
+        rendered = _rendered(statement)
+        check_condition(
+            f"{label}按旧令牌约束",
+            "lease-w1" in rendered and "lease_token" in rendered,
+            actual=rendered,
+            expected="WHERE 绑定发起方自己的领取令牌",
+        )
