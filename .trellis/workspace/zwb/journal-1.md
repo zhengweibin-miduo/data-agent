@@ -905,3 +905,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 补齐外部服务超时与会话轮次租约
+
+**Date**: 2026-07-26
+**Task**: 补齐外部服务超时与会话轮次租约
+**Branch**: `fix/service-timeouts-turn-lease-20260726`
+
+### Summary
+
+为 Redis/ES/Qdrant/TEI 四个客户端注入配置化显式超时，并新增 socket_timeout > sse_heartbeat 跨字段校验保护 SSE 阻塞读取；active_turn_uid 门禁改为带租约，用 updated_at 作占用起点并把可抢占性判定下推到 SQL 数据库端时钟，消除客户端崩溃导致的会话永久 busy。新增 8 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c276703` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
