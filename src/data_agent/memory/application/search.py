@@ -177,12 +177,15 @@ class MemorySearchService:
             detail = by_uid.get(uid)
             if detail is None:
                 continue
+            # projection_version 描述派生索引结构，不描述权威内容是否可信。派生
+            # 索引是否已按当前结构收敛，已由 pending_targets 逐信号剔除；在这里
+            # 再按行否决会连 MySQL 精确基线命中一起丢掉，使升级 projection_version
+            # 后、重建任务打上新版本号前的窗口内检索全量返回空。
             if (
                 detail.source != source
                 or detail.user_id != user_id
                 or detail.status != MemoryStatus.ACTIVE
                 or detail.content_version != app_config.memory.content_version
-                or detail.projection_version != app_config.memory.projection_version
                 or memory_content_hash(detail.content) != detail.content_hash
             ):
                 continue
