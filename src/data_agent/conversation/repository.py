@@ -244,35 +244,6 @@ class ConversationRepository:
         # 步骤二：只把是否可占用返回给调用方，具体拒绝语义由调用方投影。
         return claimable is not None
 
-    async def _turn_has_assistant_message(
-        self,
-        conversation_id: int,
-        user_id: str,
-        turn_uid: str,
-    ) -> bool:
-        """判定指定轮次是否已经写入助手消息，即该轮次是否已完成。
-
-        Args:
-            conversation_id: 已锁定会话的主键。
-            user_id: 会话归属用户。
-            turn_uid: 轮次标识。
-
-        Returns:
-            该轮次已存在助手消息时为 True。
-        """
-        # 步骤一：助手消息是轮次完成的权威标记，complete_turn 与它在同一事务写入。
-        found = (
-            await self._session.execute(
-                select(agent_message.c.id).where(
-                    agent_message.c.user_id == user_id,
-                    agent_message.c.conversation_id == conversation_id,
-                    agent_message.c.turn_uid == turn_uid,
-                    agent_message.c.role == MessageRole.ASSISTANT.value,
-                )
-            )
-        ).first()
-        return found is not None
-
     async def _claim_turn_gate(
         self,
         conversation_id: int,
@@ -357,17 +328,13 @@ class ConversationRepository:
                     "相同轮次的用户内容不一致",
                     http_status=409,
                 )
-            # 幂等回放要区分"仍在途"与"已完成"两种轮次。
-            # 仍在途：租约到期后本轮次靠"同一 turn_uid"通过门禁，若不刷新
-            # updated_at，门禁仍是过期状态，随后到达的其它轮次可以立刻抢占，使刚
-            # 恢复的本轮次在 complete_turn 时被拒，因此必须续租。
-            # 已完成：complete_turn 已经清空门禁，而它的幂等返回路径不会再次清理；
-            # 此时重新占用会让门禁复活并在整个租约期内把新轮次挡在 409 之外。
-            if not await self._turn_has_assistant_message(
-                int(conversation["id"]),
-                user_id,
-                turn_uid,
-            ):
+            # 幂等回放只在本轮次仍持有门禁时续租。门禁不再指向本轮次，说明本轮次
+            # 要么已经完成（complete_turn 清空了门禁，其幂等返回路径不会再次清理，
+            # 重新占用会让门禁复活并在整个租约期内把新轮次挡在 409 之外），要么已被
+            # 后续轮次抢占（重新占用会让陈旧轮次在替代轮次完成后写入助手消息，形成
+            # user(A) user(B) assistant(B) assistant(A) 这种错乱顺序，并污染后续摘要
+            # 与记忆提炼）。两种情况都必须保持门禁不变。
+            if str(conversation["active_turn_uid"] or "") == turn_uid:
                 await self._claim_turn_gate(
                     int(conversation["id"]),
                     user_id,

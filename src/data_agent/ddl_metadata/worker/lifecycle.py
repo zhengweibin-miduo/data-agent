@@ -1,8 +1,11 @@
 """DDL 元数据 worker 资源生命周期与图装配。"""
 
-from typing import Any
+import asyncio
+from typing import Any, cast
 
+from arq.connections import ArqRedis, RedisSettings
 from loguru import logger
+from redis.exceptions import RedisError
 
 from data_agent.conversation.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
@@ -32,7 +35,34 @@ from data_agent.memory.indexing.elasticsearch import (
     MemoryElasticsearchIndex,
 )
 from data_agent.memory.indexing.qdrant import MemoryQdrantIndex
+from data_agent.settings import app_config
 
+
+async def _wait_for_queue(queue: ArqRedis) -> None:
+    """按有界重试等待 arq 队列连接可用。
+
+    与 `arq.create_pool` 的启动语义对齐：先 ping，失败则按固定间隔重试有限次，
+    仍不可用才让异常传播。Redis 短暂未就绪时 worker 因此不会直接退出。
+
+    Args:
+        queue: worker 使用的 arq 队列客户端。
+
+    Raises:
+        Exception: 重试耗尽后仍无法连接时传播最后一次异常。
+    """
+    settings = RedisSettings.from_dsn(app_config.redis.url)
+    attempts = max(settings.conn_retries, 1)
+    # 步骤一：逐次探测连通性，成功即返回。
+    for attempt in range(1, attempts + 1):
+        try:
+            await queue.ping()
+            return
+        except (RedisError, OSError):
+            # 步骤二：最后一次仍失败则让异常传播，由部署方决定重启策略。
+            if attempt == attempts:
+                raise
+            logger.warning("arq 队列连接暂不可用，按启动重试策略等待后重试")
+            await asyncio.sleep(settings.conn_retry_delay)
 
 def is_fatal_index_error(error: BaseException) -> bool:
     """判定索引初始化异常是否必须阻断 worker 启动。
@@ -58,6 +88,9 @@ async def startup(ctx: dict[Any, Any]) -> None:
     """显式初始化 worker 的全部长生命周期依赖。"""
     # 步骤一：先配置日志并初始化任务、数据库及派生索引所需的外部客户端。
     setup_logging()
+    # 预置 redis_pool 后 arq 不再走 create_pool，也就失去了它启动时的连通性探测与
+    # 有界重试；Redis 尚未就绪时进程会在首次队列操作直接退出。这里补回等价语义。
+    await _wait_for_queue(cast(ArqRedis, ctx["redis"]))
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
     elasticsearch = ElasticsearchClient.initialize()

@@ -45,9 +45,15 @@ def _queue_pool() -> ArqRedis:
     """
     # 步骤一：沿用 DSN 解析出的连接参数，只补上 arq 不会设置的读取与健康检查配置。
     settings = RedisSettings.from_dsn(app_config.redis.url)
+    # `unix://` DSN 会被解析进 unix_socket_path；漏传它会让 worker 连回 TCP
+    # localhost:6379，与 API 客户端连到不同实例，全部任务领取与维护 cron 失效。
+    connection: dict[str, Any] = (
+        {"unix_socket_path": settings.unix_socket_path}
+        if settings.unix_socket_path
+        else {"host": settings.host, "port": settings.port}
+    )
     pool = ArqRedis(
-        host=settings.host,
-        port=settings.port,
+        **connection,
         db=settings.database,
         username=settings.username,
         password=settings.password,
@@ -112,6 +118,9 @@ class WorkerSettings:
     # arq 在未提供 redis_pool 时才用 redis_settings 自建连接；这里直接提供带
     # 读取超时的队列客户端，避免半开连接让 worker 永久停在队列轮询上。
     redis_pool = _queue_pool()
+    # 仍然保留 redis_settings：官方 `arq ... --check` 健康探针只读它、不读
+    # redis_pool，缺省时会去连 localhost:6379/0 而不是配置指向的队列。
+    redis_settings = RedisSettings.from_dsn(app_config.redis.url)
     max_jobs = app_config.redis.worker_concurrency
     job_timeout = app_config.redis.worker_job_timeout_seconds
     retry_jobs = True

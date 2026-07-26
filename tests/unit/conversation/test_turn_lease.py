@@ -117,14 +117,11 @@ class _ReplaySession(_RecordingSession):
         self,
         conversation: dict[str, object],
         message: dict[str, object],
-        *,
-        completed: bool = False,
     ):
-        """绑定预置的会话行、既有用户消息与该轮次是否已完成。"""
+        """绑定预置的会话行与既有用户消息。"""
         super().__init__(claimable=True)
         self._rows = [conversation, message]
         self._index = 0
-        self._completed = completed
 
     async def execute(self, statement: ClauseElement) -> object:
         """按调用顺序返回会话、门禁判定、既有消息与助手消息存在性。"""
@@ -132,10 +129,6 @@ class _ReplaySession(_RecordingSession):
         rendered = str(statement).casefold()
         if rendered.startswith("update"):
             return _FakeResult(None)
-        if "role = " in rendered and "assistant" in str(
-            statement.compile(dialect=mysql.dialect()).params
-        ):
-            return _FakeResult((7,) if self._completed else None)
         row = self._rows[min(self._index, len(self._rows) - 1)]
         self._index += 1
         return _FakeResult(row)
@@ -187,7 +180,7 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
         "content": "订单口径是什么",
         "created_at": moment,
     }
-    session = _ReplaySession(conversation, message, completed=True)
+    session = _ReplaySession(conversation, message)
     repository = ConversationRepository(cast(AsyncSession, session))
 
     record, _ = await repository.start_turn(
@@ -200,3 +193,27 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
     check_equal("仍返回既有用户消息", record.uid, "message-7")
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("已完成轮次不重新占用门禁", updates, [])
+
+
+async def test_preempted_turn_replay_does_not_reclaim_gate() -> None:
+    """被后续轮次抢占的陈旧轮次，延迟重试时不得重新占用门禁。"""
+    # A 超租约 → B 抢占并完成（门禁已清空）→ A 延迟重试。若在此重新占用门禁，
+    # complete_turn(A) 会被接受，形成 user(A) user(B) assistant(B) assistant(A)
+    # 的错乱顺序，并污染后续摘要与记忆提炼。
+    moment = datetime.now(UTC)
+    conversation = {"id": 1, "active_turn_uid": None, "updated_at": moment}
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-a",
+        "role": MessageRole.USER.value,
+        "content": "订单口径是什么",
+        "created_at": moment,
+    }
+    session = _ReplaySession(conversation, message)
+    repository = ConversationRepository(cast(AsyncSession, session))
+
+    await repository.start_turn("user-1", "conv-1", "turn-a", "订单口径是什么")
+
+    updates = [s for s in session.statements if str(s).casefold().startswith("update")]
+    check_equal("陈旧轮次不重新占用门禁", updates, [])

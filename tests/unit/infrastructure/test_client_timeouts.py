@@ -174,3 +174,49 @@ async def test_worker_queue_pool_declares_socket_timeouts() -> None:
         "沿用 arq 默认队列名", WorkerSettings.redis_pool.default_queue_name, "arq:queue"
     )
     check_equal("沿用 DSN 解析出的库编号", kwargs.get("db"), 0)
+
+
+async def test_worker_queue_settings_survive_non_default_dsn() -> None:
+    """非默认 DSN 下队列池与健康探针都必须指向真实队列。"""
+    from arq.connections import RedisSettings
+
+    from data_agent.ddl_metadata.worker import settings as worker_settings
+
+    # `arq ... --check` 只读 redis_settings、不读 redis_pool；缺省时会去连
+    # localhost:6379/0 而不是配置指向的队列，可能把正常 worker 判死。
+    expected = RedisSettings.from_dsn(app_config.redis.url)
+    actual = worker_settings.WorkerSettings.redis_settings
+    check_equal("健康探针主机", actual.host, expected.host)
+    check_equal("健康探针端口", actual.port, expected.port)
+    check_equal("健康探针库编号", actual.database, expected.database)
+
+
+async def test_worker_queue_pool_uses_unix_socket_when_dsn_requires_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """unix:// DSN 必须走 Unix domain socket，而不是回落到 TCP。"""
+    from data_agent.ddl_metadata.worker import settings as worker_settings
+
+    dsn = "unix:///tmp/data-agent-redis.sock"
+    monkeypatch.setattr(
+        worker_settings.app_config.redis,
+        "url",
+        dsn,
+        raising=False,
+    )
+    pool = worker_settings._queue_pool()
+    try:
+        kwargs = pool.connection_pool.connection_kwargs
+        check_equal(
+            "使用 DSN 中的 socket 路径",
+            kwargs.get("path"),
+            "/tmp/data-agent-redis.sock",
+        )
+        check_equal("不再回落到 TCP 主机", kwargs.get("host"), None)
+        check_equal(
+            "socket 连接同样带读取超时",
+            kwargs.get("socket_timeout"),
+            app_config.redis.socket_timeout_seconds,
+        )
+    finally:
+        await pool.aclose()
