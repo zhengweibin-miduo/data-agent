@@ -805,3 +805,36 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: 安装项目级架构与前端设计技能
+
+**Date**: 2026-07-26
+**Task**: 安装项目级架构与前端设计技能
+**Branch**: `chore/install-architecture-skills-20260726`
+
+### Summary
+
+验证既有 improve-codebase-architecture，并将 anthropics/skills 的 frontend-design 安装到仓库级 .agents/skills；完成质量检查与任务归档。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3eabf2c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
