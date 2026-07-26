@@ -1050,6 +1050,12 @@ class MemoryRepository:
             .values(
                 access_count=agent_memory.c.access_count + 1,
                 last_accessed_at=func.now(),
+                # 显式写回原值以抑制列上的 onupdate：updated_at 表示"内容何时被更新"，
+                # 而 find_exact_query 与 find_compatible_scopes 都按它倒序取候选。
+                # 若让访问统计推进它，被检索命中的记忆会把自己顶到后续检索的前面，
+                # 形成读路径改变读路径排序的反馈。访问热度另有 access_count 与
+                # last_accessed_at 表达。
+                updated_at=agent_memory.c.updated_at,
             )
         )
 

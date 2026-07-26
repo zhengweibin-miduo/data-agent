@@ -148,6 +148,26 @@ await MemorySearchService.search(
   event id in the logical-fact scope, never the last item of an ascending
   `history()` page. Once a fact accumulates more events than one page, the page's
   last item is an old event and the reported id becomes permanently wrong.
+- `record_access` must not advance `agent_memory.updated_at`. Both
+  `find_exact_query` and `find_compatible_scopes` order candidates by
+  `updated_at desc`, so letting access accounting touch it makes a retrieved
+  memory promote itself in later retrievals — the read path rewriting the read
+  path's own ordering. Suppress the column's `onupdate` by assigning `updated_at`
+  to itself in the SET clause; access recency already lives in `access_count` and
+  `last_accessed_at`.
+- The exact-hit bonus in `reciprocal_rank_fusion` is deliberately out of scale
+  with the RRF terms and is **not** double counting. The 1.0 bonus places exact
+  hits ahead of purely semantic hits; the ranking entry for the same UID list
+  orders exact hits *among themselves*. Passing only `exact_uids` would tie every
+  exact hit and degrade to UID-string order, discarding the baseline query's
+  relevance order. Keep both contributions, and keep the tests that lock it.
+- Known deferred issue: `find_exact_query` compares `memory_text == query` on a
+  Text column, which cannot use an index and becomes the dominant search latency
+  as data grows. The fix is a hash column over the projection text plus an index,
+  comparing hashes instead. That needs a schema change, and `docs/docker/mysql/`
+  is blank-environment bootstrap rather than upgrade migration — existing volumes
+  never replay it, so adding a column without a migration path breaks existing
+  environments with an unknown-column error. Settle the migration mechanism first.
 - Search runs ES BM25 and TEI/Qdrant concurrently with the configured timeout,
   excludes target signals that still have pending outbox work, and combines
   the remaining ranks with stable RRF.

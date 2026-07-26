@@ -126,3 +126,32 @@ async def test_latest_event_id_returns_zero_without_events() -> None:
         await repository.latest_event_id("memory-1"),
         0,
     )
+
+
+async def test_record_access_preserves_content_update_time() -> None:
+    """访问统计不得推进 updated_at，否则读路径会改变读路径的排序。"""
+    session = _RecordingSession(0)
+    repository = MemoryRepository(cast(AsyncSession, session))
+
+    await repository.record_access({"uid-a"}, source="dw", user_id=None)
+
+    rendered = _rendered(session.statements[0])
+    check_condition(
+        "递增访问计数并记录访问时间",
+        "access_count" in rendered and "last_accessed_at" in rendered,
+        actual=rendered,
+        expected="SET 包含 access_count 与 last_accessed_at",
+    )
+    compact = rendered.replace(" ", "")
+    check_condition(
+        "显式写回 updated_at 以抑制 onupdate",
+        "updated_at=data_agent.agent_memory.updated_at" in compact,
+        actual=rendered,
+        expected="SET 中 updated_at 自赋值，不被 onupdate 推进为 now()",
+    )
+    check_condition(
+        "updated_at 未被写成 now()",
+        "updated_at=now()" not in compact,
+        actual=rendered,
+        expected="SET 中不出现 updated_at=now()",
+    )
