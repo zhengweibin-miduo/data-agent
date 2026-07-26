@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 新增 resolve_config_path 四级解析（显式实参/DATA_AGENT_CONFIG/工作目录/源码树），显式指定缺失时直接失败不回退，全部缺失时报错列出候选绝对路径；新增 get_settings 缓存与 reset_settings。修复 wheel 安装后 parents[2] 指向 Lib 目录导致入口无法启动的问题，已在临时 venv 实测通过。新增 5 个单元测试。
+## Session 28: 统一 worker 的可重试错误判定
+
+**Date**: 2026-07-26
+**Task**: 统一 worker 的可重试错误判定
+**Branch**: `fix/retryable-error-contract-20260726`
+
+### Summary
+
+新增 _is_retryable：DataAgentError.retryable 成为可重试性权威来源，第三方异常才回退内置瞬态清单；终态投影 retryable 改为反映底层瞬态性。在 spec 中确立'新增基础设施在边界包装为 DataAgentError(retryable=True)'的约定。新增 4 个单元测试。
 ## Session 28: 修复记忆检索与投影的遗留正确性缺陷
 
 **Date**: 2026-07-26
@@ -935,6 +944,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 | Hash | Message |
 |------|---------|
 | `97cd19d` | (see git log) |
+| `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 
 ### Testing
