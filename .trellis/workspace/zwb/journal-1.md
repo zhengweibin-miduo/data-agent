@@ -907,15 +907,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 - None - task complete
 
 
-## Session 28: 修复架构审查发现的可靠性与一致性缺陷
+## Session 28: 移除审查问题修复回复模板
 
 **Date**: 2026-07-26
-**Task**: 修复架构审查发现的可靠性与一致性缺陷
-**Branch**: `fix/arch-review-reliability-20260726`
+**Task**: 移除审查问题修复回复模板
+**Branch**: `docs/remove-review-fix-template-20260726`
 
 ### Summary
 
-新增活动任务索引与停滞巡检回收被 arq 重试预算耗尽的任务；记忆索引 dispatcher 改三段式短事务并在确认阶段复核权威一致性；UPSERT 收敛为权威状态、重建锁定复核 ACTIVE；outbox 退避改数据库端时钟并加死信上限；来源租约校验改求和、ANSWER 续期校验属主；DataAgentError.details 不再回填内部 message。新增 18 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+删除未接入自动化流程的 GitHub 审查问题修复回复模板，同步收窄 code_review.md 与 AGENTS.md 的现行规范声明，并保留 P0/P1 inline 审查格式。
 ## Session 28: 统一 worker 的可重试错误判定
 
 **Date**: 2026-07-26
@@ -943,40 +943,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 
 | Hash | Message |
 |------|---------|
-| `b17ca1e` | (see git log) |
-
-### Testing
-
-- Validation was not recorded for this session.
-
-### Status
-
-[OK] **Completed**
-
-### Next Steps
-
-- None - task complete
-
-
-## Session 29: 清理 DDL 任务契约与激活时延
-
-**Date**: 2026-07-26
-**Task**: 清理 DDL 任务契约与激活时延
-**Branch**: `fix/job-contract-cleanups-20260726`
-
-### Summary
-
-JobRecord 移除内部 graph_version 并改走内部读取路径；受理回答后清除 questions_json 但保留幂等判定键；attempt 改由 HINCRBY 原子递增；受理后立即 dispatch_one 消除最坏 10 秒激活时延，arq 客户端惰性构造避免启动期连接。新增 4 个单元测试。
-
-### Main Changes
-
-- Detailed change bullets were not supplied; see the summary above.
-
-### Git Commits
-
-| Hash | Message |
-|------|---------|
-| `cc7df84` | (see git log) |
+| `4423a3c` | (see git log) |
 | `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 
