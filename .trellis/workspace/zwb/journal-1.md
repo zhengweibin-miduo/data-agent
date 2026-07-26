@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 为 Redis/ES/Qdrant/TEI 四个客户端注入配置化显式超时，并新增 socket_timeout > sse_heartbeat 跨字段校验保护 SSE 阻塞读取；active_turn_uid 门禁改为带租约，用 updated_at 作占用起点并把可抢占性判定下推到 SQL 数据库端时钟，消除客户端崩溃导致的会话永久 busy。新增 8 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+## Session 28: 统一 worker 的可重试错误判定
+
+**Date**: 2026-07-26
+**Task**: 统一 worker 的可重试错误判定
+**Branch**: `fix/retryable-error-contract-20260726`
+
+### Summary
+
+新增 _is_retryable：DataAgentError.retryable 成为可重试性权威来源，第三方异常才回退内置瞬态清单；终态投影 retryable 改为反映底层瞬态性。在 spec 中确立'新增基础设施在边界包装为 DataAgentError(retryable=True)'的约定。新增 4 个单元测试。
 ## Session 28: 修复记忆检索与投影的遗留正确性缺陷
 
 **Date**: 2026-07-26
@@ -935,6 +944,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 | Hash | Message |
 |------|---------|
 | `c276703` | (see git log) |
+| `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 
 ### Testing
