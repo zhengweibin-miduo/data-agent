@@ -107,13 +107,14 @@ class MemoryElasticsearchIndex:
             (await self._client.indices.get_settings(index=self._index)).body,
         )
         dynamic = _nested(mapping, self._index, "mappings", "dynamic")
-        memory_text = _nested(
-            mapping,
-            self._index,
-            "mappings",
-            "properties",
-            "memory_text",
+        properties = _nested(mapping, self._index, "mappings", "properties")
+        declared = set(properties) if isinstance(properties, dict) else set()
+        memory_text = (
+            properties.get("memory_text") if isinstance(properties, dict) else None
         )
+        # 严格映射会拒绝任何未声明字段，因此投影新增字段而索引未同步时，写入会持续
+        # 失败、outbox 反复重试直到死信，派生索引再也无法收敛。
+        missing_fields = set(MemoryProjection.model_fields) - declared
         analyzer = _nested(
             settings,
             self._index,
@@ -134,6 +135,13 @@ class MemoryElasticsearchIndex:
             reason = "memory_text 不是全文检索字段"
         elif str(memory_text.get("analyzer")) != _ANALYZER_NAME:
             reason = "memory_text 未绑定当前中文分析器"
+        elif str(memory_text.get("search_analyzer", _ANALYZER_NAME)) != _ANALYZER_NAME:
+            # 检索用的是不显式指定 analyzer 的 match 查询，Elasticsearch 因此采用
+            # 字段的 search_analyzer；它被覆盖成别的分析器时，写入侧分词正确而查询侧
+            # 仍按错误规则切分，BM25 召回显著劣化，且索引写入本身不会报任何错。
+            reason = "memory_text 的查询分析器被覆盖为其它分析器"
+        elif missing_fields:
+            reason = f"映射缺少当前投影字段：{', '.join(sorted(missing_fields))}"
         elif not isinstance(analyzer, dict):
             reason = "缺少中文分析器定义"
         elif str(analyzer.get("tokenizer")) != expected_tokenizer:

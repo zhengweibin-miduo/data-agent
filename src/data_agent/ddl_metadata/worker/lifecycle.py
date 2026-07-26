@@ -19,6 +19,7 @@ from data_agent.ddl_metadata.workflow.llm_metadata_generator import (
     LLMMetadataGenerator,
 )
 from data_agent.ddl_metadata.workflow.memory_context import MemoryContextLoader
+from data_agent.errors import DataAgentError
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.llm_client import LLMClient
@@ -33,6 +34,26 @@ from data_agent.memory.indexing.elasticsearch import (
 from data_agent.memory.indexing.qdrant import MemoryQdrantIndex
 
 
+def is_fatal_index_error(error: BaseException) -> bool:
+    """判定索引初始化异常是否必须阻断 worker 启动。
+
+    暂时不可用（连接失败、服务未就绪）只延后派生投影，MySQL 权威数据与 outbox 仍可
+    恢复，因此允许继续启动并在后续启动重试。结构不兼容不会自行痊愈：继续启动会让
+    dispatcher 直接向被污染的索引写入并确认 outbox 行，把错误映射固化下来，中文检索
+    静默降级且再无请求能纠正它，必须由运维显式重建索引。
+
+    Args:
+        error: 索引初始化抛出的异常。
+
+    Returns:
+        是否属于必须阻断启动的结构性故障。
+    """
+    return (
+        isinstance(error, DataAgentError)
+        and error.code == "memory_index_mapping_invalid"
+    )
+
+
 async def startup(ctx: dict[Any, Any]) -> None:
     """显式初始化 worker 的全部长生命周期依赖。"""
     # 步骤一：先配置日志并初始化任务、数据库及派生索引所需的外部客户端。
@@ -42,14 +63,19 @@ async def startup(ctx: dict[Any, Any]) -> None:
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     TEIEmbeddingClient.initialize()
-    # 步骤二：索引初始化失败只延后派生投影，MySQL 权威数据和 outbox 仍可恢复。
+    # 步骤二：区分"暂时不可用"与"结构不兼容"。前者只延后派生投影，MySQL 权威数据
+    # 与 outbox 仍可恢复；后者不会自行痊愈——继续启动会让 dispatcher 直接向被污染的
+    # 索引写入并确认 outbox 行，把错误映射固化下来，中文检索静默降级且再无请求能
+    # 纠正它，因此必须让启动失败，由运维显式重建索引。
     for setup in (
         MemoryElasticsearchIndex(elasticsearch).setup,
         MemoryQdrantIndex(qdrant).setup,
     ):
         try:
             await setup()
-        except Exception:
+        except Exception as error:
+            if is_fatal_index_error(error):
+                raise
             logger.warning("记忆索引初始化失败，本次启动继续运行并将在后续启动时重试")
     # 步骤三：模型能力探测与 checkpoint 初始化成功后，才装配任务门面和工作流。
     model = LLMClient.initialize()
