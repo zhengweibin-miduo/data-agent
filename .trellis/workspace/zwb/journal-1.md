@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 新增 resolve_config_path 四级解析（显式实参/DATA_AGENT_CONFIG/工作目录/源码树），显式指定缺失时直接失败不回退，全部缺失时报错列出候选绝对路径；新增 get_settings 缓存与 reset_settings。修复 wheel 安装后 parents[2] 指向 Lib 目录导致入口无法启动的问题，已在临时 venv 实测通过。新增 5 个单元测试。
+## Session 28: 修复记忆检索与投影的遗留正确性缺陷
+
+**Date**: 2026-07-26
+**Task**: 修复记忆检索与投影的遗留正确性缺陷
+**Branch**: `fix/memory-correctness-defects-20260726`
+
+### Summary
+
+event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在越过一页后永久错误）；移除权威回查阶段的 projection_version 行级否决，消除版本升级窗口内的检索全量黑障；setup 复核既有索引的 dynamic 与 memory_zh 分析器，防止 recreate 竞态下动态映射静默降级。新增 6 个单元测试。
 
 ### Main Changes
 
@@ -926,6 +935,7 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 | Hash | Message |
 |------|---------|
 | `97cd19d` | (see git log) |
+| `a5cd384` | (see git log) |
 
 ### Testing
 
