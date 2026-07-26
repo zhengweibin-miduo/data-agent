@@ -40,10 +40,11 @@ class RedisJobStateStore:
         accepted = await RedisBaseStore.awaitable(
             self._redis.eval(
                 JobScripts.SUBMIT,
-                3,
+                4,
                 self._keys.job(job_id),
                 self._keys.dispatch,
                 self._keys.source(request.source),
+                self._keys.active,
                 job_id,
                 str(app_config.memory.source_lease_seconds),
                 request.source,
@@ -137,11 +138,12 @@ class RedisJobStateStore:
         changed = await RedisBaseStore.awaitable(
             self._redis.eval(
                 JobScripts.TRANSITION,
-                4,
+                5,
                 self._keys.job(job_id),
                 self._keys.waiting,
                 self._keys.source(record.source),
                 self._keys.checkpoint_cleanup,
+                self._keys.active,
                 *arguments,
             )
         )
@@ -173,12 +175,13 @@ class RedisJobStateStore:
             await RedisBaseStore.awaitable(
                 self._redis.eval(
                     JobScripts.ANSWER,
-                    5,
+                    6,
                     self._keys.job(job_id),
                     self._keys.waiting,
                     self._keys.dispatch,
                     self._keys.source(source),
                     self._keys.checkpoint_cleanup,
+                    self._keys.active,
                     str(revision),
                     question_set_id,
                     str(now.timestamp()),

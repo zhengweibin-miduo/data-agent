@@ -22,6 +22,13 @@ DataAgentError(
 HTTP boundaries. The exception message is internal and must not contain raw
 DDL, answers, prompts, secrets, or full service URLs.
 
+`details` defaults to an empty dict and never back-fills `message`. The API error
+handler and the public job event stream both project `details` verbatim, so
+back-filling would publish every internal message that a caller forgot to
+sanitize. Only pass `details` when the keys are deliberately public — bounded
+identifier lists, counts, or an exception class name — and let `message` reach
+logs only.
+
 ## Client Lifecycle Errors
 
 Every infrastructure wrapper's `get_client()` rejects access before

@@ -44,6 +44,24 @@ class JobOutboxStore:
         # 步骤三：返回本批已确认调度数量，供维护任务观测推进结果。
         return dispatched
 
+    async def enqueue_activation(
+        self,
+        job_id: str,
+        revision: int,
+        at: float,
+    ) -> None:
+        """重新登记一个修订感知的激活请求。
+
+        dispatch 使用 revision 感知的确定性 arq ID 入队，因此对仍在 arq 队列中的
+        任务重复登记是幂等空操作，不会产生第二个有效激活。
+        """
+        await RedisBaseStore.awaitable(
+            self._redis.zadd(
+                self._keys.dispatch,
+                {self._keys.activation_member(job_id, revision): at},
+            )
+        )
+
     async def pending_checkpoint_cleanup(self, limit: int = 100) -> list[str]:
         """读取待删除的终态 LangGraph 线程。"""
         return cast(

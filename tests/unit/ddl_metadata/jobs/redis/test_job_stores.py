@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
+from data_agent.ddl_metadata.jobs.redis.scripts import JobScripts
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.errors import DataAgentError
 from data_agent.models.jobs import DDLJobRequest, JobStatus
@@ -15,7 +16,12 @@ from data_agent.models.semantic import (
     MetricQuestion,
 )
 from data_agent.settings import app_config
-from tests.helpers.checks import check_equal, check_exception, fail_check
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 
 def _question() -> MetricQuestion:
@@ -45,6 +51,7 @@ def test_job_keys_store_preserves_keyspace() -> None:
         keys.checkpoint_cleanup,
         "ddl:checkpoint_cleanup",
     )
+    check_equal("活动任务索引键", keys.active, "ddl:active")
     check_equal(
         "激活成员",
         keys.activation_member("job-1", 2),
@@ -132,6 +139,35 @@ def test_job_codec_store_projects_public_record() -> None:
             "graph_version",
         },
     )
+
+
+def test_answer_script_renews_source_lease_only_for_owner() -> None:
+    """ANSWER 续期来源租约前必须校验属主，避免延长其他持有者的租约。"""
+    lines = [line.strip() for line in JobScripts.ANSWER.splitlines()]
+    expire_index = lines.index("redis.call('EXPIRE', KEYS[4], ARGV[12])")
+    check_equal(
+        "续期语句由属主比较守卫",
+        lines[expire_index - 1],
+        "if redis.call('GET', KEYS[4]) == redis.call('HGET', KEYS[1], 'job_id') then",
+    )
+
+
+def test_job_scripts_maintain_active_index() -> None:
+    """三个原子脚本必须共同维护非终态任务的活动索引。"""
+    cases = (
+        ("受理写入活动索引", JobScripts.SUBMIT, "ZADD', KEYS[4], submit_time[1]"),
+        ("终态摘除活动索引", JobScripts.TRANSITION, "ZREM', KEYS[5], job_id"),
+        ("非终态刷新活动索引", JobScripts.TRANSITION, "ZADD', KEYS[5], redis_time[1]"),
+        ("回答过期摘除活动索引", JobScripts.ANSWER, "ZREM', KEYS[6]"),
+        ("回答受理刷新活动索引", JobScripts.ANSWER, "ZADD', KEYS[6], answer_time[1]"),
+    )
+    for label, script, fragment in cases:
+        check_condition(
+            label,
+            fragment in script,
+            actual=fragment,
+            expected="脚本包含活动索引维护语句",
+        )
 
 
 async def test_ddl_job_store_rejects_illegal_transition_without_redis() -> None:

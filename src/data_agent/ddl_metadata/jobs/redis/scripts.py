@@ -16,6 +16,8 @@ redis.call('HSET', KEYS[1],
   'created_at', ARGV[4], 'updated_at', ARGV[4],
   'graph_version', ARGV[5], 'ddl', ARGV[6], 'dialect', 'mysql')
 redis.call('ZADD', KEYS[2], ARGV[7], ARGV[1] .. ':0')
+local submit_time = redis.call('TIME')
+redis.call('ZADD', KEYS[4], submit_time[1], ARGV[1])
 return 1
 """
 
@@ -31,17 +33,20 @@ redis.call('ZREM', KEYS[2], ARGV[5])
 if ARGV[2] == 'waiting_input' then
   redis.call('ZADD', KEYS[2], ARGV[6], ARGV[5])
 end
+local job_id = redis.call('HGET', KEYS[1], 'job_id')
+local redis_time = redis.call('TIME')
 if ARGV[7] == '1' then
-  if redis.call('GET', KEYS[3]) == redis.call('HGET', KEYS[1], 'job_id') then
+  if redis.call('GET', KEYS[3]) == job_id then
     redis.call('DEL', KEYS[3])
   end
-  local redis_time = redis.call('TIME')
-  redis.call('ZADD', KEYS[4], redis_time[1],
-    redis.call('HGET', KEYS[1], 'job_id'))
+  redis.call('ZADD', KEYS[4], redis_time[1], job_id)
+  redis.call('ZREM', KEYS[5], job_id)
   redis.call('HDEL', KEYS[1],
     'ddl', 'answer_json', 'answer_hash', 'questions_json',
     'question_set_id', 'expires_at', 'expires_at_epoch')
   redis.call('EXPIRE', KEYS[1], ARGV[8 + field_count * 2 + 1])
+else
+  redis.call('ZADD', KEYS[5], redis_time[1], job_id)
 end
 return 1
 """
@@ -67,6 +72,7 @@ if tonumber(redis.call('HGET', KEYS[1], 'expires_at_epoch')) <= tonumber(ARGV[3]
     redis.call('DEL', KEYS[4])
   end
   redis.call('ZADD', KEYS[5], ARGV[3], redis.call('HGET', KEYS[1], 'job_id'))
+  redis.call('ZREM', KEYS[6], redis.call('HGET', KEYS[1], 'job_id'))
   redis.call('HDEL', KEYS[1],
     'ddl', 'answer_json', 'answer_hash', 'questions_json',
     'question_set_id', 'expires_at', 'expires_at_epoch')
@@ -78,7 +84,11 @@ redis.call('HSET', KEYS[1],
   'answer_hash', ARGV[4], 'answer_json', ARGV[7])
 redis.call('ZREM', KEYS[2], ARGV[8])
 redis.call('ZADD', KEYS[3], ARGV[3], ARGV[9])
-redis.call('EXPIRE', KEYS[4], ARGV[12])
+local answer_time = redis.call('TIME')
+redis.call('ZADD', KEYS[6], answer_time[1], redis.call('HGET', KEYS[1], 'job_id'))
+if redis.call('GET', KEYS[4]) == redis.call('HGET', KEYS[1], 'job_id') then
+  redis.call('EXPIRE', KEYS[4], ARGV[12])
+end
 return 1
 """
 

@@ -13,6 +13,8 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
+from data_agent.ddl_metadata.jobs.recovery import StallAction, stall_action
+from data_agent.ddl_metadata.jobs.redis.activity_store import JobActivityStore
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
 from data_agent.ddl_metadata.jobs.redis.event_store import JobEventStore
@@ -50,6 +52,7 @@ class DDLJobStore:
         self._leases = SourceLeaseStore(redis, self._keys)
         self._outbox = JobOutboxStore(redis, self._keys)
         self._events = JobEventStore(redis, self._keys)
+        self._activity = JobActivityStore(redis, self._keys)
 
     @property
     def dispatch_key(self) -> str:
@@ -361,26 +364,126 @@ class DDLJobStore:
             ),
         )
         # 步骤二：逐项执行 CAS 终态转换，只有仍处于对应等待修订的任务会被拒绝。
+        # 每个成员独立隔离异常，避免单个孤儿成员或瞬时故障阻断同轮其余到期任务。
         expired: list[str] = []
         for member in members:
             job_id, revision_text = member.rsplit(":", 1)
-            changed = await self.transition(
-                job_id,
-                int(revision_text),
-                JobStatus.WAITING_INPUT,
-                JobStatus.REJECTED,
-                fields={
-                    "error_json": JobError(
-                        code="answer_timeout",
-                        stage="waiting_input",
-                        retryable=False,
-                    ).model_dump_json()
-                },
-            )
+            try:
+                changed = await self.transition(
+                    job_id,
+                    int(revision_text),
+                    JobStatus.WAITING_INPUT,
+                    JobStatus.REJECTED,
+                    fields={
+                        "error_json": JobError(
+                            code="answer_timeout",
+                            stage="waiting_input",
+                            retryable=False,
+                        ).model_dump_json()
+                    },
+                )
+            except DataAgentError as error:
+                # 步骤三：权威 Hash 已过保留期的成员无法再转换，直接摘除孤儿成员，
+                # 否则它会永远排在到期队列前部并重复失败。
+                if error.code == "job_not_found":
+                    await RedisBaseStore.awaitable(
+                        self._redis.zrem(self.waiting_key, member)
+                    )
+                    _log_waiting_member_dropped(job_id)
+                    continue
+                raise
+            except RedisError:
+                # 步骤四：瞬时 Redis 故障只跳过当前成员，下个周期继续重放。
+                _log_waiting_expire_deferred(job_id)
+                continue
             if changed:
                 expired.append(job_id)
-        # 步骤三：只返回实际完成转换的任务，供维护任务协调后续清理。
+        # 步骤五：只返回实际完成转换的任务，供维护任务协调后续清理。
         return expired
+
+    async def reap_stalled(self, limit: int = 100) -> list[str]:
+        """回收被基础设施重试预算耗尽后遗留的停滞任务。
+
+        arq 的 `Retry` 与业务重试共用同一预算，预算耗尽后 arq 会静默放弃任务，
+        此时权威记录仍停留在 pending 或 running，dispatch outbox 已被清空，没有
+        任何组件会再次激活它。本方法按活动索引发现这类任务并重新激活或判定失败。
+
+        Returns:
+            实际被重新激活或判定失败的任务标识。
+        """
+        # 步骤一：停滞阈值必须严格大于 arq 自身的执行超时，确保被回退的 running
+        # 任务对应的 arq 执行已被超时取消，不会与新激活并发执行。
+        threshold = time.time() - (
+            app_config.redis.worker_job_timeout_seconds
+            + app_config.redis.job_stall_grace_seconds
+        )
+        candidates = await self._activity.stalled(threshold, limit)
+        # 步骤二：逐项独立隔离异常，单个候选失败不影响同轮其余停滞任务。
+        reaped: list[str] = []
+        for job_id in candidates:
+            try:
+                recovered = await self._reap_one(job_id)
+            except RedisError:
+                _log_stalled_reap_deferred(job_id)
+                continue
+            if recovered:
+                reaped.append(job_id)
+        # 步骤三：只返回真正推进了状态的任务，供维护任务观测回收结果。
+        return reaped
+
+    async def _reap_one(self, job_id: str) -> bool:
+        """按权威记录裁决并执行单个停滞候选任务的恢复动作。"""
+        # 步骤一：读取权威记录；已过保留期的成员无法恢复，直接摘除孤儿索引项。
+        try:
+            record = await self.get(job_id)
+        except DataAgentError as error:
+            if error.code == "job_not_found":
+                await self._activity.drop(job_id)
+                _log_stalled_member_dropped(job_id)
+                return False
+            raise
+        # 步骤二：由纯裁决函数决定动作，恢复策略因此可脱离 Redis 单独验证。
+        action = stall_action(
+            record.status,
+            record.attempt,
+            app_config.redis.max_job_attempts,
+        )
+        if action is StallAction.DROP:
+            await self._activity.drop(job_id)
+            return False
+        if action is StallAction.SKIP:
+            await self._activity.touch(job_id, time.time())
+            return False
+        # 步骤三：超过累计激活上限的执行中任务进入终态，不再重新激活。
+        if action is StallAction.FAIL:
+            failed = await self.mark_terminal(
+                job_id,
+                record.revision,
+                JobStatus.FAILED,
+                error=JobError(
+                    code="job_stalled",
+                    stage="worker",
+                    retryable=False,
+                    attempt=record.attempt,
+                ),
+            )
+            if failed:
+                _log_stalled_job_failed(job_id)
+            return failed
+        # 步骤四：执行中任务先原子回退为待执行，CAS 失败说明已有其他推进者。
+        if action is StallAction.RESET and not await self.transition(
+            job_id,
+            record.revision,
+            JobStatus.RUNNING,
+            JobStatus.PENDING,
+        ):
+            return False
+        # 步骤五：重新登记激活请求；确定性 arq ID 保证对仍在队列的任务幂等。
+        now = time.time()
+        await self._outbox.enqueue_activation(job_id, record.revision, now)
+        await self._activity.touch(job_id, now)
+        _log_stalled_job_reactivated(job_id)
+        return True
 
     async def pending_checkpoint_cleanup(self, limit: int = 100) -> list[str]:
         """读取待删除的终态 LangGraph 线程。"""
@@ -485,3 +588,39 @@ def _log_event_publish_failure(job_id: str) -> None:
     """记录不包含任务输入和异常文本的安全事件写入告警。"""
     del job_id
     logger.warning("DDL 任务公开事件写入失败，客户端可通过权威快照恢复状态")
+
+
+def _log_waiting_member_dropped(job_id: str) -> None:
+    """记录已摘除的过期等待孤儿成员。"""
+    del job_id
+    logger.warning("等待成员对应的任务记录已过保留期，已摘除孤儿成员")
+
+
+def _log_waiting_expire_deferred(job_id: str) -> None:
+    """记录一个等待成员将在后续周期继续过期处理。"""
+    del job_id
+    logger.warning("等待任务过期处理失败，该成员保留并将在下个周期重试")
+
+
+def _log_stalled_reap_deferred(job_id: str) -> None:
+    """记录一个停滞任务将在后续周期继续回收。"""
+    del job_id
+    logger.warning("停滞任务回收失败，该任务保留在活动索引并将在下个周期重试")
+
+
+def _log_stalled_member_dropped(job_id: str) -> None:
+    """记录已摘除的活动索引孤儿成员。"""
+    del job_id
+    logger.warning("活动索引成员对应的任务记录已过保留期，已摘除孤儿成员")
+
+
+def _log_stalled_job_reactivated(job_id: str) -> None:
+    """记录一个已重新登记激活请求的停滞任务。"""
+    del job_id
+    logger.warning("检测到停滞任务，已重新登记激活请求")
+
+
+def _log_stalled_job_failed(job_id: str) -> None:
+    """记录一个超过激活上限而被判定失败的停滞任务。"""
+    del job_id
+    logger.warning("停滞任务已超过累计激活上限，已判定为失败终态")

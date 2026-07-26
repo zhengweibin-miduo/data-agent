@@ -36,6 +36,11 @@ class JobKeys:
         """返回终态检查点清理 outbox 键。"""
         return f"{self.prefix}:checkpoint_cleanup"
 
+    @property
+    def active(self) -> str:
+        """返回按最后推进时间排序的非终态任务索引键。"""
+        return f"{self.prefix}:active"
+
     @staticmethod
     def activation_member(job_id: str, revision: int | str) -> str:
         """返回修订感知的 outbox 成员。"""
