@@ -244,6 +244,32 @@ class ConversationRepository:
         # 步骤二：只把是否可占用返回给调用方，具体拒绝语义由调用方投影。
         return claimable is not None
 
+    async def _claim_turn_gate(
+        self,
+        conversation_id: int,
+        user_id: str,
+        turn_uid: str,
+    ) -> None:
+        """占用活动轮次门禁并把租约起点推进到当前时刻。
+
+        新轮次首次占用与同一轮次的幂等回放都走这里：两者都必须刷新 `updated_at`，
+        否则租约到期后的回放会留下一个仍处于过期状态的门禁。
+
+        Args:
+            conversation_id: 已锁定会话的主键。
+            user_id: 会话归属用户。
+            turn_uid: 占用门禁的轮次标识。
+        """
+        # 步骤一：门禁与租约起点同写，保证可见的占用必然带有最新租约。
+        await self._session.execute(
+            update(agent_conversation)
+            .where(
+                agent_conversation.c.id == conversation_id,
+                agent_conversation.c.user_id == user_id,
+            )
+            .values(active_turn_uid=turn_uid, updated_at=func.now())
+        )
+
     async def start_turn(
         self,
         user_id: str,
@@ -302,6 +328,10 @@ class ConversationRepository:
                     "相同轮次的用户内容不一致",
                     http_status=409,
                 )
+            # 幂等回放同样要续租门禁。租约到期后本轮次靠"同一 turn_uid"通过门禁，
+            # 若不刷新 updated_at，门禁仍是过期状态，随后到达的其它轮次可以立刻
+            # 抢占，使刚恢复的本轮次在 complete_turn 时被拒。
+            await self._claim_turn_gate(int(conversation["id"]), user_id, turn_uid)
             return _message(existing), conversation
 
         # 步骤三：新消息与 active_turn_uid 在调用方事务内一并写入，确保可见的
@@ -318,14 +348,7 @@ class ConversationRepository:
             )
         )
         message_id = _inserted_id(result, "用户消息")
-        await self._session.execute(
-            update(agent_conversation)
-            .where(
-                agent_conversation.c.id == int(conversation["id"]),
-                agent_conversation.c.user_id == user_id,
-            )
-            .values(active_turn_uid=turn_uid, updated_at=func.now())
-        )
+        await self._claim_turn_gate(int(conversation["id"]), user_id, turn_uid)
         row = (
             await self._session.execute(
                 select(agent_message).where(agent_message.c.id == message_id)

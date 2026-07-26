@@ -20,6 +20,13 @@ across major versions:
 | `AsyncQdrantClient` | `timeout` |
 | `AsyncInferenceClient` (TEI) | `timeout` |
 | `ChatOpenAI` | `timeout`, `max_retries` |
+| `AsyncRedisSaver` (LangGraph checkpoint) | `connection_args`: `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+
+The checkpoint saver builds its own connection pool instead of reusing
+`RedisClient`, so it needs the same socket timeouts injected separately. Without
+them a half-open Redis leaves the worker hanging forever inside `asetup()`'s index
+initialization or a later checkpoint read/write — before the worker ever reports
+ready.
 
 ### Redis read timeout is coupled to the SSE heartbeat
 

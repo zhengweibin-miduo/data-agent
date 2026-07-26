@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
+
+from data_agent.infrastructure import checkpoint_store as checkpoint_module
+from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.settings import app_config
-from tests.helpers.checks import check_equal
+from tests.helpers.checks import check_condition, check_equal
 
 
 async def test_redis_client_declares_socket_timeouts() -> None:
@@ -91,3 +95,53 @@ async def test_tei_client_declares_timeout() -> None:
         )
     finally:
         await TEIEmbeddingClient.close()
+
+
+async def test_checkpoint_saver_receives_socket_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """检查点 saver 自建连接池，必须单独注入同一组套接字超时。"""
+    captured: dict[str, object] = {}
+
+    class FakeSaver:
+        """记录构造参数并跳过真实连接的 saver 替身。"""
+
+        def __init__(self, redis_url: str, **kwargs: object) -> None:
+            """记录 URL 与连接参数。"""
+            captured["url"] = redis_url
+            captured.update(kwargs)
+
+        async def __aenter__(self) -> FakeSaver:
+            """不建立真实连接。"""
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            """不释放真实连接。"""
+
+        async def asetup(self) -> None:
+            """跳过索引初始化。"""
+
+    monkeypatch.setattr(checkpoint_module, "AsyncRedisSaver", FakeSaver)
+    await CheckpointStore.close()
+    try:
+        await CheckpointStore.initialize()
+        connection_args = captured.get("connection_args")
+        check_condition(
+            "注入了连接参数",
+            isinstance(connection_args, dict),
+            actual=captured,
+            expected="构造时传入 connection_args",
+        )
+        assert isinstance(connection_args, dict)
+        check_equal(
+            "检查点读取超时",
+            connection_args.get("socket_timeout"),
+            app_config.redis.socket_timeout_seconds,
+        )
+        check_equal(
+            "检查点连接超时",
+            connection_args.get("socket_connect_timeout"),
+            app_config.redis.socket_connect_timeout_seconds,
+        )
+    finally:
+        await CheckpointStore.close()

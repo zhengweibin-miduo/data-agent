@@ -18,8 +18,20 @@ class CheckpointStore:
         # 步骤一：以共享实例是否存在作为幂等门禁，避免重复进入异步资源上下文。
         if cls._client is None:
             # 步骤二：创建并显式进入 saver 上下文，使后续设置操作使用同一连接资源。
+            # 该 saver 自建连接池，不复用 RedisClient，因此必须单独注入同一组套接字
+            # 超时：否则 Redis 半开或收下请求后不再响应时，worker 会永久卡在
+            # asetup() 的索引初始化或后续 checkpoint 读写上。
             client = AsyncRedisSaver(
                 app_config.redis.url,
+                connection_args={
+                    "socket_timeout": app_config.redis.socket_timeout_seconds,
+                    "socket_connect_timeout": (
+                        app_config.redis.socket_connect_timeout_seconds
+                    ),
+                    "health_check_interval": (
+                        app_config.redis.health_check_interval_seconds
+                    ),
+                },
                 checkpoint_prefix=f"{app_config.redis.key_prefix}:checkpoint",
                 checkpoint_write_prefix=(
                     f"{app_config.redis.key_prefix}:checkpoint_write"

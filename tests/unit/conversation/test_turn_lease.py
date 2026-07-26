@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import cast
 
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
 
+from data_agent.conversation.models import MessageRole
 from data_agent.conversation.repository import ConversationRepository
 from data_agent.settings import app_config
 from tests.helpers.checks import check_condition, check_equal
@@ -19,6 +21,10 @@ class _FakeResult:
     def __init__(self, row: object | None) -> None:
         """绑定预置行。"""
         self._row = row
+
+    def mappings(self) -> _FakeResult:
+        """沿用同一替身暴露行映射视图。"""
+        return self
 
     def one_or_none(self) -> object | None:
         """返回预置行或 None。"""
@@ -97,4 +103,56 @@ async def test_turn_gate_rejects_live_turn_and_allows_expired_turn() -> None:
             "turn-2",
         ),
         True,
+    )
+
+
+class _ReplaySession(_RecordingSession):
+    """按顺序返回会话行、既有用户消息，并记录门禁续租语句。"""
+
+    def __init__(self, conversation: dict[str, object], message: dict[str, object]):
+        """绑定预置的会话行与既有用户消息。"""
+        super().__init__(claimable=True)
+        self._rows = [conversation, message]
+        self._index = 0
+
+    async def execute(self, statement: ClauseElement) -> object:
+        """按调用顺序返回会话、门禁判定与既有消息。"""
+        self.statements.append(statement)
+        rendered = str(statement).casefold()
+        if rendered.startswith("update"):
+            return _FakeResult(None)
+        row = self._rows[min(self._index, len(self._rows) - 1)]
+        self._index += 1
+        return _FakeResult(row)
+
+
+async def test_idempotent_replay_renews_turn_lease() -> None:
+    """同一 turn_uid 的幂等回放必须续租门禁，否则回放后仍可被立即抢占。"""
+    moment = datetime.now(UTC)
+    conversation = {"id": 1, "active_turn_uid": "turn-1", "updated_at": moment}
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "订单口径是什么",
+        "created_at": moment,
+    }
+    session = _ReplaySession(conversation, message)
+    repository = ConversationRepository(cast(AsyncSession, session))
+
+    record, _ = await repository.start_turn(
+        "user-1", "conv-1", "turn-1", "订单口径是什么"
+    )
+
+    check_equal("幂等回放返回既有消息", record.uid, "message-7")
+    updates = [s for s in session.statements if str(s).casefold().startswith("update")]
+    check_equal("幂等回放执行一次门禁续租", len(updates), 1)
+    rendered = _rendered(updates[0])
+    check_condition(
+        "续租同时写回本轮次与当前时间",
+        "active_turn_uid=%s" in rendered.replace(" ", "")
+        and "updated_at=now()" in rendered.replace(" ", ""),
+        actual=rendered,
+        expected="UPDATE 同时设置 active_turn_uid 与 updated_at=now()",
     )
