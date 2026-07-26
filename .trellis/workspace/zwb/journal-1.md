@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 为 Redis/ES/Qdrant/TEI 四个客户端注入配置化显式超时，并新增 socket_timeout > sse_heartbeat 跨字段校验保护 SSE 阻塞读取；active_turn_uid 门禁改为带租约，用 updated_at 作占用起点并把可抢占性判定下推到 SQL 数据库端时钟，消除客户端崩溃导致的会话永久 busy。新增 8 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+## Session 28: 修复记忆检索与投影的遗留正确性缺陷
+
+**Date**: 2026-07-26
+**Task**: 修复记忆检索与投影的遗留正确性缺陷
+**Branch**: `fix/memory-correctness-defects-20260726`
+
+### Summary
+
+event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在越过一页后永久错误）；移除权威回查阶段的 projection_version 行级否决，消除版本升级窗口内的检索全量黑障；setup 复核既有索引的 dynamic 与 memory_zh 分析器，防止 recreate 竞态下动态映射静默降级。新增 6 个单元测试。
 
 ### Main Changes
 
@@ -926,6 +935,7 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 | Hash | Message |
 |------|---------|
 | `c276703` | (see git log) |
+| `a5cd384` | (see git log) |
 
 ### Testing
 
