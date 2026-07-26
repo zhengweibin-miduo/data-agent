@@ -916,6 +916,15 @@ Added typed Pydantic models for conf/app.yaml, locked configuration dependencies
 ### Summary
 
 新增活动任务索引与停滞巡检回收被 arq 重试预算耗尽的任务；记忆索引 dispatcher 改三段式短事务并在确认阶段复核权威一致性；UPSERT 收敛为权威状态、重建锁定复核 ACTIVE；outbox 退避改数据库端时钟并加死信上限；来源租约校验改求和、ANSWER 续期校验属主；DataAgentError.details 不再回填内部 message。新增 18 个单元测试，README 基础门禁全通过，集成测试因本机 Docker 未运行未执行。
+## Session 28: 统一 worker 的可重试错误判定
+
+**Date**: 2026-07-26
+**Task**: 统一 worker 的可重试错误判定
+**Branch**: `fix/retryable-error-contract-20260726`
+
+### Summary
+
+新增 _is_retryable：DataAgentError.retryable 成为可重试性权威来源，第三方异常才回退内置瞬态清单；终态投影 retryable 改为反映底层瞬态性。在 spec 中确立'新增基础设施在边界包装为 DataAgentError(retryable=True)'的约定。新增 4 个单元测试。
 ## Session 28: 修复记忆检索与投影的遗留正确性缺陷
 
 **Date**: 2026-07-26
@@ -968,6 +977,7 @@ JobRecord 移除内部 graph_version 并改走内部读取路径；受理回答�
 | Hash | Message |
 |------|---------|
 | `cc7df84` | (see git log) |
+| `fdc78dc` | (see git log) |
 | `a5cd384` | (see git log) |
 
 ### Testing

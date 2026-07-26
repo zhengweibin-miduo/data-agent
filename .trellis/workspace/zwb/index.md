@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 30
+- **Total Sessions**: 31
 - **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
@@ -60,6 +60,7 @@
 | 28 | 2026-07-15 | 引入 MySQL 异步客户端与 Docker 服务 | `66c22ce` | `feature/mysql-integration-20260715` |
 | 29 | 2026-07-15 | 接入 TEI CPU 服务与 LangChain 客户端 | `2e2d5e5`, `ad29f2c` | `feature/tei-integration-20260715` |
 | 30 | 2026-07-14 | Add YAML application configuration | `84c8729` | `feature/app-config-20260714` |
+| 31 | 2026-07-26 | 统一 worker 的可重试错误判定 | `fdc78dc` | `fix/retryable-error-contract-20260726` |
 <!-- @@@/auto:session-history -->
 
 ---
