@@ -1,5 +1,6 @@
 """应用配置模型及全局配置实例。"""
 
+import os
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
@@ -14,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy.engine import make_url
+
+from data_agent.errors import DataAgentError
 
 
 class SettingsModel(BaseModel):
@@ -328,23 +331,103 @@ class AppSettings(SettingsModel):
         return self
 
     @classmethod
-    def from_yaml(
-        cls,
-        path: str | Path = Path(__file__).parents[2] / "conf" / "app_config.yaml",
-    ) -> "AppSettings":
+    def from_yaml(cls, path: str | Path | None = None) -> "AppSettings":
         """从 YAML 文件加载并校验应用配置。
 
         Args:
-            path: YAML 配置文件路径。
+            path: YAML 配置文件路径；为 None 时按 `resolve_config_path` 顺序解析。
 
         Returns:
             校验后的应用配置。
         """
-        # 步骤一：以 UTF-8 打开明确目标文件，让文件与 YAML 解析异常原样传播。
-        with Path(path).open(encoding="utf-8") as file:
-            # 步骤二：解析 YAML 后一次性交给 Pydantic 完成字段与跨配置约束校验。
+        # 步骤一：先确定唯一目标文件，使"配置来自哪里"始终可解释。
+        resolved = resolve_config_path(path)
+        # 步骤二：以 UTF-8 打开明确目标文件，让 YAML 解析异常原样传播。
+        with resolved.open(encoding="utf-8") as file:
+            # 步骤三：解析 YAML 后一次性交给 Pydantic 完成字段与跨配置约束校验。
             return cls.model_validate(yaml.safe_load(file))
 
 
-# 步骤一：模块导入时只加载一次配置，供所有应用组件共享同一校验结果。
-app_config = AppSettings.from_yaml()
+CONFIG_PATH_ENV = "DATA_AGENT_CONFIG"
+
+_CONFIG_FILENAME = Path("conf") / "app_config.yaml"
+_SOURCE_TREE_CONFIG = Path(__file__).parents[2] / _CONFIG_FILENAME
+
+
+def _config_not_found(candidates: list[Path]) -> DataAgentError:
+    """构造列出全部候选路径的配置缺失错误。"""
+    searched = ", ".join(str(candidate.absolute()) for candidate in candidates)
+    return DataAgentError(
+        "config_not_found",
+        "settings",
+        f"未找到应用配置文件，已查找：{searched}；可用 {CONFIG_PATH_ENV} 指定路径",
+        http_status=500,
+        details={"searched": searched, "env": CONFIG_PATH_ENV},
+    )
+
+
+def resolve_config_path(path: str | Path | None = None) -> Path:
+    """按固定优先级解析应用配置文件位置。
+
+    顺序为：显式实参、`DATA_AGENT_CONFIG` 环境变量、当前工作目录下的
+    `conf/app_config.yaml`、源码树相对位置。工作目录先于源码树，使安装后的部署
+    目录配置优先于恰好可见的源码树配置。
+
+    Args:
+        path: 调用方显式指定的配置路径。
+
+    Returns:
+        存在的配置文件绝对路径。
+
+    Raises:
+        DataAgentError: 显式指定或环境变量指向的文件不存在，或全部候选都不存在。
+    """
+    # 步骤一：显式实参与环境变量都是明确意图，指向的文件不存在必须直接失败；
+    # 静默回退会让调用方以为换了配置而实际仍加载旧文件，比启动失败更难排查。
+    explicit = path if path is not None else os.environ.get(CONFIG_PATH_ENV)
+    if explicit is not None:
+        candidate = Path(explicit).expanduser()
+        if not candidate.is_file():
+            raise _config_not_found([candidate])
+        return candidate.resolve()
+    # 步骤二：其余候选按顺序探测，命中即返回；工作目录优先于源码树。
+    candidates = [Path.cwd() / _CONFIG_FILENAME, _SOURCE_TREE_CONFIG]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    # 步骤三：全部缺失时列出查找过的绝对路径，避免只报一个裸文件名。
+    raise _config_not_found(candidates)
+
+
+_settings: AppSettings | None = None
+
+
+def get_settings(path: str | Path | None = None) -> AppSettings:
+    """返回进程内共享的应用配置，首次调用时解析并校验。
+
+    已有缓存时直接返回缓存，`path` 不参与缓存键；需要改用其它配置文件时先调用
+    `reset_settings()`，使"重新加载"始终是一个显式动作。
+
+    Args:
+        path: 首次加载时使用的配置路径；为 None 时按解析顺序确定。
+
+    Returns:
+        进程内共享的应用配置。
+    """
+    global _settings
+    # 步骤一：缓存命中直接复用，保证所有组件共享同一份校验结果。
+    if _settings is None:
+        # 步骤二：首次加载才解析文件并执行跨配置约束校验。
+        _settings = AppSettings.from_yaml(path)
+    return _settings
+
+
+def reset_settings() -> None:
+    """清除进程内配置缓存，使下次 `get_settings` 重新解析。"""
+    global _settings
+    _settings = None
+
+
+# 步骤一：模块导入时只加载一次配置，供所有应用组件共享同一校验结果。后续把
+# import-time 求值点改为惰性访问时，替换点就是这里而不是各个调用方。
+app_config: AppSettings = get_settings()
