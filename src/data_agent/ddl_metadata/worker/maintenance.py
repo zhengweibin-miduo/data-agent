@@ -36,6 +36,17 @@ async def expire_waiting(ctx: dict[Any, Any]) -> None:
     await cleanup_checkpoints(ctx)
 
 
+async def reap_stalled_jobs(ctx: dict[Any, Any]) -> None:
+    """周期性回收被重试预算耗尽后遗留的停滞任务。"""
+    # 步骤一：按活动索引发现停滞任务并重新激活或判定失败。
+    jobs = cast(DDLJobStore, ctx["jobs"])
+    reaped = await jobs.reap_stalled()
+    # 步骤二：被重新登记的激活请求由 dispatch outbox 在同一周期内尽快排空。
+    if reaped:
+        queue = cast(ArqRedis, ctx["redis"])
+        await jobs.dispatch(queue)
+
+
 async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
     """重试删除所有已进入终态的 LangGraph 线程。"""
     # 步骤一：读取终态转换写入的清理 outbox；没有待处理项时立即结束。

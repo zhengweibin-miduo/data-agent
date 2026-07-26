@@ -22,6 +22,13 @@ DataAgentError(
 HTTP boundaries. The exception message is internal and must not contain raw
 DDL, answers, prompts, secrets, or full service URLs.
 
+`details` defaults to an empty dict and never back-fills `message`. The API error
+handler and the public job event stream both project `details` verbatim, so
+back-filling would publish every internal message that a caller forgot to
+sanitize. Only pass `details` when the keys are deliberately public — bounded
+identifier lists, counts, or an exception class name — and let `message` reach
+logs only.
+
 ## Client Lifecycle Errors
 
 Every infrastructure wrapper's `get_client()` rejects access before
@@ -171,6 +178,30 @@ DELETE /api/v1/metadata/memories/{memory_uid}
 
 - Submit returns `202` only after the Redis job record, source lease, and
   dispatch outbox are durable.
+- After acceptance is durable, submit and answer-submit also dispatch that one
+  activation immediately, so an interactive round does not wait out a
+  `dispatch_pending` cron tick. The outbox member stays the only recoverable
+  scheduling request: immediate dispatch is best-effort, its failure only falls
+  back to the cron, and it must never undo an acceptance already promised.
+  Deterministic arq job ids make the immediate path and the cron idempotent with
+  respect to each other.
+- Build the arq client for that path directly rather than with
+  `arq.create_pool`: `create_pool` connects during startup with retry backoff,
+  which escalates "Redis briefly unreachable" from per-request failures into a
+  process that cannot start, and makes the lifespan untestable without Redis.
+  arq needs byte responses, so it cannot share the application's
+  `decode_responses=True` client.
+- `graph_version` stays out of the public projection. It only tells the worker
+  whether a job may still be interpreted by the current graph; callers have no
+  use for it, and the worker reads it through an internal accessor.
+- Accepting an answer clears `questions_json` so a `pending` read stops
+  returning the previous round's questions. It must keep `question_set_id` and
+  `answer_hash`: the idempotent-replay verdict matches on them, and clearing
+  them would turn a legitimate answer retry into `stale_answer`.
+- Attempt counting happens inside the transition script via `HINCRBY`. A caller
+  that reads the old value and writes back `value + 1` loses the increment if
+  another actor interleaves; the single-active-actor assumption that currently
+  saves it is not enforced by anything.
 - Before submission encodes DDL as UTF-8, reject `len(ddl) >
   api.max_ddl_bytes`; every Unicode code point occupies at least one UTF-8
   byte. Encode only the bounded remainder and apply the exact byte comparison

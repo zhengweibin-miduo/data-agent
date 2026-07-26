@@ -53,6 +53,8 @@ redis:
   waiting_timeout_seconds: 1800
   worker_concurrency: 4
   worker_job_timeout_seconds: 600
+  job_stall_grace_seconds: 120
+  max_job_attempts: 3
 
 llm:
   base_url: http://127.0.0.1:11434/v1
@@ -73,6 +75,8 @@ memory:
   rebuild_batch_size: 100
   outbox_batch_size: 100
   outbox_max_backoff_seconds: 3600
+  outbox_claim_lease_seconds: 300
+  outbox_max_attempts: 10
   retrieval_timeout_seconds: 2
   rrf_constant: 60
   search_limit: 20

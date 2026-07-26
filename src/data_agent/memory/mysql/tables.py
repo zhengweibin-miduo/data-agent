@@ -136,20 +136,16 @@ agent_memory_link = Table(
 memory_index_outbox = Table(
     "memory_index_outbox",
     metadata,
-    Column(
-        "memory_uid",
-        String(64),
-        ForeignKey(
-            f"{app_config.memory.database}.agent_memory.uid",
-            name="fk_memory_index_outbox_memory",
-        ),
-        primary_key=True,
-    ),
+    # 刻意不设向 agent_memory 的外键：权威行被物理清理后，仍可能需要为该 UID 登记
+    # 一条删除派生文档的收敛请求（迟到写入的补偿）。外键会让这条请求无处可存，
+    # 补偿只能退化为一次性远程调用，失败后再无待办可重试。
+    Column("memory_uid", String(64), primary_key=True),
     Column("target", String(16), primary_key=True),
     Column("operation", String(16), nullable=False),
     Column("projection_version", String(32), nullable=False),
     Column("attempts", Integer, nullable=False, server_default="0"),
     Column("available_at", DateTime, nullable=False, server_default=func.now()),
+    Column("lease_token", String(32), nullable=True),
     Column("last_error_type", String(128), nullable=True),
     Column(
         "updated_at",

@@ -16,6 +16,7 @@ from data_agent.ddl_metadata.worker.maintenance import (
     expire_waiting,
     extract_conversation_memory,
     purge_user_memories,
+    reap_stalled_jobs,
 )
 from data_agent.logging import logging_boundary
 from data_agent.settings import app_config
@@ -45,6 +46,7 @@ class WorkerSettings:
         ),
         cron(_observed(expire_waiting), minute=None, second=0),
         cron(_observed(expire_memories), minute=None, second=1),
+        cron(_observed(reap_stalled_jobs), minute=None, second=3),
         cron(
             _observed(cleanup_checkpoints),
             second={5, 15, 25, 35, 45, 55},

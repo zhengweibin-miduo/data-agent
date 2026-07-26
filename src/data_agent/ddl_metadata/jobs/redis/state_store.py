@@ -40,10 +40,11 @@ class RedisJobStateStore:
         accepted = await RedisBaseStore.awaitable(
             self._redis.eval(
                 JobScripts.SUBMIT,
-                3,
+                4,
                 self._keys.job(job_id),
                 self._keys.dispatch,
                 self._keys.source(request.source),
+                self._keys.active,
                 job_id,
                 str(app_config.memory.source_lease_seconds),
                 request.source,
@@ -103,6 +104,16 @@ class RedisJobStateStore:
             self._redis.hget(self._keys.job(job_id), "answer_json")
         )
 
+    async def graph_version(self, job_id: str) -> str | None:
+        """读取仅供 worker 使用的图版本兼容字段。
+
+        该字段只用于判断任务能否由当前图版本继续解释，对调用方没有任何用途，
+        因此不进入公开投影，改由 worker 走内部读取路径获取。
+        """
+        return await RedisBaseStore.awaitable(
+            self._redis.hget(self._keys.job(job_id), "graph_version")
+        )
+
     async def transition(
         self,
         job_id: str,
@@ -111,8 +122,22 @@ class RedisJobStateStore:
         target: JobStatus,
         *,
         fields: Mapping[str, str] | None = None,
+        increment_attempt: bool = False,
     ) -> bool:
-        """执行修订感知的原子状态转换。"""
+        """执行修订感知的原子状态转换。
+
+        Args:
+            job_id: 任务标识。
+            revision: 期望的当前修订号，作为 CAS 门闩。
+            expected: 期望的当前状态。
+            target: 目标状态。
+            fields: 随转换一并写入的扩展字段。
+            increment_attempt: 是否在同一脚本内原子递增尝试次数。调用方不再
+                自行读取旧值再写回，避免读改写之间被其他推进者插入。
+
+        Returns:
+            原子转换是否胜出。
+        """
         # 步骤一：先读取权威记录以确定来源租约键，避免调用方传入第二份来源。
         record = await self.get(job_id)
         # 步骤二：统一计算时间、等待成员和扩展字段，形成稳定 Lua 参数协议。
@@ -132,16 +157,18 @@ class RedisJobStateStore:
         ]
         arguments.extend(item for pair in values.items() for item in pair)
         arguments.append(str(app_config.redis.result_retention_seconds))
+        arguments.append(str(int(increment_attempt)))
         # 步骤三：由 Lua 以状态和 revision 做 CAS，并在需要时原子维护等待集合、
         # 来源租约、结果 TTL 与 checkpoint cleanup outbox。
         changed = await RedisBaseStore.awaitable(
             self._redis.eval(
                 JobScripts.TRANSITION,
-                4,
+                5,
                 self._keys.job(job_id),
                 self._keys.waiting,
                 self._keys.source(record.source),
                 self._keys.checkpoint_cleanup,
+                self._keys.active,
                 *arguments,
             )
         )
@@ -173,12 +200,13 @@ class RedisJobStateStore:
             await RedisBaseStore.awaitable(
                 self._redis.eval(
                     JobScripts.ANSWER,
-                    5,
+                    6,
                     self._keys.job(job_id),
                     self._keys.waiting,
                     self._keys.dispatch,
                     self._keys.source(source),
                     self._keys.checkpoint_cleanup,
+                    self._keys.active,
                     str(revision),
                     question_set_id,
                     str(now.timestamp()),
