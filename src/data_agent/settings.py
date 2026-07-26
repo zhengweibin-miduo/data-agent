@@ -78,6 +78,10 @@ class QdrantSettings(SettingsModel):
         le=100,
         description="每次 Qdrant 向量检索返回的候选数量。",
     )
+    timeout_seconds: int = Field(
+        gt=0,
+        description="单次 Qdrant 请求允许等待响应的超时秒数。",
+    )
 
 
 class ElasticsearchSettings(SettingsModel):
@@ -101,6 +105,14 @@ class ElasticsearchSettings(SettingsModel):
         le=100,
         description="每次 Elasticsearch 全文检索返回的候选数量。",
     )
+    request_timeout_seconds: float = Field(
+        gt=0,
+        description="单次 Elasticsearch 请求允许等待响应的超时秒数。",
+    )
+    max_retries: int = Field(
+        ge=0,
+        description="单次 Elasticsearch 请求失败后的最大重试次数。",
+    )
 
 
 class TEISettings(SettingsModel):
@@ -108,6 +120,10 @@ class TEISettings(SettingsModel):
 
     url: str = Field(description="Text Embeddings Inference 服务的 HTTP 地址。")
     vector_size: int = Field(gt=0, description="TEI 模型输出的向量维度。")
+    request_timeout_seconds: float = Field(
+        gt=0,
+        description="单次 Text Embeddings Inference 请求的超时秒数。",
+    )
 
 
 class MySQLSettings(SettingsModel):
@@ -160,6 +176,18 @@ class RedisSettings(SettingsModel):
 
     url: str = Field(description="Redis 服务连接地址。")
     key_prefix: str = Field(min_length=1, description="应用写入 Redis 键时使用的前缀。")
+    socket_timeout_seconds: float = Field(
+        gt=0,
+        description="单次 Redis 命令等待响应的套接字超时秒数，必须大于 SSE 心跳间隔。",
+    )
+    socket_connect_timeout_seconds: float = Field(
+        gt=0,
+        description="建立 Redis 连接允许等待的套接字超时秒数。",
+    )
+    health_check_interval_seconds: float = Field(
+        gt=0,
+        description="Redis 连接空闲后复用前执行健康检查的间隔秒数。",
+    )
     checkpoint_retention_seconds: int = Field(
         gt=0,
         description="LangGraph 检查点在 Redis 中的保留秒数。",
@@ -304,6 +332,10 @@ class ConversationSettings(SettingsModel):
         gt=0,
         description="对话记忆提炼任务的领取租约秒数。",
     )
+    turn_lease_seconds: int = Field(
+        gt=0,
+        description="活动对话轮次未完成时保持门禁独占的租约秒数。",
+    )
 
 
 class AppSettings(SettingsModel):
@@ -345,7 +377,14 @@ class AppSettings(SettingsModel):
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")
-        # 步骤四：返回完成跨配置约束校验的根配置实例。
+        # 步骤四：SSE 事件流用 xread 阻塞满一个心跳间隔属于正常空闲行为，而
+        # socket_timeout 是单次命令的读取超时；两者相等或更小会把正常心跳变成
+        # 套接字超时并打断事件流，因此必须严格大于心跳间隔。
+        if self.redis.socket_timeout_seconds <= self.api.sse_heartbeat_seconds:
+            raise ValueError(
+                "redis.socket_timeout_seconds 必须大于 api.sse_heartbeat_seconds"
+            )
+        # 步骤五：返回完成跨配置约束校验的根配置实例。
         return self
 
     @classmethod

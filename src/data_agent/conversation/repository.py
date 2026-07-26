@@ -24,6 +24,7 @@ from data_agent.conversation.mysql_tables import (
 )
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import stable_id
+from data_agent.settings import app_config
 
 
 def _message(row: RowMapping) -> MessageRecord:
@@ -201,6 +202,73 @@ class ConversationRepository:
             ),
         )
 
+    async def _turn_gate_claimable(
+        self,
+        conversation_id: int,
+        user_id: str,
+        turn_uid: str,
+    ) -> bool:
+        """判定当前轮次是否可以占用会话的活动轮次门禁。
+
+        调用方必须已在同一事务内锁定该会话行，因此这里只做无竞态的条件读取。
+
+        Args:
+            conversation_id: 已锁定会话的主键。
+            user_id: 会话归属用户。
+            turn_uid: 申请占用门禁的轮次标识。
+
+        Returns:
+            门禁空闲、由同一轮次持有或已超过租约时为 True。
+        """
+        # 步骤一：把"门禁空闲""同一轮次重入""占用已超租约"三种可占用情形
+        # 一次性下推到 SQL，租约到期时间由数据库端时间函数计算。
+        claimable = (
+            await self._session.execute(
+                select(agent_conversation.c.id).where(
+                    agent_conversation.c.id == conversation_id,
+                    agent_conversation.c.user_id == user_id,
+                    or_(
+                        agent_conversation.c.active_turn_uid.is_(None),
+                        agent_conversation.c.active_turn_uid == turn_uid,
+                        agent_conversation.c.updated_at
+                        <= func.timestampadd(
+                            text("SECOND"),
+                            -app_config.conversation.turn_lease_seconds,
+                            func.now(),
+                        ),
+                    ),
+                )
+            )
+        ).one_or_none()
+        # 步骤二：只把是否可占用返回给调用方，具体拒绝语义由调用方投影。
+        return claimable is not None
+
+    async def _claim_turn_gate(
+        self,
+        conversation_id: int,
+        user_id: str,
+        turn_uid: str,
+    ) -> None:
+        """占用活动轮次门禁并把租约起点推进到当前时刻。
+
+        新轮次首次占用与同一轮次的幂等回放都走这里：两者都必须刷新 `updated_at`，
+        否则租约到期后的回放会留下一个仍处于过期状态的门禁。
+
+        Args:
+            conversation_id: 已锁定会话的主键。
+            user_id: 会话归属用户。
+            turn_uid: 占用门禁的轮次标识。
+        """
+        # 步骤一：门禁与租约起点同写，保证可见的占用必然带有最新租约。
+        await self._session.execute(
+            update(agent_conversation)
+            .where(
+                agent_conversation.c.id == conversation_id,
+                agent_conversation.c.user_id == user_id,
+            )
+            .values(active_turn_uid=turn_uid, updated_at=func.now())
+        )
+
     async def start_turn(
         self,
         user_id: str,
@@ -222,8 +290,16 @@ class ConversationRepository:
                 "会话不存在",
                 http_status=404,
             )
-        active_turn = conversation["active_turn_uid"]
-        if active_turn is not None and str(active_turn) != turn_uid:
+        # 步骤二：门禁带租约。start_turn 写入 active_turn_uid 时同时推进
+        # updated_at，该列即轮次占用起点；调用方在 start 与 complete 之间崩溃并
+        # 丢失 turn_uid 时，超过租约的占用允许被新轮次抢占，否则该会话会永久
+        # 返回 conversation_busy。判定放在 SQL 内，与其它租约一样只用数据库时钟，
+        # 避免应用 naive 时间与数据库会话时区不一致导致租约提前或永不到期。
+        if not await self._turn_gate_claimable(
+            int(conversation["id"]),
+            user_id,
+            turn_uid,
+        ):
             raise DataAgentError(
                 "conversation_busy",
                 "conversation_turn",
@@ -251,6 +327,18 @@ class ConversationRepository:
                     "相同轮次的用户内容不一致",
                     http_status=409,
                 )
+            # 幂等回放只在本轮次仍持有门禁时续租。门禁不再指向本轮次，说明本轮次
+            # 要么已经完成（complete_turn 清空了门禁，其幂等返回路径不会再次清理，
+            # 重新占用会让门禁复活并在整个租约期内把新轮次挡在 409 之外），要么已被
+            # 后续轮次抢占（重新占用会让陈旧轮次在替代轮次完成后写入助手消息，形成
+            # user(A) user(B) assistant(B) assistant(A) 这种错乱顺序，并污染后续摘要
+            # 与记忆提炼）。两种情况都必须保持门禁不变。
+            if str(conversation["active_turn_uid"] or "") == turn_uid:
+                await self._claim_turn_gate(
+                    int(conversation["id"]),
+                    user_id,
+                    turn_uid,
+                )
             return _message(existing), conversation
 
         # 步骤三：新消息与 active_turn_uid 在调用方事务内一并写入，确保可见的
@@ -267,14 +355,7 @@ class ConversationRepository:
             )
         )
         message_id = _inserted_id(result, "用户消息")
-        await self._session.execute(
-            update(agent_conversation)
-            .where(
-                agent_conversation.c.id == int(conversation["id"]),
-                agent_conversation.c.user_id == user_id,
-            )
-            .values(active_turn_uid=turn_uid, updated_at=func.now())
-        )
+        await self._claim_turn_gate(int(conversation["id"]), user_id, turn_uid)
         row = (
             await self._session.execute(
                 select(agent_message).where(agent_message.c.id == message_id)

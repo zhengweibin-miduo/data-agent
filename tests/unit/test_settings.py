@@ -172,6 +172,41 @@ def test_sse_settings_reject_out_of_bounds_values() -> None:
             )
 
 
+def test_redis_socket_timeout_must_outlive_sse_heartbeat() -> None:
+    """读取超时不得小于或等于 SSE 心跳，否则正常空闲心跳会打断事件流。"""
+    heartbeat = float(app_config.api.sse_heartbeat_seconds)
+    for label, socket_timeout in (
+        ("读取超时小于心跳间隔", heartbeat / 2),
+        ("读取超时等于心跳间隔", heartbeat),
+    ):
+        payload = app_config.model_dump(mode="json")
+        payload["redis"]["socket_timeout_seconds"] = socket_timeout
+        try:
+            AppSettings.model_validate(payload)
+        except ValidationError as error:
+            check_exception(f"{label} 捕获校验错误", error, ValidationError)
+            check_condition(
+                f"{label} 指向套接字超时约束",
+                "socket_timeout_seconds" in str(error),
+                actual=str(error),
+                expected="包含 socket_timeout_seconds 约束说明",
+            )
+        else:
+            fail_check(
+                label,
+                actual=socket_timeout,
+                expected="拒绝不大于 SSE 心跳间隔的读取超时",
+            )
+    # 严格大于心跳间隔的取值必须被接受，避免把约束收得过紧。
+    payload = app_config.model_dump(mode="json")
+    payload["redis"]["socket_timeout_seconds"] = heartbeat + 1
+    check_equal(
+        "严格大于心跳间隔的取值被接受",
+        AppSettings.model_validate(payload).redis.socket_timeout_seconds,
+        heartbeat + 1,
+    )
+
+
 def test_source_lease_must_cover_execution_and_waiting_sum() -> None:
     """来源租约必须覆盖 worker 超时与等待超时之和，而不是二者的较大值。"""
     payload = app_config.model_dump(mode="json")

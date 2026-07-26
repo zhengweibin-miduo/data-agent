@@ -17,10 +17,20 @@ class RedisClient:
         """初始化并复用解码后的 Redis 客户端。"""
         # 步骤一：以共享实例作为幂等门禁，避免重复创建连接池。
         if cls._client is None:
-            # 步骤二：从统一配置创建自动解码响应的异步客户端。
+            # 步骤二：从统一配置创建自动解码响应的异步客户端，并显式声明套接字
+            # 超时；缺少读取超时的连接在 TCP 半开时会让调用方永久挂起，业务异常
+            # 处理器无法兜住"永不返回"的调用。socket_timeout 必须大于 SSE 心跳
+            # 间隔，该约束由 AppSettings 跨字段校验强制。
             cls._client = Redis.from_url(
                 app_config.redis.url,
                 decode_responses=True,
+                socket_timeout=app_config.redis.socket_timeout_seconds,
+                socket_connect_timeout=(
+                    app_config.redis.socket_connect_timeout_seconds
+                ),
+                health_check_interval=(
+                    app_config.redis.health_check_interval_seconds
+                ),
             )
         return cls._client
 

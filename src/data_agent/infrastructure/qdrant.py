@@ -18,9 +18,12 @@ class QdrantClient:
         # 步骤一：以共享实例作为幂等门禁，已有客户端直接复用。
         if cls._client is None:
             # 步骤二：只从统一配置创建异步客户端，并保留可选认证兼容字段。
+            # 显式声明请求超时；写路径的失败重试由记忆索引 outbox 的指数退避
+            # 负责，因此这里只设超时，不叠加客户端层重试。
             cls._client = AsyncQdrantClient(
                 url=app_config.qdrant.url,
                 api_key=app_config.qdrant.api_key,
+                timeout=app_config.qdrant.timeout_seconds,
             )
 
         return cls._client

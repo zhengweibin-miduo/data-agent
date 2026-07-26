@@ -1,5 +1,100 @@
 # External Service Integrations
 
+## Every Client Declares Its Own Timeouts
+
+No infrastructure client may rely on library defaults for timeouts. A client
+without a read timeout turns a half-open TCP connection or an unresponsive
+service into a call that never returns, and a business exception handler cannot
+catch a call that does not return: the API request hangs, or a worker cron slot
+is occupied forever. Timeout values come from `conf/app_config.yaml` so they are
+reviewable and environment-specific.
+
+Current injection points — verify parameter names against the locked dependency
+versions before changing them, because these libraries rename timeout arguments
+across major versions:
+
+| Client | Parameters |
+|---|---|
+| `Redis.from_url` | `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+| `AsyncElasticsearch` | `request_timeout`, `max_retries`, `retry_on_timeout` |
+| `AsyncQdrantClient` | `timeout` |
+| `AsyncInferenceClient` (TEI) | `timeout` |
+| `ChatOpenAI` | `timeout`, `max_retries` |
+| `AsyncRedisSaver` (LangGraph checkpoint) | `connection_args`: `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
+| arq queue pool (`infrastructure/job_queue.py`) | `socket_timeout`, `socket_connect_timeout`, `health_check_interval`, bounded `retry` |
+
+Four Redis clients exist in this process family and each needs the timeouts
+injected separately: `RedisClient`, the LangGraph checkpoint saver, the worker's
+arq queue pool (`WorkerSettings.redis_pool`), and the API's own arq queue pool
+(`application.py`). `arq.create_pool` maps `RedisSettings.conn_timeout` only to
+`socket_connect_timeout` and never sets `socket_timeout`, so the worker's queue
+polling would wait forever on a half-open connection and stop claiming jobs and
+running maintenance entirely, while the API's `submit` would hang inside
+`_activate_now_safely()` -> `dispatch_one()` -> `queue.enqueue_job()` with no
+HTTP response and no fallback to cron dispatch. Both pools are therefore built by
+the single `build_queue_pool()` in `infrastructure/job_queue.py` — a per-side
+construction is how one of them ends up without the read timeout. arq's polling is
+non-blocking (`poll_delay`, no BLPOP/XREAD) and the API only enqueues, so a shared
+read timeout is safe on both sides.
+
+#### Supplying `redis_pool` removes arq's startup retry
+
+`Worker.main()` calls `create_pool()` — the only path with a bounded startup
+retry — solely when `redis_pool` was **not** supplied. It then runs
+`log_redis_info(self.pool)` *before* setting `ctx['redis']` and calling
+`on_startup`. So a connectivity wait inside the worker lifecycle can never guard
+arq's first Redis command, and a worker that boots alongside a not-yet-ready Redis
+exits before consuming any job or running any maintenance cron. `build_queue_pool()`
+therefore configures a connection-level `Retry`: redis-py wraps both `connect()`
+and command execution in it, so the bounded retry applies to arq's first command
+without depending on arq's internal startup order.
+
+Two details of that `Retry` are load-bearing and easy to get wrong:
+
+- **`supported_errors` must include raw `OSError`.** `AbstractConnection.connect()`
+  wraps `_connect()` in `retry.call_with_retry`, but converts `OSError` ->
+  `ConnectionError` and `asyncio.TimeoutError` -> `TimeoutError` *outside* that
+  wrapper. The retry predicate therefore sees the **raw** socket error, while
+  `Retry`'s default `supported_errors` holds only redis's own exceptions — so the
+  default configuration retries the connect phase zero times. Measured against an
+  unlistened port: 1 attempt with the default, 6 (`conn_retries` + 1) once `OSError`
+  is included. redis's `TimeoutError` is deliberately excluded: that is a *read*
+  timeout, and retrying a service that accepted the command and went silent only
+  converts one hang into several. `socket.timeout` and `asyncio.TimeoutError` are
+  `OSError` subclasses, so connect timeouts are covered.
+- **The budget is per role, because the fallback differs.** The worker uses
+  `conn_retries`, reproducing `create_pool`'s startup semantics — a failed connect
+  there has no fallback at all, the process exits and takes every maintenance cron
+  with it. The API uses `0`. Its immediate dispatch is already swallowed by
+  `DDLJobStore._activate_now_safely()` and replayed by the dispatch cron, so
+  spending a 35-second connect budget inside a request only hangs the HTTP call
+  before reaching the fallback that was going to handle it anyway.
+
+The checkpoint saver builds its own connection pool instead of reusing
+`RedisClient`, so it needs the same socket timeouts injected separately. Without
+them a half-open Redis leaves the worker hanging forever inside `asetup()`'s index
+initialization or a later checkpoint read/write — before the worker ever reports
+ready.
+
+### Redis read timeout is coupled to the SSE heartbeat
+
+The job event stream uses `xread(block=api.sse_heartbeat_seconds * 1000)`, so
+blocking for a full heartbeat interval is **normal idle behavior**, not a fault.
+`socket_timeout` is redis-py's per-command read timeout, so any value less than
+or equal to the heartbeat turns every idle heartbeat into a `TimeoutError` and
+breaks the stream. `AppSettings` enforces
+`redis.socket_timeout_seconds > api.sse_heartbeat_seconds`; keep that validator
+in place rather than relying on the defaults happening to be ordered correctly.
+
+### Where retries belong
+
+Put bounded retries in the client only for read paths that have no durable
+retry channel — Elasticsearch memory search is the current example. Write paths
+covered by an outbox (Qdrant, TEI) get a timeout and nothing else: the outbox
+already provides exponential back-off and a dead-letter bound, and stacking a
+second retry layer makes the worst-case duration of one cron cycle
+unpredictable.
+
 ## Scenario: Local Text Embeddings Inference
 
 ### 1. Scope / Trigger
