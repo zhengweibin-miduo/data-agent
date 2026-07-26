@@ -121,6 +121,35 @@ capability probe; the real worker startup probe is a separate deployment check.
 the Google pydocstyle convention, pytest collects from `tests/` with async
 support, and the installed `data_agent` package is the runtime import target.
 
+## Configuration Loading
+
+`conf/` is outside `src/`, so uv_build does not ship it inside the wheel. A path
+derived from `__file__` therefore cannot locate configuration once the package is
+installed, and the console script would fail to start. `resolve_config_path()`
+resolves in a fixed order and stops at the first hit:
+
+1. an explicit `path` argument,
+2. the `DATA_AGENT_CONFIG` environment variable,
+3. `Path.cwd() / "conf/app_config.yaml"`,
+4. the source-tree location (development fallback).
+
+An explicit argument or environment variable that points at a missing file is a
+hard failure — never fall back. Silently ignoring an explicit choice produces a
+process running old configuration while the operator believes it changed, which
+is far harder to diagnose than a failed start. When every candidate is missing,
+the error lists the absolute paths actually searched and names the environment
+variable; a bare `FileNotFoundError` carrying one relative name is not acceptable.
+
+`get_settings()` is the supported accessor and caches per process;
+`reset_settings()` exists so tests can load an alternative file. `app_config`
+remains a module-level `AppSettings` constant: turning it into a module
+`__getattr__` would degrade its inferred type to `Any` and silently remove static
+checking from every configuration access in the repository. Note that
+`app_config` is still evaluated at import time — making configuration genuinely
+lazy additionally requires removing import-time evaluation points (table
+`schema=`, Pydantic `max_length=`, arq class attributes, logging default
+arguments), which is separate work.
+
 ## Review Checklist
 
 - Trace configuration changes across `conf/app_config.yaml`,
