@@ -187,7 +187,7 @@
       </div>
       <div class="callout">
         <span class="i">⚠️</span>
-        <div>全局硬约束：<b>模型输出 ≠ 可信事实</b>；<b>MySQL 是权威源，ES/Qdrant 只是可重建投影</b>；任何绕过确定性校验、或在 <code>persist_snapshot</code> 之外写权威库的改动都破坏核心不变量。</div>
+        <div>全局硬约束：<b>模型输出 ≠ 可信事实</b>（须过确定性校验）；<b>MySQL 是权威源，ES/Qdrant 只是可重建投影</b>；<b>DDL 元数据</b>的唯一提交出口是 <code>persist_snapshot</code>（accepted DDL snapshot 边界）。注：记忆 API、会话抽取、用户数据清除各有<b>合法的独立权威写入事务</b>，不受此出口约束。</div>
       </div>
 
       <!-- LangGraph -->
@@ -945,12 +945,12 @@
               <div class="star-row r"><span class="sl s-r">R</span><p>会话记忆与 DDL 记忆共享去重与生命周期。</p></div>
             </div>
           </div>
-          <div class="point"><div class="pt"><span class="n">4</span>数据所有权 · <code>DeleteConversation*</code></div>
+          <div class="point"><div class="pt"><span class="n">4</span>数据所有权 · 两种删除粒度</div>
             <div class="star mini">
-              <div class="star-row"><span class="sl s-s">S</span><p>用户拥有自己的会话数据，需可清除。</p></div>
-              <div class="star-row"><span class="sl s-t">T</span><p>支持彻底删除。</p></div>
-              <div class="star-row"><span class="sl s-a">A</span><p>按会话/按用户清除（含派生记忆）。</p></div>
-              <div class="star-row r"><span class="sl s-r">R</span><p>满足数据所有权与清除诉求。</p></div>
+              <div class="star-row"><span class="sl s-s">S</span><p>用户拥有会话数据，需可清除；但派生的长期记忆可能跨会话共享。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>区分单会话删除与用户级删除，二者记忆保留行为不同。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p><code>delete()</code> 删除单个会话但<b>保留跨会话共享的长期记忆</b>；<code>delete_user_data()</code> 清除该用户全部会话并在同事务 <code>tombstone_user</code> 其长期记忆。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>单会话删除不误删共享记忆；只有用户级删除才彻底清除记忆、避免删后仍可召回。</p></div>
             </div>
           </div>
           <div class="point"><div class="pt"><span class="n">5</span>后台驱动 · cron</div>
@@ -999,7 +999,7 @@
         <div class="card" style="border-left:3px solid var(--green)">
           <div class="modhead"><span class="tag t-green">持久化</span><h3>Persistence · 快照</h3></div>
           <div class="files"><code>ddl_metadata/persistence/{snapshots,metadata_repository,memory_references,tables}.py</code> · <code>persistence/schema.py</code></div>
-          <p class="role">职责：把工作流最终产物<b>原子地</b>落库。它是唯一写权威元数据的地方，保证「要么全部提交、要么什么都不留」。</p>
+          <p class="role">职责：把工作流最终产物<b>原子地</b>落库。它是 <b>DDL 快照（accepted snapshot）的唯一提交出口</b>，保证「要么全部提交、要么什么都不留」。（记忆 API、会话抽取、用户清除有各自独立的权威写入事务。）</p>
           <div class="point"><div class="pt"><span class="n">1</span>原子写入 · <code>snapshots.persist</code></div>
             <div class="star mini">
               <div class="star-row"><span class="sl s-s">S</span><p>多张表任何部分提交都不一致。</p></div>
@@ -1101,12 +1101,12 @@
               <div class="star-row r"><span class="sl s-r">R</span><p>事务与嵌入被各层共用。</p></div>
             </div>
           </div>
-          <div class="point"><div class="pt"><span class="n">5</span>启动自检</div>
+          <div class="point"><div class="pt"><span class="n">5</span>启动：关键依赖 fail-fast，索引可降级</div>
             <div class="star mini">
-              <div class="star-row"><span class="sl s-s">S</span><p>缺依赖不该运行期才暴露。</p></div>
-              <div class="star-row"><span class="sl s-t">T</span><p>启动即校验依赖。</p></div>
-              <div class="star-row"><span class="sl s-a">A</span><p>worker 启动逐一探测 Redis / MySQL / 索引 / TEI / 结构化能力。</p></div>
-              <div class="star-row r"><span class="sl s-r">R</span><p>缺依赖启动即失败。</p></div>
+              <div class="star-row"><span class="sl s-s">S</span><p>关键依赖缺失不该跑任务时才暴露，但派生索引应能降级不阻塞启动。</p></div>
+              <div class="star-row"><span class="sl s-t">T</span><p>对关键依赖 fail-fast，对可降级依赖容错。</p></div>
+              <div class="star-row"><span class="sl s-a">A</span><p>startup 中 <code>check_structured_output_capability</code> 与 <code>CheckpointStore.initialize</code> 失败即启动失败；ES/Qdrant 索引 <code>setup</code> 失败被捕获、降级继续；MySQL/TEI 为惰性客户端，构造时不做在线探测。</p></div>
+              <div class="star-row r"><span class="sl s-r">R</span><p>LLM 结构化能力 / checkpoint 缺失<b>启动即失败</b>；索引不可用只延后派生投影，不阻塞启动。</p></div>
             </div>
           </div>
         </div>
