@@ -128,7 +128,6 @@ def _install(
     acknowledged_hashes: list[str | None] | None = None,
     converged_out: list[tuple[str, str]] | None = None,
     broken_projections: set[str] | None = None,
-    purged: bool = False,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """安装记录型替身并返回确认与退避轨迹。"""
     acknowledged: list[tuple[str, str]] = []
@@ -186,13 +185,10 @@ def _install(
             self,
             memory_uid: str,
             target: MemoryIndexTarget,
-        ) -> bool:
+        ) -> None:
             """记录确认失败后重建的收敛请求。"""
             recorder.record("converge")
-            if purged:
-                return False
             converged.append((memory_uid, target.value))
-            return True
 
         async def retry_outbox(
             self,
@@ -492,36 +488,33 @@ async def test_dispatch_isolates_projection_decode_failure(
     )
 
 
-async def test_dispatch_compensates_when_authority_row_is_purged(
+async def test_dispatch_registers_durable_convergence_after_purge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """权威行已被物理清理时必须补偿删除，而不是静默放弃收敛。"""
+    """权威行已被 purge 时仍登记持久收敛请求，而不是做一次性远程补偿。"""
     # 交错：慢 UPSERT 领取后阻塞 → 并发 DELETE 被另一 worker 确认并清空 outbox →
-    # purge 删除权威行 → 本次迟到写入完成。此时没有任何 outbox 请求能纠正残留。
+    # purge 删除权威行 → 本次迟到写入完成。outbox 不设外键，收敛请求因此仍可登记，
+    # 由后续周期重试直至成功；一次性远程删除失败后则无任何待办可重放。
     recorder = _Recorder()
+    converged: list[tuple[str, str]] = []
     _install(
         monkeypatch,
         recorder,
-        items=[
-            MemoryOutboxItem(
-                memory_uid="memory-7",
-                target=MemoryIndexTarget.ELASTICSEARCH,
-                operation=MemoryIndexOperation.UPSERT,
-                projection_version=app_config.memory.projection_version,
-                attempts=0,
-                lease_token="lease-1",
-            )
-        ],
+        items=_items("memory-7", MemoryIndexOperation.UPSERT),
         projections={"memory-7": _projection("memory-7", MemoryStatus.ACTIVE)},
         superseded=True,
-        purged=True,
+        converged_out=converged,
     )
 
     processed = await MemoryIndexDispatcher().dispatch()
 
-    check_equal("补偿路径不计入已处理", processed, 0)
+    check_equal("未确认的同步不计入已处理", processed, 0)
     check_equal(
-        "先写入后补偿删除同一目标",
-        [event for event in recorder.events if event.startswith("es_")],
-        ["es_upsert", "es_delete"],
+        "为两个目标各自登记持久收敛请求",
+        sorted(converged),
+        [
+            ("memory-7", MemoryIndexTarget.ELASTICSEARCH.value),
+            ("memory-7", MemoryIndexTarget.QDRANT.value),
+        ],
     )
+    check_equal("不再执行一次性远程补偿删除", recorder.events.count("es_delete"), 0)

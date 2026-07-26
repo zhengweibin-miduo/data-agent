@@ -149,7 +149,5 @@ CREATE TABLE IF NOT EXISTS memory_index_outbox
     updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                          ON UPDATE CURRENT_TIMESTAMP COMMENT '索引期望状态最近更新时间',
     PRIMARY KEY (memory_uid, target),
-    INDEX idx_memory_index_outbox_claim (available_at, updated_at),
-    CONSTRAINT fk_memory_index_outbox_memory
-        FOREIGN KEY (memory_uid) REFERENCES agent_memory (uid)
+    INDEX idx_memory_index_outbox_claim (available_at, updated_at)
 ) ENGINE = InnoDB COMMENT = '记录同步权威记忆到派生索引的可重试期望状态';

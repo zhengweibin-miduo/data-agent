@@ -57,12 +57,15 @@ class MemoryIndexOutboxRepository:
                 "projection_version": app_config.memory.projection_version,
                 "attempts": 0,
                 "available_at": func.now(),
+                "lease_token": None,
                 "last_error_type": None,
             }
             for uid in memory_uids
             for target in MemoryIndexTarget
         ]
-        # 步骤二：按 UID 与目标幂等覆盖状态，并重置重试进度。
+        # 步骤二：按 UID 与目标幂等覆盖状态，并重置重试进度。覆盖必须同时作废领取
+        # 代次令牌：否则 attempts 被重置为 0 后，仍持有旧令牌的迟到 worker 还能命中
+        # 这一行并把新期望直接写到死信上限，使最新内容再也不被领取。
         statement = insert(memory_index_outbox).values(values)
         await self._session.execute(
             statement.on_duplicate_key_update(
@@ -70,6 +73,7 @@ class MemoryIndexOutboxRepository:
                 projection_version=statement.inserted.projection_version,
                 attempts=0,
                 available_at=func.now(),
+                lease_token=None,
                 last_error_type=None,
             )
         )
@@ -223,7 +227,7 @@ class MemoryIndexOutboxRepository:
         self,
         memory_uid: str,
         target: MemoryIndexTarget,
-    ) -> bool:
+    ) -> None:
         """确认失败后按当前权威状态为单个目标重建收敛请求。
 
         确认失败意味着本次写入已经与权威内容不一致：可能是内容再次变更，也可能是
@@ -238,24 +242,20 @@ class MemoryIndexOutboxRepository:
             memory_uid: 需要重新收敛的权威记忆 UID。
             target: 需要重新收敛的派生索引目标。
 
-        Returns:
-            是否登记了收敛请求；权威行已被物理清理时为 False，调用方必须改为直接
-            补偿删除派生文档。
+        权威行已被物理清理时同样登记一条 DELETE 收敛请求：outbox 刻意不设向
+        `agent_memory` 的外键，因此这条请求可以独立存在，由后续周期按普通 outbox
+        项重试直至成功。这样补偿不再是一次性远程调用——瞬时索引故障或进程退出后
+        仍有持久待办可重放，用户已删除的内容不会永久留在派生索引里。
         """
-        # 步骤一：权威行已被物理清理时无处登记——外键不允许挂空引用。此时不能静默
-        # 放弃：慢 UPSERT 与并发 DELETE 交错后 purge 可能已经删除权威行，迟到写入
-        # 会把用户已删除的内容留在派生索引里，因此由调用方执行补偿删除。
+        # 步骤一：按当前权威状态派生目标操作；权威行已不存在时同样收敛为删除。
         status = (
             await self._session.execute(
                 select(agent_memory.c.status).where(agent_memory.c.uid == memory_uid)
             )
         ).scalar_one_or_none()
-        if status is None:
-            return False
-        # 步骤二：按当前权威状态派生目标操作——仍为 ACTIVE 则写入，否则删除。
         operation = (
             MemoryIndexOperation.UPSERT
-            if str(status) == MemoryStatus.ACTIVE.value
+            if status is not None and str(status) == MemoryStatus.ACTIVE.value
             else MemoryIndexOperation.DELETE
         )
         statement = insert(memory_index_outbox).values(
@@ -269,14 +269,13 @@ class MemoryIndexOutboxRepository:
                 "last_error_type": None,
             }
         )
-        # 步骤三：行已被删除时新建收敛请求；行仍在时只纠正操作，保留其退避进度。
+        # 步骤二：行已被删除时新建收敛请求；行仍在时只纠正操作，保留其退避进度。
         await self._session.execute(
             statement.on_duplicate_key_update(
                 operation=statement.inserted.operation,
                 projection_version=statement.inserted.projection_version,
             )
         )
-        return True
 
     async def retry_outbox(
         self,
