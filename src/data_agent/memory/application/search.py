@@ -35,6 +35,17 @@ from data_agent.models.memory import (
 from data_agent.settings import app_config
 
 
+def _log_degraded_index(
+    error: BaseException,
+    target: MemoryIndexTarget,
+) -> None:
+    """记录一次派生索引降级，并由边界从异常参数补充原因类型。"""
+    del error
+    logger.warning(
+        f"{target.value} 记忆索引检索失败，本次查询已降级为其余可用信号"
+    )
+
+
 class MemorySearchService:
     """并发检索派生索引并仅返回复核后的 MySQL 权威内容。"""
 
@@ -110,11 +121,7 @@ class MemorySearchService:
         ):
             if isinstance(result, BaseException):
                 degraded.append(target)
-                logger.bind(trace_id="-").warning(
-                    "记忆检索降级 target={} error_type={}",
-                    target.value,
-                    type(result).__name__,
-                )
+                _log_degraded_index(result, target)
             else:
                 rankings.append((signal, result))
 
@@ -213,13 +220,6 @@ class MemorySearchService:
                         source=source,
                         user_id=user_id,
                     )
-            except Exception as exc:  # noqa: BLE001
-                logger.bind(trace_id="-").warning(
-                    "记忆访问统计写入失败，搜索结果已按 best-effort 返回 "
-                    "source={} user_id={} item_count={} error_type={}",
-                    source,
-                    user_id,
-                    len(items),
-                    type(exc).__name__,
-                )
+            except Exception:  # noqa: BLE001
+                logger.warning("记忆访问统计写入失败，搜索结果已按尽力而为返回")
         return MemorySearchResponse(items=items, degraded_targets=degraded)

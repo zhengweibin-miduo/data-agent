@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import random
-from time import perf_counter
 from typing import Any, cast
 
 from arq import Retry
@@ -79,76 +78,25 @@ def _task_start_stage(event: object) -> JobEventStage | None:
 
 def _log_execution_outcome(
     record: JobRecord,
-    started_at: float,
-    *,
-    error: Exception | None = None,
 ) -> None:
     """记录一次 worker 执行产生的完整公开结果。"""
-    # 步骤一：从公开任务记录组装稳定日志字段，不读取 graph 内部载荷。
-    fields: dict[str, object] = {
-        "trace_id": record.job_id,
-        "component": "ddl_metadata.worker",
-        "event_name": "ddl_metadata.job.execution.completed",
-        "operation": "execute_job",
-        "outcome": record.status.value,
-        "job_status": record.status.value,
-        "attempt": record.attempt,
-        "revision": record.revision,
-        "question_round": record.question_round,
-        "duration_ms": max(0, round((perf_counter() - started_at) * 1000)),
-    }
-    if record.questions is not None:
-        fields["question_count"] = len(record.questions)
-    if record.result is not None:
-        fields.update(
-            table_count=record.result.table_count,
-            column_count=record.result.column_count,
-            metric_count=record.result.metric_count,
-        )
-    if record.error is not None:
-        fields.update(
-            error_code=record.error.code,
-            stage=record.error.stage,
-            retryable=record.error.retryable,
-        )
-        error_type = record.error.details.get("error_type")
-        if error_type is not None:
-            fields["error_type"] = error_type
-    # 步骤二：按公开终态选择日志级别，仅内部失败分支附带原始异常堆栈。
-    event_logger = logger.bind(**fields)
-    if record.status in {JobStatus.SUCCEEDED, JobStatus.WAITING_INPUT}:
-        event_logger.info("DDL 元数据任务执行完成")
+    # 步骤一：只读取公开任务状态和安全错误码，不接触 graph 内部载荷。
+    # 步骤二：按公开终态选择级别，链路和异常上下文由 worker 注册层的 AOP 补充。
+    if record.status == JobStatus.SUCCEEDED:
+        logger.info("DDL 元数据任务执行完成，公开结果已经持久化")
+    elif record.status == JobStatus.WAITING_INPUT:
+        logger.info("DDL 元数据任务已暂停，等待用户补充指标问题回答后继续执行")
     elif record.status == JobStatus.REJECTED:
-        event_logger.warning("DDL 元数据任务已拒绝")
-    elif error is not None and not isinstance(error, DataAgentError):
-        event_logger.opt(exception=error).error("DDL 元数据任务执行失败")
+        reason = record.error.code if record.error is not None else "business_rejected"
+        logger.warning(f"DDL 元数据任务被业务规则拒绝，原因代码：{reason}")
     else:
-        event_logger.error("DDL 元数据任务执行失败")
+        reason = record.error.code if record.error is not None else "worker_failed"
+        logger.error(f"DDL 元数据任务执行失败，原因代码：{reason}")
 
 
-def _log_retry_scheduled(
-    job_id: str,
-    revision: int,
-    attempt: int,
-    error: Exception,
-    *,
-    job_status: JobStatus | None = None,
-) -> None:
+def _log_retry_scheduled() -> None:
     """记录一次可恢复的 worker 重试安排。"""
-    fields: dict[str, object] = {
-        "trace_id": job_id,
-        "component": "ddl_metadata.worker",
-        "event_name": "ddl_metadata.job.retry_scheduled",
-        "operation": "execute_job",
-        "outcome": "retry_scheduled",
-        "attempt": attempt,
-        "revision": revision,
-        "error_type": type(error).__name__,
-        "retryable": True,
-    }
-    if job_status is not None:
-        fields["job_status"] = job_status.value
-    logger.bind(**fields).warning("DDL 元数据任务已安排重试")
+    logger.warning("DDL 元数据任务遇到可恢复故障，已按退避策略安排自动重试")
 
 
 class _InterruptProjection(BaseModel):
@@ -245,7 +193,6 @@ async def run_ddl_job(
     阻止旧任务被不兼容的新图解释。同一 ``job_id`` 复用 checkpoint，使回答
     恢复和基础设施重试只续跑未完成节点；终态转换安排检查点异步清理。
     """
-    started_at = perf_counter()
     jobs = cast(DDLJobStore, ctx["jobs"])
     graph = cast(CompiledStateGraph, ctx["graph"])
     # 步骤一：先读取权威公开记录；Redis 暂时不可用时不猜测状态，交由 arq 延迟重试。
@@ -257,7 +204,7 @@ async def run_ddl_job(
         ConnectionError,
         TimeoutError,
     ) as error:
-        _log_retry_scheduled(job_id, revision, 0, error)
+        _log_retry_scheduled()
         raise Retry(defer=2) from error
     # 步骤二：终态、等待输入和 revision 不匹配均说明本次激活已陈旧，直接退出。
     if record.status in {
@@ -293,8 +240,7 @@ async def run_ddl_job(
             error=job_error,
         )
         _log_execution_outcome(
-            record.model_copy(update={"status": JobStatus.FAILED, "error": job_error}),
-            started_at,
+            record.model_copy(update={"status": JobStatus.FAILED, "error": job_error})
         )
         await cleanup_checkpoints(ctx)
         return
@@ -307,13 +253,7 @@ async def run_ddl_job(
         ConnectionError,
         TimeoutError,
     ) as error:
-        _log_retry_scheduled(
-            job_id,
-            revision,
-            record.attempt,
-            error,
-            job_status=record.status,
-        )
+        _log_retry_scheduled()
         raise Retry(defer=2) from error
     if not renewed:
         if record.status == JobStatus.PENDING and not await jobs.mark_running(
@@ -341,8 +281,7 @@ async def run_ddl_job(
             error=job_error,
         )
         _log_execution_outcome(
-            record.model_copy(update={"status": JobStatus.FAILED, "error": job_error}),
-            started_at,
+            record.model_copy(update={"status": JobStatus.FAILED, "error": job_error})
         )
         await cleanup_checkpoints(ctx)
         return
@@ -385,7 +324,7 @@ async def run_ddl_job(
                     config,
                 )
                 if projected is not None:
-                    _log_execution_outcome(projected, started_at)
+                    _log_execution_outcome(projected)
                 return
             graph_input = Command(resume=json.loads(answer_json))
         elif not snapshot.next:
@@ -396,7 +335,7 @@ async def run_ddl_job(
                 config,
             )
             if projected is not None:
-                _log_execution_outcome(projected, started_at)
+                _log_execution_outcome(projected)
                 await cleanup_checkpoints(ctx)
                 return
             graph_input = None
@@ -421,8 +360,11 @@ async def run_ddl_job(
             config,
         )
         if projected is not None:
-            _log_execution_outcome(projected, started_at)
+            _log_execution_outcome(projected)
         await cleanup_checkpoints(ctx)
+    except Retry:
+        # 图节点显式请求的 arq 重试属于 worker 控制流，必须原样交还调度器。
+        raise
     except Exception as error:
         # 步骤七：重新读取权威 attempt；仅显式瞬态异常在预算内回到 PENDING。
         try:
@@ -433,13 +375,7 @@ async def run_ddl_job(
             ConnectionError,
             TimeoutError,
         ) as redis_error:
-            _log_retry_scheduled(
-                job_id,
-                revision,
-                record.attempt,
-                redis_error,
-                job_status=record.status,
-            )
+            _log_retry_scheduled()
             raise Retry(defer=2) from redis_error
         # 步骤八：可重试异常使用指数退避，并复用 checkpoint 避免重复已完成的模型节点。
         if isinstance(error, _RETRYABLE) and latest.attempt < 3:
@@ -449,13 +385,7 @@ async def run_ddl_job(
                 JobStatus.RUNNING,
                 JobStatus.PENDING,
             )
-            _log_retry_scheduled(
-                job_id,
-                revision,
-                latest.attempt,
-                error,
-                job_status=JobStatus.PENDING,
-            )
+            _log_retry_scheduled()
             raise Retry(defer=(2**latest.attempt) + random.uniform(0, 1)) from error
         # 步骤九：不可重试或预算耗尽时写入安全失败终态，并安排 checkpoint 清理。
         job_error = JobError(
@@ -478,8 +408,6 @@ async def run_ddl_job(
             error=job_error,
         )
         _log_execution_outcome(
-            latest.model_copy(update={"status": JobStatus.FAILED, "error": job_error}),
-            started_at,
-            error=error,
+            latest.model_copy(update={"status": JobStatus.FAILED, "error": job_error})
         )
         await cleanup_checkpoints(ctx)

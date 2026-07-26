@@ -36,15 +36,7 @@ async def submit_job(body: DDLJobRequest, request: Request) -> DDLJobAccepted:
     # 只有持久受理成功后才继续构造 HTTP 202 响应。
     record = await _jobs(request).submit(body)
     # 步骤二：记录不含原始 DDL 的安全受理坐标，供异步执行链路关联排查。
-    logger.bind(
-        trace_id=record.job_id,
-        component="ddl_metadata.api",
-        event_name="ddl_metadata.job.accepted",
-        operation="submit_job",
-        outcome="accepted",
-        job_status=record.status.value,
-        revision=record.revision,
-    ).info("DDL 元数据任务已受理")
+    logger.info("DDL 元数据任务已受理，worker 将异步执行并发布公开进度")
     # 步骤三：返回轮询与 SSE 地址，把后续执行和结果读取留给异步客户端。
     return DDLJobAccepted(
         job_id=record.job_id,
@@ -105,16 +97,6 @@ async def answer_job(
     record, accepted = await _jobs(request).submit_answers(job_id, body)
     # 步骤二：仅对首次受理记录安全审计日志，幂等重放直接复用权威结果。
     if accepted:
-        logger.bind(
-            trace_id=job_id,
-            component="ddl_metadata.api",
-            event_name="ddl_metadata.job.answers_submitted",
-            operation="submit_answers",
-            outcome="accepted",
-            job_status=record.status.value,
-            revision=record.revision,
-            question_round=record.question_round,
-            question_count=len(body.answers),
-        ).info("指标问题回答已受理")
+        logger.info("指标问题回答已受理，任务将从当前修订继续执行")
     # 步骤三：返回脚本裁决后的最新公开投影，供客户端继续轮询或订阅事件。
     return record

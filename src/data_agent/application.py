@@ -22,13 +22,16 @@ from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
-from data_agent.logging import setup_logging
+from data_agent.logging import (
+    RequestLoggingContextMiddleware,
+    logging_boundary,
+    setup_logging,
+)
 from data_agent.memory.application.service import MemoryService
 from data_agent.settings import app_config
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     """管理 API 资源，并在资源就绪后装配业务服务。
 
     外部客户端初始化完成后，才将依赖它们的业务服务装配到 ``app.state``；
@@ -48,13 +51,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.memories = MemoryService(jobs, MetadataMemoryReferenceValidator())
     app.state.conversations = ConversationService()
     # 步骤四：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
-    logger.bind(
-        component="application.api",
-        event_name="application.lifecycle.started",
-        operation="serve_api",
-        outcome="started",
-        worker_role="api",
-    ).info("API 服务已启动")
+    logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")
     try:
         yield
     finally:
@@ -65,16 +62,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             await ElasticsearchClient.close()
             await MySQLDatabase.close()
             await RedisClient.close()
-            logger.bind(
-                component="application.api",
-                event_name="application.lifecycle.stopped",
-                operation="serve_api",
-                outcome="stopped",
-                worker_role="api",
-            ).info("API 服务已停止")
+            logger.info("API 服务已停止，进程内共享资源已经关闭")
         finally:
             # 步骤六：无论资源关闭是否异常，都等待异步日志队列完成已接收记录的写出。
             await logger.complete()
+
+
+_lifespan = asynccontextmanager(_lifespan_resources)
+_observed_lifespan = asynccontextmanager(logging_boundary()(_lifespan_resources))
 
 
 async def _handle_business_error(
@@ -122,7 +117,7 @@ async def _handle_redis_error(
 def create_app() -> FastAPI:
     """创建仅面向本机浏览器的应用。"""
     # 步骤一：创建带生命周期的应用，并按已校验配置装配本机浏览器 CORS 边界。
-    app = FastAPI(title="Data Agent DDL Metadata API", lifespan=_lifespan)
+    app = FastAPI(title="Data Agent DDL Metadata API", lifespan=_observed_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -133,6 +128,7 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type"],
     )
     # 步骤二：集中注册安全异常投影和业务路由，保持传输层入口只有一个组合根。
+    app.add_middleware(RequestLoggingContextMiddleware)
     app.add_exception_handler(DataAgentError, _handle_business_error)
     app.add_exception_handler(RedisError, _handle_redis_error)
     app.include_router(ddl_metadata_router)

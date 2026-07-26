@@ -43,23 +43,14 @@ async def startup(ctx: dict[Any, Any]) -> None:
     qdrant = QdrantClient.initialize()
     TEIEmbeddingClient.initialize()
     # 步骤二：索引初始化失败只延后派生投影，MySQL 权威数据和 outbox 仍可恢复。
-    for target, setup in (
-        ("ELASTICSEARCH", MemoryElasticsearchIndex(elasticsearch).setup),
-        ("QDRANT", MemoryQdrantIndex(qdrant).setup),
+    for setup in (
+        MemoryElasticsearchIndex(elasticsearch).setup,
+        MemoryQdrantIndex(qdrant).setup,
     ):
         try:
             await setup()
-        except Exception as error:
-            logger.bind(
-                trace_id="-",
-                component="ddl_metadata.worker",
-                event_name="ddl_metadata.memory.index_initialization_deferred",
-                operation="setup_memory_index",
-                outcome="deferred",
-                stage=target.lower(),
-                error_type=type(error).__name__,
-                retryable=True,
-            ).warning("记忆索引初始化延后")
+        except Exception:
+            logger.warning("记忆索引初始化失败，本次启动继续运行并将在后续启动时重试")
     # 步骤三：模型能力探测与 checkpoint 初始化成功后，才装配任务门面和工作流。
     model = LLMClient.initialize()
     await LLMClient.check_structured_output_capability()
@@ -77,13 +68,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
     # 步骤四：服务就绪前先重放 dispatch 与 checkpoint 清理 outbox，再报告启动完成。
     await dispatch_pending(ctx)
     await cleanup_checkpoints(ctx)
-    logger.bind(
-        component="application.worker",
-        event_name="application.lifecycle.started",
-        operation="run_worker",
-        outcome="started",
-        worker_role="ddl_metadata",
-    ).info("DDL 元数据 worker 已启动")
+    logger.info("DDL 元数据 worker 已启动，任务执行与周期维护资源均已就绪")
 
 
 async def shutdown(ctx: dict[Any, Any]) -> None:
@@ -98,13 +83,7 @@ async def shutdown(ctx: dict[Any, Any]) -> None:
         await ElasticsearchClient.close()
         await MySQLDatabase.close()
         await RedisClient.close()
-        logger.bind(
-            component="application.worker",
-            event_name="application.lifecycle.stopped",
-            operation="run_worker",
-            outcome="stopped",
-            worker_role="ddl_metadata",
-        ).info("DDL 元数据 worker 已停止")
+        logger.info("DDL 元数据 worker 已停止，进程内共享资源已经关闭")
     # 步骤二：无论资源关闭是否抛错，最后都刷新日志队列。
     finally:
         await logger.complete()

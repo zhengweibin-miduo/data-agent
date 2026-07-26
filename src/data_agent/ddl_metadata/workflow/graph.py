@@ -1,5 +1,8 @@
 """可恢复的 LangGraph DDL 元数据工作流装配。"""
 
+from collections.abc import Callable
+from typing import Any
+
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -16,6 +19,14 @@ from data_agent.ddl_metadata.workflow.routing import (
     after_terminal_guard,
 )
 from data_agent.ddl_metadata.workflow.state import DDLGraphState
+from data_agent.logging import logging_boundary
+
+
+def _observed_node(
+    node: Callable[..., Any],
+) -> Callable[..., Any]:
+    """在构图 seam 为节点 callable 织入零配置日志边界。"""
+    return logging_boundary()(node)
 
 
 def build_ddl_metadata_graph(
@@ -31,17 +42,46 @@ def build_ddl_metadata_graph(
     # 步骤一：绑定不进入 checkpoint 的进程依赖，并注册所有业务节点。
     nodes = DDLWorkflowNodes(dependencies)
     graph = StateGraph(DDLGraphState)
-    graph.add_node("parse_ddl", nodes.parse_node)
-    graph.add_node("load_and_validate_memory", nodes.load_memory_node)
-    graph.add_node("classify_metadata", nodes.classify_node)
-    graph.add_node("validate_metadata", nodes.validate_metadata_node)
-    graph.add_node("plan_metric_questions", nodes.plan_questions_node)
-    graph.add_node("await_metric_answers", nodes.await_answers_node)
-    graph.add_node("generate_metrics", nodes.generate_metrics_node)
-    graph.add_node("validate_metrics", nodes.validate_metrics_node)
-    graph.add_node("build_memory_candidates", nodes.build_memories_node)
-    graph.add_node("persist_snapshot", nodes.persist_node)
+    graph.add_node("parse_ddl", _observed_node(nodes.parse_node))
+    graph.add_node(
+        "load_and_validate_memory",
+        _observed_node(nodes.load_memory_node),
+    )
+    graph.add_node(
+        "classify_metadata",
+        _observed_node(nodes.classify_node),
+    )
+    graph.add_node(
+        "validate_metadata",
+        _observed_node(nodes.validate_metadata_node),
+    )
+    graph.add_node(
+        "plan_metric_questions",
+        _observed_node(nodes.plan_questions_node),
+    )
+    graph.add_node(
+        "await_metric_answers",
+        _observed_node(nodes.await_answers_node),
+    )
+    graph.add_node(
+        "generate_metrics",
+        _observed_node(nodes.generate_metrics_node),
+    )
+    graph.add_node(
+        "validate_metrics",
+        _observed_node(nodes.validate_metrics_node),
+    )
+    graph.add_node(
+        "build_memory_candidates",
+        _observed_node(nodes.build_memories_node),
+    )
+    graph.add_node(
+        "persist_snapshot",
+        _observed_node(nodes.persist_node),
+    )
     # 步骤二：按确定性解析、模型生成、确定性校验和人工问答边界连接条件路由。
+    # 路由把模型输出夹在确定性校验之间，route 只由当前节点写入；只有完成语义、
+    # 问答和指标校验的 finalized 数据才能构建记忆并抵达唯一持久化出口。
     graph.add_edge(START, "parse_ddl")
     graph.add_conditional_edges("parse_ddl", after_terminal_guard)
     graph.add_conditional_edges("load_and_validate_memory", after_memory)

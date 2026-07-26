@@ -11,20 +11,6 @@ from data_agent.ddl_metadata.worker import lifecycle
 from tests.helpers.checks import check_equal, check_exception, fail_check
 
 
-class _BoundRecordingLogger:
-    """记录一次绑定日志事件。"""
-
-    def __init__(self, events: list[str], event_name: str) -> None:
-        """绑定记录目标与事件名。"""
-        self._events = events
-        self._event_name = event_name
-
-    def info(self, message: str) -> None:
-        """记录 INFO 事件。"""
-        del message
-        self._events.append(self._event_name)
-
-
 class _RecordingLogger:
     """记录生命周期日志与 complete 调用顺序。"""
 
@@ -32,12 +18,20 @@ class _RecordingLogger:
         """绑定顺序列表。"""
         self._events = events
 
-    def bind(self, **fields: object) -> _BoundRecordingLogger:
-        """返回携带事件名的记录器。"""
-        return _BoundRecordingLogger(
-            self._events,
-            str(fields.get("event_name", "application.log")),
-        )
+    def info(self, message: str) -> None:
+        """把业务消息投影为测试使用的稳定生命周期标记。"""
+        event_by_message = {
+            "API 服务已启动，数据库、缓存与派生检索资源均已就绪": (
+                "application.lifecycle.started"
+            ),
+            "API 服务已停止，进程内共享资源已经关闭": (
+                "application.lifecycle.stopped"
+            ),
+            "DDL 元数据 worker 已停止，进程内共享资源已经关闭": (
+                "application.lifecycle.stopped"
+            ),
+        }
+        self._events.append(event_by_message.get(message, message))
 
     async def complete(self) -> None:
         """记录队列排空。"""

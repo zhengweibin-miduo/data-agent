@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对业务仅传级别与消息的日志契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对异常传播和日志脱敏"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行项目质量门禁"}
+{"file": ".trellis/tasks/07-26-logger-aop-context/research/logging-context-inventory.md", "reason": "核对所有既有 bind 调用均被迁移"}

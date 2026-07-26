@@ -14,6 +14,12 @@ from data_agent.memory.indexing.dispatcher import MemoryIndexDispatcher
 from data_agent.memory.mysql.repository import MemoryRepository
 
 
+def _log_checkpoint_cleanup_deferred(job_id: str) -> None:
+    """记录一个检查点将在后续周期继续清理。"""
+    del job_id
+    logger.warning("终态检查点清理失败，清理记录已保留并将在下个周期重试")
+
+
 async def dispatch_pending(ctx: dict[Any, Any]) -> None:
     """启动及周期性排空 dispatch outbox。"""
     jobs = cast(DDLJobStore, ctx["jobs"])
@@ -43,16 +49,8 @@ async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
     for job_id in job_ids:
         try:
             await checkpointer.adelete_thread(job_id)
-        except RedisError as error:
-            logger.bind(
-                trace_id=job_id,
-                component="ddl_metadata.worker",
-                event_name="ddl_metadata.checkpoint.cleanup_deferred",
-                operation="cleanup_checkpoint",
-                outcome="deferred",
-                error_type=type(error).__name__,
-                retryable=True,
-            ).warning("终态检查点清理延后")
+        except RedisError:
+            _log_checkpoint_cleanup_deferred(job_id)
             continue
         # 步骤三：只有线程删除成功后才确认 outbox，避免提前丢失唯一清理请求。
         await jobs.acknowledge_checkpoint_cleanup(job_id)
