@@ -52,7 +52,8 @@ def test_memory_table_foreign_keys_match_bootstrap_contract() -> None:
                 else None
             ),
         )
-        for table in (agent_memory_event, agent_memory_link, memory_index_outbox)
+        # memory_index_outbox 刻意不设外键：见 tables.py 中的说明。
+        for table in (agent_memory_event, agent_memory_link)
         for foreign_key in table.foreign_keys
     }
     check_equal(
@@ -76,12 +77,6 @@ def test_memory_table_foreign_keys_match_bootstrap_contract() -> None:
                 "linked_memory_id",
                 f"{database}.agent_memory.id",
                 "fk_agent_memory_link_linked",
-            ),
-            (
-                "memory_index_outbox",
-                "memory_uid",
-                f"{database}.agent_memory.uid",
-                "fk_memory_index_outbox_memory",
             ),
         },
     )

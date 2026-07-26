@@ -285,3 +285,28 @@ async def test_late_settlement_cannot_touch_a_newly_claimed_generation() -> None
             actual=rendered,
             expected="WHERE 绑定发起方自己的领取令牌",
         )
+
+
+async def test_set_desired_state_invalidates_previous_lease_token() -> None:
+    """覆盖期望状态必须同时作废旧的领取代次令牌。"""
+    # 否则 attempts 被重置为 0 后，仍持有旧令牌的迟到 worker 还能命中该行并把最新
+    # 期望直接写到死信上限，使新内容再也不被领取。
+    session = _RecordingSession([])
+    repository = MemoryIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.set_desired_state({"uid-a"}, MemoryIndexOperation.UPSERT)
+
+    rendered = _rendered(session.statements[0])
+    duplicate = rendered.split("ON DUPLICATE KEY UPDATE")[1]
+    check_condition(
+        "覆盖时清空领取令牌",
+        "lease_token" in duplicate,
+        actual=duplicate,
+        expected="ON DUPLICATE 子句包含 lease_token",
+    )
+    check_condition(
+        "覆盖时同步重置重试进度",
+        "attempts" in duplicate and "available_at" in duplicate,
+        actual=duplicate,
+        expected="ON DUPLICATE 同时重置 attempts 与 available_at",
+    )
