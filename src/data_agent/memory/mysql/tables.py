@@ -31,6 +31,7 @@ agent_memory = Table(
     Column("content_schema", String(128), nullable=False),
     Column("schema_fingerprint", String(64), nullable=True),
     Column("memory_text", Text, nullable=False),
+    Column("memory_text_hash", String(64), nullable=False),
     Column("content", JSON, nullable=False),
     Column("content_hash", String(64), nullable=False),
     Column("trust", String(32), nullable=False),
@@ -67,6 +68,23 @@ agent_memory = Table(
     Index("idx_agent_memory_rebuild", "status", "id"),
     Index("idx_agent_memory_user", "user_id", "category", "status", "updated_at"),
     Index("idx_agent_memory_expiry", "status", "expires_at", "id"),
+    # 精确基线检索按 source + 定长文本哈希等值查找；memory_text 是 TEXT 列，
+    # 直接全等比较无法走索引，会退化为按 source 范围扫描。
+    Index(
+        "idx_agent_memory_text_hash",
+        "source",
+        "memory_text_hash",
+        "status",
+    ),
+    # 同一查询的 memory_key 分支也需要独立的等值路径：默认检索允许不带 category，
+    # 而 idx_agent_memory_exact 的 category 排在 memory_key 之前，缺少它时无法用
+    # 该索引前缀直接定位 memory_key，OR 的这一侧仍会退化为按 source 扫描。
+    Index(
+        "idx_agent_memory_key_lookup",
+        "source",
+        "memory_key",
+        "status",
+    ),
     schema=app_config.memory.database,
 )
 agent_memory_event = Table(

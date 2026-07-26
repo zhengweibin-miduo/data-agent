@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS agent_memory
     content_schema     VARCHAR(128) NOT NULL COMMENT '结构化内容所遵循的类别模式版本',
     schema_fingerprint CHAR(64) NULL COMMENT '绑定 DDL 结构时使用的 SHA-256 指纹',
     memory_text        TEXT NOT NULL COMMENT '用于全文检索与向量检索的规范化记忆文本',
+    memory_text_hash   CHAR(64) NOT NULL COMMENT '记忆文本的 SHA-256 哈希，使精确基线检索走等值索引',
     content            JSON NOT NULL COMMENT '权威长期记忆的结构化业务内容',
     content_hash       CHAR(64) NOT NULL COMMENT '结构化内容的 SHA-256 哈希，用于幂等去重',
     trust              VARCHAR(32) NOT NULL COMMENT '事实可信来源，区分模型校验与用户确认',
@@ -44,7 +45,11 @@ CREATE TABLE IF NOT EXISTS agent_memory
     INDEX idx_agent_memory_rebuild (status, id),
     INDEX idx_agent_memory_user
         (user_id, category, status, updated_at),
-    INDEX idx_agent_memory_expiry (status, expires_at, id)
+    INDEX idx_agent_memory_expiry (status, expires_at, id),
+    INDEX idx_agent_memory_text_hash
+        (source, memory_text_hash, status),
+    INDEX idx_agent_memory_key_lookup
+        (source, memory_key, status)
 ) ENGINE = InnoDB COMMENT = '存储经验证的权威长期记忆及其生命周期状态';
 
 CREATE TABLE IF NOT EXISTS agent_conversation
