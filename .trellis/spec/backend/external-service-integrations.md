@@ -165,7 +165,7 @@ await MemorySearchService.search(
 ### 6. Tests Required
 
 ```powershell
-uv run pytest tests/unit/ddl_metadata/memory/domain/test_memory.py
+uv run pytest tests/unit/memory/domain/test_memory.py
 uv run pytest tests/integration/test_memory_services.py
 uv run pytest tests/integration/test_api.py -k memory
 uv run pytest -m "not tei"

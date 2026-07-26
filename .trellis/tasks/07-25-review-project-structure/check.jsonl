@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "核验活动路径、包范围和规范一致性"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "核验模块所有权、依赖方向和旧路径清理"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验共享 MetaData 与数据库契约未漂移"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "核验 HTTP、会话、长期记忆与租户作用域兼容"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核验错误类型重命名后外部映射不变"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行完整检查命令并如实报告"}
+{"file": ".trellis/tasks/07-25-review-project-structure/research/project-structure-review.md", "reason": "逐项确认审查问题已修复且未误改合理结构"}

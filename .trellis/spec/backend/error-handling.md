@@ -3,12 +3,12 @@
 ## Current Strategy
 
 Configuration and low-level client errors normally propagate unchanged.
-Lifecycle misuse still raises an actionable `RuntimeError`. The DDL metadata
-feature additionally defines one stable safe application error,
-`DDLMetadataError`, for business rejection and API/worker projection:
+Lifecycle misuse still raises an actionable `RuntimeError`. The root
+`data_agent.errors` module defines one stable safe application error,
+`DataAgentError`, for business rejection and API/worker projection:
 
 ```python
-DDLMetadataError(
+DataAgentError(
     code,
     stage,
     message,
@@ -73,7 +73,7 @@ a later `initialize()` creates a fresh resource after close.
 
 ## API Error Responses
 
-The application exception handler centrally maps `DDLMetadataError` raised by
+The application exception handler centrally maps `DataAgentError` raised by
 the split `data_agent.ddl_metadata.api.jobs` and `.memories` routers to its
 declared status and a safe envelope:
 
@@ -160,7 +160,7 @@ DELETE /api/v1/metadata/memories/{memory_uid}
   api.max_ddl_bytes`; every Unicode code point occupies at least one UTF-8
   byte. Encode only the bounded remainder and apply the exact byte comparison
   so multibyte input near the limit retains the same
-  `DDLMetadataError(code="ddl_too_large", stage="submit")` business response.
+  `DataAgentError(code="ddl_too_large", stage="submit")` business response.
 - Status exposes only the stable public state, safe result/error, current
   bounded questions, revision, and expiry.
 - The SSE route resolves the job and current Stream tail before starting the

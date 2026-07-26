@@ -6,12 +6,12 @@ from typing import cast
 
 from redis.asyncio import Redis
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.redis.scripts import JobScripts
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.errors import DataAgentError
+from data_agent.models.jobs import (
     DDLJobRequest,
     JobError,
     JobRecord,
@@ -59,7 +59,7 @@ class RedisJobStateStore:
             self._redis.hgetall(self._keys.job(job_id))
         )
         if not values:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "job_not_found",
                 "job_status",
                 "任务不存在或已过保留期",
@@ -76,7 +76,7 @@ class RedisJobStateStore:
             )
         )
         if not all(values):
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "job_not_found",
                 "worker",
                 "任务执行输入不存在",

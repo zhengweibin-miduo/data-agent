@@ -10,8 +10,8 @@ from data_agent.conversation.mysql_tables import (
     conversation_memory_outbox,
 )
 from data_agent.conversation.repository import ConversationRepository
-from data_agent.ddl_metadata.persistence.schema import metadata
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.persistence.schema import metadata
 from tests.helpers.checks import check_equal
 
 pytestmark = pytest.mark.integration

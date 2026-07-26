@@ -11,8 +11,8 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 from data_agent.ddl_metadata import parsing
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.errors import DataAgentError
 from data_agent.settings import app_config
 from tests.helpers.checks import (
     check_condition,
@@ -41,8 +41,8 @@ async def _assert_rejected(ddl: str, code: str) -> None:
     """断言 DDL 被指定错误拒绝。"""
     try:
         await parse_ddl("test_source", ddl)
-    except DDLMetadataError as error:
-        check_exception("_assert_rejected 捕获预期异常", error, DDLMetadataError)
+    except DataAgentError as error:
+        check_exception("_assert_rejected 捕获预期异常", error, DataAgentError)
         check_equal("_assert_rejected 检查点 1", error.code, code)
         if code == "malformed_ddl":
             check_condition(
@@ -129,8 +129,8 @@ async def test_ddl_parser() -> None:
     )
     try:
         await parse_ddl("test_source", DDL, tiny_limits)
-    except DDLMetadataError as error:
-        check_exception("test_ddl_parser 捕获预期异常", error, DDLMetadataError)
+    except DataAgentError as error:
+        check_exception("test_ddl_parser 捕获预期异常", error, DataAgentError)
         check_equal(
             "test_ddl_parser 检查点 10",
             error.code,

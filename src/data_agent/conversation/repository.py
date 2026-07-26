@@ -23,8 +23,8 @@ from data_agent.conversation.mysql_tables import (
     agent_message,
     conversation_memory_outbox,
 )
-from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.identifiers import stable_id
+from data_agent.errors import DataAgentError
+from data_agent.identifiers import stable_id
 
 
 def _message(row: RowMapping) -> MessageRecord:
@@ -201,7 +201,7 @@ class ConversationRepository:
             for_update=True,
         )
         if conversation is None:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "conversation_not_found",
                 "conversation_turn",
                 "会话不存在",
@@ -209,7 +209,7 @@ class ConversationRepository:
             )
         active_turn = conversation["active_turn_uid"]
         if active_turn is not None and str(active_turn) != turn_uid:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "conversation_busy",
                 "conversation_turn",
                 "会话已有在途轮次",
@@ -227,7 +227,7 @@ class ConversationRepository:
         ).mappings().one_or_none()
         if existing is not None:
             if str(existing["content"]) != content:
-                raise DDLMetadataError(
+                raise DataAgentError(
                     "idempotency_conflict",
                     "conversation_turn",
                     "相同轮次的用户内容不一致",
@@ -275,7 +275,7 @@ class ConversationRepository:
             for_update=True,
         )
         if conversation is None:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "conversation_not_found",
                 "conversation_complete",
                 "会话不存在",
@@ -296,7 +296,7 @@ class ConversationRepository:
         by_role = {str(row["role"]): row for row in messages}
         user_message = by_role.get(MessageRole.USER.value)
         if user_message is None:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "turn_not_started",
                 "conversation_complete",
                 "轮次尚未持久化用户消息",
@@ -305,7 +305,7 @@ class ConversationRepository:
         existing = by_role.get(MessageRole.ASSISTANT.value)
         if existing is not None:
             if str(existing["content"]) != content:
-                raise DDLMetadataError(
+                raise DataAgentError(
                     "idempotency_conflict",
                     "conversation_complete",
                     "相同轮次的助手内容不一致",
@@ -313,7 +313,7 @@ class ConversationRepository:
                 )
             return _message(existing)
         if str(conversation["active_turn_uid"] or "") != turn_uid:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "stale_turn",
                 "conversation_complete",
                 "轮次不是当前在途轮次",

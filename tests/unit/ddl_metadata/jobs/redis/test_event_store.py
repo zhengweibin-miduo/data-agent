@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 
 from data_agent.ddl_metadata.jobs.redis.event_store import JobEventStore
 from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.models.jobs import (
     JobEventData,
     JobEventStage,
     JobEventType,

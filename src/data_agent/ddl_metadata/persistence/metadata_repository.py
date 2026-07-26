@@ -6,16 +6,16 @@ from sqlalchemy import Table, delete, exists, select
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
-    MetricMetadata,
-    SemanticMetadata,
-)
 from data_agent.ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
     metric_info,
     table_info,
+)
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
+    MetricMetadata,
+    SemanticMetadata,
 )
 
 

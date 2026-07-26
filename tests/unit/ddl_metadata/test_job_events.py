@@ -9,7 +9,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from data_agent.ddl_metadata.api.job_events import stream_job_events
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.models.jobs import (
     DDLJobAccepted,
     JobError,
     JobEvent,
@@ -19,7 +19,7 @@ from data_agent.ddl_metadata.models.jobs import (
     JobResult,
     JobStatus,
 )
-from data_agent.ddl_metadata.models.semantic import MetricQuestion
+from data_agent.models.semantic import MetricQuestion
 from tests.helpers.checks import check_condition, check_equal
 
 

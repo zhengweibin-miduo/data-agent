@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 
-from data_agent.ddl_metadata.models.semantic import MetricQuestion
+from data_agent.models.semantic import MetricQuestion
 
 
 def question_set_id(questions: Sequence[MetricQuestion]) -> str:

@@ -6,25 +6,33 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete, func, select
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
-from data_agent.ddl_metadata.identifiers import memory_uid, scope_fingerprint
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.memory.application.service import MemoryService
-from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
-from data_agent.ddl_metadata.memory.domain.payloads import (
+from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.errors import DataAgentError
+from data_agent.identifiers import memory_uid, scope_fingerprint
+from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.memory.application.service import (
+    MemoryMutationLeaseProvider,
+    MemoryReferenceValidator,
+    MemoryService,
+)
+from data_agent.memory.domain.candidates import (
+    MemoryVersions,
+    build_accepted_memories,
+)
+from data_agent.memory.domain.payloads import (
     build_memory_text,
     canonical_content_json,
     memory_content_hash,
 )
-from data_agent.ddl_metadata.memory.domain.policies import category_policy
-from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
-from data_agent.ddl_metadata.memory.mysql.tables import (
+from data_agent.memory.domain.policies import category_policy
+from data_agent.memory.mysql.repository import MemoryRepository
+from data_agent.memory.mysql.tables import (
     agent_memory,
     agent_memory_event,
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.models.memory import (
     BuiltinMemoryCategory,
     MemoryActorType,
     MemoryCandidate,
@@ -38,15 +46,15 @@ from data_agent.ddl_metadata.models.memory import (
     SemanticDecisionContent,
     UserMemoryContent,
 )
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.models.semantic import (
     MetricAnswer,
     MetricMetadata,
     MetricQuestion,
 )
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.infrastructure.mysql import MySQLDatabase
 from tests.helpers.checks import check_equal
 from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
+
+_MEMORY_VERSIONS = MemoryVersions(content="v2", projection="v2")
 
 
 def _user_memory_candidate(
@@ -143,6 +151,7 @@ async def test_memory_repository() -> None:
         [],
         [],
         [],
+        versions=_MEMORY_VERSIONS,
         job_id=uuid4().hex,
     )
     target_uid = candidates[0].uid
@@ -262,8 +271,11 @@ async def test_update_to_deleted_content_returns_conflict() -> None:
             active_b = await repository.get_by_uid(candidate_b.uid, user_id=user_id)
             if active_b is None:
                 raise RuntimeError("当前用户记忆必须存在")
-        service = MemoryService(cast(DDLJobStore, object()))
-        with pytest.raises(DDLMetadataError) as exc_info:
+        service = MemoryService(
+            cast(MemoryMutationLeaseProvider, object()),
+            cast(MemoryReferenceValidator, object()),
+        )
+        with pytest.raises(DataAgentError) as exc_info:
             await service.update(
                 candidate_b.uid,
                 content_a,
@@ -317,6 +329,7 @@ async def test_superseded_content_can_become_active_again() -> None:
         [],
         [],
         [],
+        versions=_MEMORY_VERSIONS,
         job_id=uuid4().hex,
     )
     original_a = candidates[0]
@@ -459,6 +472,7 @@ async def test_deleted_reactivated_content_is_not_replayed() -> None:
         [],
         [],
         [],
+        versions=_MEMORY_VERSIONS,
         job_id=uuid4().hex,
     )
     original_a = candidates[0]
@@ -601,6 +615,7 @@ async def test_metric_merge_preserves_complementary_evidence() -> None:
         [first_question],
         [first_answer],
         [first_metric],
+        versions=_MEMORY_VERSIONS,
         job_id=uuid4().hex,
     )
     second_candidates = build_accepted_memories(
@@ -609,6 +624,7 @@ async def test_metric_merge_preserves_complementary_evidence() -> None:
         [second_question],
         [second_answer],
         [second_metric],
+        versions=_MEMORY_VERSIONS,
         job_id=uuid4().hex,
     )
     try:
@@ -623,6 +639,7 @@ async def test_metric_merge_preserves_complementary_evidence() -> None:
                 [second_question],
                 [second_answer],
                 [second_metric],
+                versions=_MEMORY_VERSIONS,
                 job_id=uuid4().hex,
             )
             await repository.upsert_candidates(repeated_candidates)
@@ -698,6 +715,7 @@ async def test_fingerprint_expiry_preserves_unsubmitted_table_scope() -> None:
         [],
         [],
         [],
+        versions=_MEMORY_VERSIONS,
         job_id=uuid4().hex,
     )
     customer_table = next(

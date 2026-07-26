@@ -15,8 +15,8 @@ from data_agent.conversation.models import (
     StartTurnResponse,
 )
 from data_agent.conversation.service import ConversationService
-from data_agent.ddl_metadata.memory.application.service import MemoryService
-from data_agent.ddl_metadata.models.memory import (
+from data_agent.memory.application.service import MemoryService
+from data_agent.models.memory import (
     MemoryDeleteResponse,
     MemoryDetail,
     MemoryHistoryPage,

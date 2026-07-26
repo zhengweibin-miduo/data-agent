@@ -4,8 +4,8 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from data_agent.ddl_metadata.models.jobs import JobEventStage
 from data_agent.ddl_metadata.worker.job_runner import _task_start_stage
+from data_agent.models.jobs import JobEventStage
 from tests.helpers.checks import check_equal
 
 

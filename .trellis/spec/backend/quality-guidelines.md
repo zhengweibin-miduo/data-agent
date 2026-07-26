@@ -32,7 +32,7 @@
   `close()`.
 - Package `__init__.py` files are documented and side-effect free.
 - HTTP, model, graph, Redis, and persistence boundaries reuse contracts from
-  `data_agent.ddl_metadata.models`; consumers do not cast shared JSON payloads
+  `data_agent.models`; consumers do not cast shared JSON payloads
   independently.
 - Unit graph/model tests use deterministic fakes and never require a live LLM.
   Integration tests clearly mark MySQL, Redis, and TEI requirements.

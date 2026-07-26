@@ -8,10 +8,10 @@ from redis.exceptions import RedisError
 
 from data_agent.conversation.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.memory.indexing.dispatcher import MemoryIndexDispatcher
-from data_agent.ddl_metadata.memory.mysql.repository import MemoryRepository
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.memory.indexing.dispatcher import MemoryIndexDispatcher
+from data_agent.memory.mysql.repository import MemoryRepository
 
 
 async def dispatch_pending(ctx: dict[Any, Any]) -> None:

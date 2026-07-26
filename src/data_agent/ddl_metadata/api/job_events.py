@@ -7,9 +7,9 @@ from fastapi import Request
 from loguru import logger
 from redis.exceptions import RedisError
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.errors import DataAgentError
+from data_agent.models.jobs import (
     JobError,
     JobEvent,
     JobEventData,
@@ -84,7 +84,7 @@ async def stream_job_events(
                     return
             else:
                 yield ": heartbeat\n\n"
-    except (RedisError, DDLMetadataError, ValueError) as error:
+    except (RedisError, DataAgentError, ValueError) as error:
         logger.bind(
             trace_id=record.job_id,
             component="ddl_metadata.api",

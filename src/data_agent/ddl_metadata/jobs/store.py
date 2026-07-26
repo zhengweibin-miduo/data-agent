@@ -12,7 +12,6 @@ from loguru import logger
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.jobs.redis.base import RedisBaseStore
 from data_agent.ddl_metadata.jobs.redis.codec import JobCodec
@@ -21,7 +20,8 @@ from data_agent.ddl_metadata.jobs.redis.keys import JobKeys
 from data_agent.ddl_metadata.jobs.redis.lease_store import SourceLeaseStore
 from data_agent.ddl_metadata.jobs.redis.outbox_store import JobOutboxStore
 from data_agent.ddl_metadata.jobs.redis.state_store import RedisJobStateStore
-from data_agent.ddl_metadata.models.jobs import (
+from data_agent.errors import DataAgentError
+from data_agent.models.jobs import (
     AnswerRequest,
     DDLJobRequest,
     JobError,
@@ -33,7 +33,7 @@ from data_agent.ddl_metadata.models.jobs import (
     JobResult,
     JobStatus,
 )
-from data_agent.ddl_metadata.models.semantic import MetricQuestion
+from data_agent.models.semantic import MetricQuestion
 from data_agent.settings import app_config
 
 
@@ -81,7 +81,7 @@ class DDLJobStore:
             len(request.ddl) > max_ddl_bytes
             or len(request.ddl.encode()) > max_ddl_bytes
         ):
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "ddl_too_large",
                 "submit",
                 "DDL 超过配置的字节限制",
@@ -92,7 +92,7 @@ class DDLJobStore:
         # 可由权威 Hash 修复的通知，发布失败不能撤销已经持久化的受理结果。
         accepted = await self._state.submit(job_id, request, datetime.now(UTC))
         if not accepted:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "source_busy",
                 "submit",
                 "该逻辑数据源已有活动任务",
@@ -242,7 +242,7 @@ class DDLJobStore:
             }
             unknown = set(answer_ids) - current_question_ids
             if duplicates or unknown:
-                raise DDLMetadataError(
+                raise DataAgentError(
                     "invalid_answers",
                     "waiting_input",
                     "回答必须唯一且只能引用当前问题",
@@ -262,14 +262,14 @@ class DDLJobStore:
             answer_hash=answer_hash,
         )
         if result == -1:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "answer_timeout",
                 "waiting_input",
                 "回答已超过截止时间",
                 http_status=410,
             )
         if result == 0:
-            raise DDLMetadataError(
+            raise DataAgentError(
                 "stale_answer",
                 "waiting_input",
                 "回答修订或问题集合已过期",

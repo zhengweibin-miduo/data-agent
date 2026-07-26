@@ -15,7 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
-from data_agent.ddl_metadata.persistence.schema import metadata
+from data_agent.persistence.schema import metadata
 from data_agent.settings import app_config
 
 agent_conversation = Table(

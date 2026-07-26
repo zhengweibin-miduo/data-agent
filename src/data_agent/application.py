@@ -12,15 +12,18 @@ from redis.exceptions import RedisError
 from data_agent.conversation.api import router as conversation_router
 from data_agent.conversation.service import ConversationService
 from data_agent.ddl_metadata.api.router import router as ddl_metadata_router
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.memory.application.service import MemoryService
+from data_agent.ddl_metadata.persistence.memory_references import (
+    MetadataMemoryReferenceValidator,
+)
+from data_agent.errors import DataAgentError
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.logging import setup_logging
+from data_agent.memory.application.service import MemoryService
 from data_agent.settings import app_config
 
 
@@ -35,7 +38,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     TEIEmbeddingClient.initialize()
     jobs = DDLJobStore(redis)
     app.state.jobs = jobs
-    app.state.memories = MemoryService(jobs)
+    app.state.memories = MemoryService(jobs, MetadataMemoryReferenceValidator())
     app.state.conversations = ConversationService()
     logger.bind(
         component="application.api",
@@ -70,7 +73,7 @@ async def _handle_business_error(
 ) -> JSONResponse:
     """把稳定业务错误映射为安全 HTTP 响应。"""
     del request
-    if not isinstance(error, DDLMetadataError):
+    if not isinstance(error, DataAgentError):
         raise error
     return JSONResponse(
         status_code=error.http_status,
@@ -118,7 +121,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
-    app.add_exception_handler(DDLMetadataError, _handle_business_error)
+    app.add_exception_handler(DataAgentError, _handle_business_error)
     app.add_exception_handler(RedisError, _handle_redis_error)
     app.include_router(ddl_metadata_router)
     app.include_router(conversation_router)

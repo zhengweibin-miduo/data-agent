@@ -2,9 +2,9 @@
 
 from collections import Counter
 
-from data_agent.ddl_metadata.identifiers import metric_id
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
+from data_agent.identifiers import metric_id
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
     ColumnRole,
     MetricAnswer,
     MetricMetadata,

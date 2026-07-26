@@ -10,8 +10,9 @@ The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
 
 The DDL metadata feature uses SQLAlchemy Core table definitions in
 `ddl_metadata/persistence/tables.py` for Meta snapshots and
-`ddl_metadata/memory/mysql/tables.py` for long-term memory. Both import the
-single `MetaData` owner from `ddl_metadata/persistence/schema.py`. The project
+`memory/mysql/tables.py` for long-term memory. Conversation has its own table
+definitions under `conversation/mysql_tables.py`. All three import the single
+`MetaData` owner from `data_agent/persistence/schema.py`. The project
 deliberately does not add ORM entities or a migration framework.
 `MetadataRepository` owns the four Meta snapshot tables; `MemoryRepository`
 owns authoritative records, append-only events, typed links, and browser

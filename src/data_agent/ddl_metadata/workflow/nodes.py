@@ -5,27 +5,7 @@ from __future__ import annotations
 from langgraph.types import interrupt
 from loguru import logger
 
-from data_agent.ddl_metadata.errors import DDLMetadataError
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
-from data_agent.ddl_metadata.memory.domain.candidates import build_accepted_memories
-from data_agent.ddl_metadata.models.jobs import (
-    JobError,
-    JobResult,
-    JobStatus,
-)
-from data_agent.ddl_metadata.models.memory import (
-    MEMORY_CONTENT_ADAPTER,
-    MemoryCandidate,
-)
-from data_agent.ddl_metadata.models.physical import PhysicalSchema
-from data_agent.ddl_metadata.models.semantic import (
-    MetricAnswer,
-    MetricMetadata,
-    MetricQuestion,
-    SemanticMetadata,
-    TableRole,
-    ValidationIssue,
-)
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.validation import (
     finalize_and_validate_metrics,
@@ -34,6 +14,27 @@ from data_agent.ddl_metadata.validation import (
 )
 from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
 from data_agent.ddl_metadata.workflow.state import DDLGraphState
+from data_agent.errors import DataAgentError
+from data_agent.memory.domain.candidates import MemoryVersions, build_accepted_memories
+from data_agent.models.jobs import (
+    JobError,
+    JobResult,
+    JobStatus,
+)
+from data_agent.models.memory import (
+    MEMORY_CONTENT_ADAPTER,
+    MemoryCandidate,
+)
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
+    MetricAnswer,
+    MetricMetadata,
+    MetricQuestion,
+    SemanticMetadata,
+    TableRole,
+    ValidationIssue,
+)
+from data_agent.settings import app_config
 
 
 def _state_string(state: DDLGraphState, key: str) -> str:
@@ -44,7 +45,7 @@ def _state_string(state: DDLGraphState, key: str) -> str:
     return value
 
 
-def _error_update(error: DDLMetadataError) -> DDLGraphState:
+def _error_update(error: DataAgentError) -> DDLGraphState:
     """把业务拒绝转为安全终态。"""
     return {
         "status": JobStatus.REJECTED.value,
@@ -80,7 +81,7 @@ class DDLWorkflowNodes:
                 _state_string(state, "source"),
                 _state_string(state, "ddl"),
             )
-        except DDLMetadataError as error:
+        except DataAgentError as error:
             return _error_update(error)
         return {
             "physical_schema": schema.model_dump(mode="json"),
@@ -107,7 +108,7 @@ class DDLWorkflowNodes:
         schema = PhysicalSchema.model_validate(state.get("physical_schema"))
         try:
             context = await self._dependencies.memory_context.load(schema)
-        except DDLMetadataError as error:
+        except DataAgentError as error:
             return _error_update(error)
         update: DDLGraphState = {
             "memory_capsule": [
@@ -175,7 +176,7 @@ class DDLWorkflowNodes:
                     "route": "repair",
                 }
             return _error_update(
-                DDLMetadataError(
+                DataAgentError(
                     "invalid_semantic_output",
                     "classify_metadata",
                     "模型语义响应在修复后仍无法解析",
@@ -203,7 +204,7 @@ class DDLWorkflowNodes:
                 "semantic_attempts": attempts + 1,
                 "route": "repair",
             }
-        error = DDLMetadataError(
+        error = DataAgentError(
             "invalid_semantic_metadata",
             "validate_metadata",
             "语义元数据未通过确定性校验",
@@ -247,7 +248,7 @@ class DDLWorkflowNodes:
             )
         except (TypeError, ValueError):
             return _error_update(
-                DDLMetadataError(
+                DataAgentError(
                     "invalid_metric_questions",
                     "plan_metric_questions",
                     "模型指标问题未通过结构化解析",
@@ -259,7 +260,7 @@ class DDLWorkflowNodes:
             output.questions,
         )
         if issues or not output.questions:
-            error = DDLMetadataError(
+            error = DataAgentError(
                 "invalid_metric_questions",
                 "plan_metric_questions",
                 "事实表指标问题无效或为空",
@@ -363,7 +364,7 @@ class DDLWorkflowNodes:
                     "route": "repair",
                 }
             return _error_update(
-                DDLMetadataError(
+                DataAgentError(
                     "invalid_metric_output",
                     "generate_metrics",
                     "模型指标响应在修复后仍无法解析",
@@ -384,7 +385,7 @@ class DDLWorkflowNodes:
                     "route": "followup",
                 }
             return _error_update(
-                DDLMetadataError(
+                DataAgentError(
                     "metric_ambiguity",
                     "generate_metrics",
                     "第二轮回答后指标定义仍不完整",
@@ -435,7 +436,7 @@ class DDLWorkflowNodes:
                 "route": "repair",
             }
         return _error_update(
-            DDLMetadataError(
+            DataAgentError(
                 "invalid_metrics",
                 "validate_metrics",
                 "指标未通过确定性校验",
@@ -468,6 +469,10 @@ class DDLWorkflowNodes:
                 MEMORY_CONTENT_ADAPTER.validate_python(content)
                 for content in state.get("reused_memory", [])
             ],
+            versions=MemoryVersions(
+                content=app_config.memory.content_version,
+                projection=app_config.memory.projection_version,
+            ),
             job_id=_state_string(state, "job_id"),
         )
         return {
