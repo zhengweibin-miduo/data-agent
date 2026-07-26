@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 23
-- **Last Active**: 2026-07-23
+- **Total Sessions**: 24
+- **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~773 | Active |
+| `journal-1.md` | ~807 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-07-26 | 审查并完善项目核心流程注释 | `a84c445`, `ef06fb9` | `chore/review-comments-20260725` |
 | 23 | 2026-07-23 | 重建 Mem0 风格长期记忆生命周期 | `fd945b2` | `refactor/mem0-memory-lifecycle-20260723` |
 | 22 | 2026-07-21 | 初始化记忆投影版本为 v1 | `1c57772` | `fix/initial-projection-version-20260721` |
 | 21 | 2026-07-20 | 修复 PR 22 CI 事件循环冲突 | `edb3012` | `fix/pr22-ci-20260720` |
