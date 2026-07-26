@@ -9,7 +9,6 @@
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
 - **Total Sessions**: 30
-- **Total Sessions**: 30
 - **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
