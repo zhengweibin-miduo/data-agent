@@ -36,8 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # issue_comment 事件默认检出默认分支；显式检出 PR merge ref，确保两种触发都读取待裁决代码。
-          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/merge
+          # issue_comment 事件默认检出默认分支，会让裁决读到 master 而非 PR 代码。
+          # 用 /head 而非 /merge：merge ref 在 PR 存在冲突时不存在（checkout 会直接失败），
+          # 且由 GitHub 异步生成可能滞后；head 始终存在，并与 Codex 评审时所见、
+          # 与 review thread 行号锚定的提交一致。
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/head
           fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
