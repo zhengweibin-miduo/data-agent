@@ -5,7 +5,7 @@
   "description": "",
   "status": "in_progress",
   "dev_type": null,
-  "scope": null,
+  "scope": "backend",
   "package": null,
   "priority": "P2",
   "creator": "zwb",
