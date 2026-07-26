@@ -31,6 +31,7 @@ agent_memory = Table(
     Column("content_schema", String(128), nullable=False),
     Column("schema_fingerprint", String(64), nullable=True),
     Column("memory_text", Text, nullable=False),
+    Column("memory_text_hash", String(64), nullable=False),
     Column("content", JSON, nullable=False),
     Column("content_hash", String(64), nullable=False),
     Column("trust", String(32), nullable=False),
@@ -67,6 +68,14 @@ agent_memory = Table(
     Index("idx_agent_memory_rebuild", "status", "id"),
     Index("idx_agent_memory_user", "user_id", "category", "status", "updated_at"),
     Index("idx_agent_memory_expiry", "status", "expires_at", "id"),
+    # 精确基线检索按 source + 定长文本哈希等值查找；memory_text 是 TEXT 列，
+    # 直接全等比较无法走索引，会退化为按 source 范围扫描。
+    Index(
+        "idx_agent_memory_text_hash",
+        "source",
+        "memory_text_hash",
+        "status",
+    ),
     schema=app_config.memory.database,
 )
 agent_memory_event = Table(

@@ -1,5 +1,7 @@
 """锁定长期记忆 Core 元数据与 bootstrap DDL 的关键约束。"""
 
+from pathlib import Path
+
 from data_agent.memory.mysql.tables import (
     agent_memory,
     agent_memory_event,
@@ -7,7 +9,7 @@ from data_agent.memory.mysql.tables import (
     memory_index_outbox,
 )
 from data_agent.settings import app_config
-from tests.helpers.checks import check_equal
+from tests.helpers.checks import check_condition, check_equal
 
 
 def test_memory_table_indexes_match_bootstrap_contract() -> None:
@@ -20,6 +22,7 @@ def test_memory_table_indexes_match_bootstrap_contract() -> None:
             "idx_agent_memory_rebuild",
             "idx_agent_memory_user",
             "idx_agent_memory_expiry",
+            "idx_agent_memory_text_hash",
         },
     )
     check_equal(
@@ -80,4 +83,69 @@ def test_memory_table_foreign_keys_match_bootstrap_contract() -> None:
                 "fk_memory_index_outbox_memory",
             ),
         },
+    )
+
+
+def _bootstrap_agent_memory_block() -> str:
+    """从 bootstrap 脚本中截取 agent_memory 的 CREATE TABLE 定义。"""
+    script = (
+        Path(__file__).parents[4] / "docs" / "docker" / "mysql" / "data_agent.sql"
+    ).read_text(encoding="utf-8")
+    start = script.index("CREATE TABLE IF NOT EXISTS agent_memory")
+    return script[start : script.index("ENGINE = InnoDB", start)]
+
+
+def _bootstrap_columns(block: str) -> set[str]:
+    """解析 CREATE TABLE 块中声明的列名。
+
+    按顶层逗号切分而不是按行切分：列定义可以跨行（例如 updated_at 的
+    ``ON UPDATE CURRENT_TIMESTAMP`` 换行续写），逐行解析会把续写行的首个词误当列名。
+    """
+    # 步骤一：去掉 CREATE TABLE 前缀，只保留最外层括号内的定义体。
+    body = block[block.index("(") + 1 :]
+    # 步骤二：按嵌套深度为零的逗号切分，使类型参数与索引列表内的逗号不参与切分。
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in body:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current))
+    # 步骤三：跳过表级约束，取每个列定义的首个标识符。
+    skipped = ("INDEX", "PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "KEY")
+    columns: set[str] = set()
+    for part in parts:
+        definition = part.strip()
+        if not definition or definition.startswith(skipped):
+            continue
+        name = definition.split()[0]
+        if name.isidentifier():
+            columns.add(name)
+    return columns
+
+
+def test_memory_core_columns_match_bootstrap_script() -> None:
+    """Core 定义与 bootstrap 脚本是两份来源，列集合必须逐一对应。
+
+    仓库没有升级迁移机制，bootstrap 脚本是新环境建表的唯一依据；两处任一漏改都会
+    让新环境与 ORM 期望的结构不一致，且只有真正连库时才暴露。
+    """
+    block = _bootstrap_agent_memory_block()
+    check_equal(
+        "agent_memory 列集合",
+        {column.name for column in agent_memory.columns},
+        _bootstrap_columns(block),
+    )
+    check_condition(
+        "文本哈希列参与精确基线索引",
+        "idx_agent_memory_text_hash" in block and "memory_text_hash" in block,
+        actual=block,
+        expected="bootstrap 声明 memory_text_hash 列与其索引",
     )

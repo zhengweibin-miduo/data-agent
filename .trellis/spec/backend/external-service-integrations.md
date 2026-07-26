@@ -161,13 +161,19 @@ await MemorySearchService.search(
   orders exact hits *among themselves*. Passing only `exact_uids` would tie every
   exact hit and degrade to UID-string order, discarding the baseline query's
   relevance order. Keep both contributions, and keep the tests that lock it.
-- Known deferred issue: `find_exact_query` compares `memory_text == query` on a
-  Text column, which cannot use an index and becomes the dominant search latency
-  as data grows. The fix is a hash column over the projection text plus an index,
-  comparing hashes instead. That needs a schema change, and `docs/docker/mysql/`
-  is blank-environment bootstrap rather than upgrade migration — existing volumes
-  never replay it, so adding a column without a migration path breaks existing
-  environments with an unknown-column error. Settle the migration mechanism first.
+- `find_exact_query` compares a fixed-length `memory_text_hash` rather than the
+  `memory_text` TEXT column. Equality on a TEXT column cannot use an index, so the
+  baseline query degraded into a scan of the whole `source` range and became the
+  dominant search latency as data grew. `idx_agent_memory_text_hash`
+  (`source`, `memory_text_hash`, `status`) serves it. The hash only accelerates
+  equality lookup — content identity and deduplication still belong to
+  `content_hash`.
+- `agent_memory` is defined twice: SQLAlchemy Core in `memory/mysql/tables.py` and
+  the bootstrap DDL in `docs/docker/mysql/data_agent.sql`. There is no upgrade
+  migration, so the bootstrap script is the only thing that creates a new
+  environment's tables and both must be edited together. A unit test parses the
+  bootstrap block and compares its column set against the Core metadata, because
+  drift between them otherwise surfaces only when something actually connects.
 - Search runs ES BM25 and TEI/Qdrant concurrently with the configured timeout,
   excludes target signals that still have pending outbox work, and combines
   the remaining ranks with stable RRF.
