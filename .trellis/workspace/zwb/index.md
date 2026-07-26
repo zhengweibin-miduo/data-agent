@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 29
-- **Last Active**: 2026-07-26
+- **Total Sessions**: 30
+- **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~973 | Active |
+| `journal-1.md` | ~1006 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 30 | 2026-07-27 | 为精确基线检索建立文本哈希索引 | `567231d` | `perf/exact-query-text-hash-20260727` |
 | 29 | 2026-07-26 | 清理记忆检索排序与索引效率问题 | `1331e38` | `fix/memory-search-hygiene-20260726` |
 | 28 | 2026-07-26 | 修复记忆检索与投影的遗留正确性缺陷 | `a5cd384` | `fix/memory-correctness-defects-20260726` |
 | 27 | 2026-07-26 | 项目日志 AOP 上下文改造 | `ccbe542`, `5470f01` | `refactor/logger-aop-context-20260726` |

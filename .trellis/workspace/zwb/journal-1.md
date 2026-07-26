@@ -971,3 +971,36 @@ record_access 自赋值 updated_at 抑制 onupdate，消除读路径改变读路
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: 为精确基线检索建立文本哈希索引
+
+**Date**: 2026-07-27
+**Task**: 为精确基线检索建立文本哈希索引
+**Branch**: `perf/exact-query-text-hash-20260727`
+
+### Summary
+
+新增 memory_text_hash 列与 idx_agent_memory_text_hash 索引，find_exact_query 改用哈希等值替代 TEXT 全等比较；Core 与 bootstrap DDL 同步。补一个真正读取 bootstrap 脚本并与 Core 列集合对比的一致性守卫（原测试从不读取脚本）。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `567231d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
