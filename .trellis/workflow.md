@@ -226,7 +226,7 @@ Sub-agent dispatch protocol applies to all platforms and all sub-agents, includi
 [workflow-state:in_progress]
 Tools: `trellis-implement` / `trellis-research` are sub-agent types only (Task/Agent tool, NOT Skill; there is no skill by these names). `trellis-update-spec` is a skill. `trellis-check` exists as both; prefer the Agent form when verifying after code changes.
 Flow: `trellis-implement` -> `trellis-check` -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
-Codex GitHub review loop: findings -> Codex fixes -> push fixes to the PR -> request another review with `@codex` in a normal PR comment; repeat until no fixable findings remain. Never put that request in the adjudication thread.
+Codex GitHub review loop: review findings -> the repository Action delegates resolution to Codex as the configured user -> Codex fixes and resolves actionable threads, or explains and resolves non-actionable threads -> pushes trigger the next automatic review. Use `@codex review` only if automatic review fails to trigger.
 Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `trellis-implement`, do NOT spawn another `trellis-implement` or `trellis-check`; if already running as `trellis-check`, do NOT spawn another `trellis-check` or `trellis-implement`. Dispatch is main session only.
 Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
 [/workflow-state:in_progress]
@@ -238,7 +238,7 @@ Dispatch prompt starts with `Active task: <task path from task.py current>`. Rea
 
 [workflow-state:in_progress-inline]
 Flow: `trellis-before-dev` -> edit -> `trellis-check` -> validation -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
-Codex GitHub review loop: findings -> Codex fixes -> push fixes to the PR -> request another review with `@codex` in a normal PR comment; repeat until no fixable findings remain. Never put that request in the adjudication thread.
+Codex GitHub review loop: review findings -> the repository Action delegates resolution to Codex as the configured user -> Codex fixes and resolves actionable threads, or explains and resolves non-actionable threads -> pushes trigger the next automatic review. Use `@codex review` only if automatic review fails to trigger.
 Do not dispatch implement/check sub-agents in inline mode.
 Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, plus relevant spec/research loaded by skills.
 [/workflow-state:in_progress-inline]
@@ -697,7 +697,7 @@ If issues are found → fix → re-check, until green.
 
 [/codex-inline, Kilo, Antigravity, Devin]
 
-For Codex GitHub reviews, Codex owns the full loop without Claude: when a review finds a fixable issue, Codex fixes it and pushes the fix to the PR, then posts a normal PR comment containing `@codex` to request another review. The re-review request must not be posted in the original review thread's adjudication reply. If the new review finds another issue, repeat fix → push → normal PR comment requesting re-review until no fixable findings remain.
+For Codex GitHub reviews, the repository Action owns delegation without Claude: when a review adds unresolved findings, it uses the configured user identity to delegate the review to Codex once. Codex reads each thread and the PR diff, fixes and resolves actionable findings, explains and resolves non-actionable findings, and leaves blocked findings unresolved with a reason. A fix push triggers the repository's automatic Codex Review; use `@codex review` only when that automatic review fails to trigger.
 
 **Final pass (before Phase 3.4 commit)**: the last 2.2 of a task must run full-scope, not just on the latest implement chunk. List all affected packages with `python ./.trellis/scripts/get_context.py --mode packages`, then load each package's spec index Quality Check section. This catches cross-layer / multi-package issues a mid-iteration local 2.2 cannot.
 

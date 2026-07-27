@@ -49,7 +49,7 @@
 
 ## 审查意见裁决标准
 
-裁决代理（见 `.github/workflows/codex-review-triage.yml`）不重新评审代码，只判定既有审查意见是否需要修复。裁决前必须实际打开对应文件读取上下文，并检查 PR diff 确认问题是否由本 PR 引入；不得仅凭意见描述下结论。
+裁决任务由 `.github/workflows/codex-review-triage.yml` 以配置的用户身份委派给 Codex。它不重新评审代码，只判定既有审查意见是否需要修复。裁决前必须实际打开对应文件读取上下文，并检查 PR diff 确认问题是否由本 PR 引入；不得仅凭意见描述下结论。
 
 | 裁决 | 选择条件 |
 | --- | --- |
@@ -70,3 +70,11 @@
 ```markdown
 **[裁决] MUST_FIX** — <一句话依据，引用具体 `文件路径:行号` 或测试>
 ```
+
+## 审查意见处理闭环
+
+- `MUST_FIX`：完成最小修复和验证，推送到原 PR 分支，在原 thread 回复依据后 resolve。
+- `SHOULD_FIX`：本 PR 内修复时按 `MUST_FIX` 处理；明确延期时说明理由并保持 unresolved，交由人工决定。
+- `OUT_OF_SCOPE` / `FALSE_POSITIVE`：在原 thread 写明证据和裁决后 resolve。
+- 无法安全完成修复或验证时，说明阻塞原因并保持 unresolved；不得把未完成事项标记为已解决。
+- 修复推送后依赖仓库的自动 Codex Review 发起下一轮审查；仅当自动审查未触发时，才由人工评论 `@codex review`。
