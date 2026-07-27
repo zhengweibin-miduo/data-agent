@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify the readiness path performs SELECT only and leaves phase, lease, attempts, cursors, and timestamps unchanged."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Verify the existing LLM client is reused, the tool output is bounded, and no general agent runner is added."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify invalid intent fails closed and not-ready responses reveal no table, source, phase, retry, or error detail."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify credentials, business rows, Binlog coordinates, and unbounded model/tool payloads are absent from logs and responses."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run lock, Ruff, Pyright, compile, settings, unit, integration, and diff checks."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify all branches from intent classification through readiness routing are covered without an HTTP entrypoint."}

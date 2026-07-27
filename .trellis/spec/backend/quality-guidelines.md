@@ -123,6 +123,14 @@ uv run pytest tests/integration/data_sync
 docker compose -f docs/docker/docker-compose.yml config
 ```
 
+For answer-readiness changes, run deterministic classifier/tool/service tests
+and the live read-only task-state check:
+
+```powershell
+uv run pytest tests/unit/answer_readiness
+uv run pytest tests/integration/answer_readiness
+```
+
 The replica account stays read-only; integration fixtures mutate `source_demo`
 through the local application account. Never recreate or delete the developer's
 shared volume merely to rerun entrypoint scripts.
@@ -185,6 +193,9 @@ arguments), which is separate work.
   ROW INSERT/UPDATE/DELETE convergence, captured/applied coordinate separation,
   cross-source collision without overwrite, lease retry/dead state, and
   bootstrap/Core schema parity.
+- For answer readiness, prove one intent repair, catalog enforcement, no-wait
+  database bypass, source-scoped versus all-source semantics, `streaming`-only
+  readiness, bounded tool output, and zero task mutation.
 - Verify source credentials and business row images do not enter API contracts,
   LLM/Redis state, logs, or test output; the replication account must not receive
   source DDL/DML privileges.

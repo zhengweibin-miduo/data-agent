@@ -326,6 +326,11 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 - The first source to write a target primary key owns it permanently, including
   after DELETE. Another source conflicts before DW DML and cannot advance the
   event.
+- Answer readiness uses `DataSyncRepository.read_readiness_phases()` as a
+  separate read-only boundary. It selects only `phase`, takes no lock, and does
+  not claim, renew, settle, retry, or update a task. A source-scoped dependency
+  must match exactly one task; an unscoped dependency requires every matching
+  task to be `streaming`. Missing or ambiguous matches are not ready.
 
 ### 4. Validation & Error Matrix
 
@@ -352,6 +357,7 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 ```powershell
 uv run pytest tests/unit/data_sync
 uv run pytest tests/integration/data_sync
+uv run pytest tests/integration/answer_readiness
 ```
 
 Tests assert DDL idempotency and widening rules, composite-PK continuation,

@@ -715,6 +715,30 @@ structured = model.with_structured_output(ResponseModel, method=method)
 result = await structured.ainvoke(messages)
 ```
 
+## Scenario: Internal Answer Readiness Tool
+
+The reusable `answer_readiness` boundary classifies a bounded question against
+a caller-supplied target catalog before any future business answer. It reuses
+`LLMClient` structured output and never creates a second model client.
+
+The typed result contains `requires_sync_completion`, a deduplicated dependency
+list, and a bounded internal reason. Targets and sources must belong to the
+catalog. One invalid result receives one structured repair; a second invalid
+result fails closed. A no-wait result bypasses MySQL. A wait result invokes the
+async `check_dw_data_readiness` `StructuredTool`, whose returned payload is
+exactly `{"ready": bool}`.
+
+This module is not a general agent runner and does not add an HTTP or
+Conversation entrypoint. The model never receives task IDs, phases, leases,
+credentials, Binlog coordinates, row payloads, retries, or raw errors.
+
+Required checks:
+
+```powershell
+uv run pytest tests/unit/answer_readiness
+uv run pytest tests/integration/answer_readiness
+```
+
 ## Scenario: Conversation Memory Extraction
 
 Completed text turns are claimed from MySQL with a short lease and committed

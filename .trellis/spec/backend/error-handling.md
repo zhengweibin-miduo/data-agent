@@ -225,6 +225,18 @@ except DataAgentError as error:
         await hold(task, SyncPhase.CONFLICT, error.code)
 ```
 
+## Answer Readiness Fail-Closed Rules
+
+- Empty, oversized, structurally invalid, or catalog-invalid intent output gets
+  at most one repair. Persistent invalidity returns `intent_unresolved` and
+  never reaches a future business answer.
+- Missing, ambiguous, or non-`streaming` synchronization tasks return
+  `data_preparing` with exactly `数据准备中，请稍后重试`.
+- Readiness transport or database failures propagate to the internal caller;
+  they are not converted into `ready=true` or a fabricated progress state.
+- User-safe results never include target/source identity, phase, cursor,
+  attempts, lease, conflict/dead state, credentials, or raw exceptions.
+
 ## Scenario: Local Asynchronous DDL Metadata API
 
 ### 1. Scope / Trigger

@@ -156,6 +156,22 @@ class DataSyncRepository:
             claimed.append(self._claimed_task(row, lease_token))
         return claimed
 
+    async def read_readiness_phases(
+        self,
+        *,
+        target_table: str,
+        source: str | None,
+    ) -> list[SyncPhase]:
+        """只读查询一个回答依赖匹配到的全部同步阶段。"""
+        # 步骤一：按稳定业务身份选择有限字段，不加锁、不领取租约也不推进状态。
+        statement = select(data_sync_task.c.phase).where(
+            data_sync_task.c.target_table == target_table
+        )
+        if source is not None:
+            statement = statement.where(data_sync_task.c.source == source)
+        result = await self._session.execute(statement.order_by(data_sync_task.c.id))
+        return [SyncPhase(str(phase)) for phase in result.scalars()]
+
     async def renew_lease(
         self,
         task_id: int,

@@ -122,6 +122,11 @@ Never log:
 - full model responses, hidden reasoning, request bodies or exception locals;
 - unbounded collections or arbitrary objects.
 
+For answer readiness, the classifier reason and tool result remain internal.
+Never project target/source names, task phases, retries, leases, Binlog
+coordinates, conflicts, dead-letter state, or percentages into user-visible
+messages. Routine read-only readiness checks need no success log.
+
 Safe metadata includes public IDs, statuses, revisions, attempts, bounded
 counts, stable error codes, exception class names and retryability. Stack traces
 must be bounded and replace the exception message with a fixed omission marker.
