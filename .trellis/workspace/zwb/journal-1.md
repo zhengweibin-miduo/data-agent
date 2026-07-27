@@ -1256,3 +1256,37 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: 多数据源 CDC 与问答就绪门禁
+
+**Date**: 2026-07-28
+**Task**: 多数据源 CDC 与问答就绪门禁
+**Branch**: `feature/llm-data-sync-status-tool-20260727`
+
+### Summary
+
+实现多数据源 CDC 同步到 DW，并增加独立意图识别、只读同步就绪工具与确定性回答门禁；完成测试、规范更新和任务归档。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `db0e426` | (see git log) |
+| `f15628f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

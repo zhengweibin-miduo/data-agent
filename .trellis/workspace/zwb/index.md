@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 39
-- **Last Active**: 2026-07-27
+- **Total Sessions**: 40
+- **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1258 | Active |
+| `journal-1.md` | ~1292 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-07-28 | 多数据源 CDC 与问答就绪门禁 | `db0e426`, `f15628f` | `feature/llm-data-sync-status-tool-20260727` |
 | 39 | 2026-07-27 | 建立 Codex 审查意见自动处理闭环 | `b8ff8ae` | `fix/codex-review-resolution-loop-20260727` |
 | 38 | 2026-07-27 | 完善 Codex 代码审查闭环 | `903e69d` | `chore/codex-review-loop-20260727` |
 | 37 | 2026-07-27 | 补齐外部服务超时与会话轮次租约 | `75e07e9` | `fix/service-timeouts-turn-lease-20260726` |
