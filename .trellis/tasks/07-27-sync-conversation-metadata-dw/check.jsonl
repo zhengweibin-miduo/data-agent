@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify atomic target DML, offset advancement, schema-qualified control state, lease safety, bootstrap parity, and no destructive migration behavior."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Verify Binlog source capability checks, timeouts, lifecycle, bounded retry, and no retry stacking."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify schema/key conflicts are permanent, transport errors retry, and secrets or row data never cross error boundaries."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify operational visibility without credentials, raw DDL, source rows, or unbounded payloads."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run the required lock, lint, type, compile, settings, pytest, Compose, and diff checks."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify every contract field survives Meta handoff, data_sync persistence, replay, DW application, and recovery."}

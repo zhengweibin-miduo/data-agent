@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Place the new data_sync feature, infrastructure lifecycle, worker entrypoint, and shared contracts in repository-owned boundaries."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Follow target MySQL transaction, schema-qualified table, bootstrap, lease, outbox, retry, and dead-letter contracts."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Define named source clients, explicit timeouts, durable retry ownership, Binlog lifecycle, and safe failure behavior."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Preserve business rejection, retryability, safe error projection, and original infrastructure exceptions."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Keep credentials and row payloads out of logs while exposing phase, attempts, conflicts, and terminal failures."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Apply configuration/model descriptions, async resource lifecycle, live-service markers, and the repository quality gate."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace desired schema and Binlog event contracts across workflow, persistence, source adapter, DW writer, and tests."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing lease/outbox/settlement patterns and centralize event decoding and phase transitions."}

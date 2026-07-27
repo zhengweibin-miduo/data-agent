@@ -24,8 +24,9 @@ local Docker services that exist in this repository.
 ## Scope Boundary
 
 The repository now has a loopback FastAPI boundary, typed application models,
-feature-owned services and persistence, a LangGraph workflow, and an arq
-worker. Runtime code is installed from `src/data_agent/`; tests use pytest
+feature-owned services and persistence, a LangGraph workflow, an arq worker,
+and a dedicated MySQL Binlog CDC process. Runtime code is installed from
+`src/data_agent/`; tests use pytest
 under `tests/`. It still has no ORM entity layer or migration framework:
 SQLAlchemy Core table definitions and local bootstrap SQL own the current
 relational schema.
@@ -38,7 +39,8 @@ relational schema.
   `src/data_agent/memory/`, shared SQLAlchemy metadata in
   `src/data_agent/persistence/schema.py`, shared async resources in
   `src/data_agent/infrastructure/`, DDL-specific behavior in
-  `src/data_agent/ddl_metadata/`, application composition in
+  `src/data_agent/ddl_metadata/`, DW/CDC behavior in
+  `src/data_agent/data_sync/`, application composition in
   `src/data_agent/application.py`, logging setup in
   `src/data_agent/logging.py`, pytest checks in `tests/`, and local
   infrastructure in `docs/docker/`.
@@ -48,7 +50,8 @@ relational schema.
 - Read [Conversation and Long-Term User Memory](./conversation-memory.md) for
   conversation, turn, context, extraction, or user-memory recall changes.
 - Read [External Service Integrations](./external-service-integrations.md) for
-  TEI, Redis, LangGraph checkpoint, or OpenAI-compatible model changes.
+  TEI, Redis, LangGraph checkpoint, named MySQL Binlog source, or
+  OpenAI-compatible model changes.
 - Read [Error Handling](./error-handling.md) when changing API status mapping,
   job transitions, retries, or terminal cleanup.
 - Trace cross-layer contract changes through Pydantic models, API/service
@@ -59,7 +62,8 @@ relational schema.
 - Run the Python checks recorded in
   [Quality Guidelines](./quality-guidelines.md): lock validation, Ruff, Pyright,
   `compileall`, and configuration loading.
-- Run the MySQL, Redis, combined DDL-flow, or TEI live integration module only
+- Run the MySQL, Redis, combined DDL-flow, data-sync CDC, or TEI live
+  integration module only
   when the corresponding service is available, and report an unavailable
   dependency instead of claiming the check passed.
 - Trace renamed package and configuration paths end to end. Current references

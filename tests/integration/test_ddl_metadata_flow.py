@@ -91,7 +91,7 @@ async def _test_flow() -> None:
             DDLGraphDependencies(
                 model,
                 MemoryContextLoader(),
-                MetadataSnapshotService(),
+                MetadataSnapshotService({source: "source_demo"}),
             ),
             checkpointer,
         )
@@ -207,7 +207,7 @@ async def _test_flow() -> None:
             DDLGraphDependencies(
                 reuse_model,
                 MemoryContextLoader(),
-                MetadataSnapshotService(),
+                MetadataSnapshotService({source: "source_demo"}),
             ),
             checkpointer,
         )

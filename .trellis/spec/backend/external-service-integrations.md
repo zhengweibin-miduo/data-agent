@@ -20,6 +20,7 @@ across major versions:
 | `AsyncQdrantClient` | `timeout` |
 | `AsyncInferenceClient` (TEI) | `timeout` |
 | `ChatOpenAI` | `timeout`, `max_retries` |
+| `MySQLSourceClient` | `connect_timeout_seconds`, `read_timeout_seconds` |
 | `AsyncRedisSaver` (LangGraph checkpoint) | `connection_args`: `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
 | arq queue pool (`infrastructure/job_queue.py`) | `socket_timeout`, `socket_connect_timeout`, `health_check_interval`, bounded `retry` |
 
@@ -424,6 +425,91 @@ cls._client = None
 cls._session_factory = None
 if client is not None:
     await client.dispose()
+```
+
+## Scenario: Named MySQL ROW Binlog Sources
+
+### 1. Scope / Trigger
+
+Use this contract when changing named business-source configuration, source
+backfill queries, Binlog capability checks/decoding, or the dedicated CDC
+process.
+
+### 2. Signatures
+
+```python
+await MySQLSourceClient.check_capabilities() -> None
+await MySQLSourceClient.current_coordinate() -> BinlogCoordinate
+await MySQLSourceClient.capture(
+    source_schema, source_table, start, limit
+) -> BinlogCaptureResult
+await MySQLSourceClient.close() -> None
+data-agent-cdc
+```
+
+### 3. Contracts
+
+- `data_sync.sources.<name>.url` is a server-only MySQL URL with a database;
+  `server_id` is positive and unique across configured sources.
+- Credentials never enter API models, LLM input, Redis, row events, or logs.
+- The source account requires source `SELECT`, `REPLICATION SLAVE`, and
+  `REPLICATION CLIENT`; it does not receive source DDL/DML privileges.
+- Startup rejects sources without global `binlog_format=ROW` and
+  `binlog_row_image=FULL`.
+- SQLAlchemy handles bounded keyset reads. `mysql-replication` runs in
+  `asyncio.to_thread`, uses nonblocking bounded capture, filters the accepted
+  schema/table, freezes table shape for that stream, and fetches column names
+  from schema metadata when the Binlog omits them.
+- One ROW change becomes one typed `SyncRowEvent`; supported values use the
+  reversible JSON encoding in `data_sync.models`. Never log row images.
+- `data-agent-cdc` is a separate process, not an arq job. Startup checks every
+  source; shutdown closes all source engines and then `MySQLDatabase`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| URL is not MySQL or lacks a database | Configuration validation fails |
+| Source name is invalid/duplicate or `server_id` repeats | Configuration validation fails |
+| ROW/FULL capability is absent | CDC startup fails before claiming tasks |
+| Unknown ROW event type/value encoding | Reject; do not silently coerce |
+| Connection/read timeout | Classify for bounded task retry |
+| Event belongs to another schema/table/source | Reject before DW DML |
+| Capture contains multiple rows in one event | Persist the complete event; do not truncate its rows |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a read-only replication account supplies named columns and bounded
+  INSERT/UPDATE/DELETE events from the persisted coordinate.
+- Base: an empty capture advances only to the stream's safe tail.
+- Bad: run the stream in arq, grant writes to the replication user, capture all
+  tables, log row payloads, or rely on dependency timeout defaults.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/unit/data_sync/test_binlog.py
+uv run pytest tests/integration/data_sync/test_cdc_pipeline.py
+docker compose -f docs/docker/docker-compose.yml config
+```
+
+The live test asserts ROW/FULL capability, named-column decoding, hard DELETE,
+offset convergence, and read-only replica use; fixture writes use a separate
+local application connection.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: fixture or runtime writes through the replication credential.
+await source.engine.execute(text("UPDATE source_demo.fact SET ..."))
+
+# Correct: source is read-only; CDC only reads and emits typed events.
+captured = await source.capture(
+    source_schema=desired.source_schema,
+    source_table=desired.source_table,
+    start=task.captured,
+    limit=remaining,
+)
 ```
 
 ## Scenario: Redis Job State and LangGraph Checkpoints

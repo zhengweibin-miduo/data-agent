@@ -37,6 +37,25 @@ tei:
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
 
+data_sync:
+  database: data_sync
+  dw_database: dw
+  sources:
+    source_demo:
+      url: mysql+asyncmy://data_agent_replica:data_agent_replica@localhost:3306/source_demo?charset=utf8mb4
+      server_id: 2001
+  claim_lease_seconds: 60
+  retry_base_seconds: 5
+  retry_max_seconds: 300
+  max_attempts: 10
+  backfill_batch_size: 500
+  backfill_interval_seconds: 0.1
+  event_buffer_limit: 100000
+  event_cleanup_batch_size: 1000
+  poll_interval_seconds: 1
+  source_connect_timeout_seconds: 5
+  source_read_timeout_seconds: 30
+
 api:
   host: 127.0.0.1
   port: 8000

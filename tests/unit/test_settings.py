@@ -73,6 +73,16 @@ def test_default_app_config_loads_expected_values() -> None:
         "data_agent",
     )
     check_equal(
+        "test_default_app_config_loads_expected_values 同步控制数据库",
+        app_config.data_sync.database,
+        "data_sync",
+    )
+    check_equal(
+        "test_default_app_config_loads_expected_values DW 数据库",
+        app_config.data_sync.dw_database,
+        "dw",
+    )
+    check_equal(
         "test_default_app_config_loads_expected_values API 监听地址",
         app_config.api.host,
         "127.0.0.1",
@@ -238,3 +248,27 @@ def test_source_lease_must_cover_execution_and_waiting_sum() -> None:
         AppSettings.model_validate(payload).memory.source_lease_seconds,
         worker_timeout + waiting_timeout,
     )
+
+
+def test_data_sync_rejects_duplicate_sources_and_database_collisions() -> None:
+    """命名源与控制、业务数据库边界必须保持唯一。"""
+    for label in ("来源名称忽略大小写重复", "复制客户端编号重复", "数据库名称冲突"):
+        payload = app_config.model_dump(mode="json")
+        source = dict(payload["data_sync"]["sources"]["source_demo"])
+        if label == "来源名称忽略大小写重复":
+            source["server_id"] = int(source["server_id"]) + 1
+            payload["data_sync"]["sources"]["SOURCE_DEMO"] = source
+        elif label == "复制客户端编号重复":
+            payload["data_sync"]["sources"]["source_other"] = source
+        else:
+            payload["data_sync"]["database"] = payload["data_sync"]["dw_database"]
+        try:
+            AppSettings.model_validate(payload)
+        except ValidationError as error:
+            check_exception(f"{label} 捕获校验错误", error, ValidationError)
+        else:
+            fail_check(
+                label,
+                actual=payload["data_sync"],
+                expected="配置校验拒绝重复边界",
+            )

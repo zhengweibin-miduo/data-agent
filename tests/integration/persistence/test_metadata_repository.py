@@ -98,7 +98,12 @@ async def test_meta_memory_outbox_atomicity() -> None:
         rollback_source,
         "CREATE TABLE dim_rollback (id BIGINT PRIMARY KEY)",
     )
-    service = MetadataSnapshotService()
+    service = MetadataSnapshotService(
+        {
+            source: "source_demo",
+            rollback_source: "source_demo",
+        }
+    )
     try:
         await service.persist(
             schema,
@@ -190,7 +195,7 @@ async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> No
         source,
         "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, full_name VARCHAR(128))",
     )
-    service = MetadataSnapshotService()
+    service = MetadataSnapshotService({source: "source_demo"})
     try:
         await service.persist(
             original_schema,
@@ -268,7 +273,7 @@ async def test_snapshot_expires_removed_column_and_metric_memories() -> None:
         if column.name == "amount"
     )
     metric_id = metrics[0].id
-    service = MetadataSnapshotService()
+    service = MetadataSnapshotService({source: "source_demo"})
     try:
         await service.persist(
             original_schema,

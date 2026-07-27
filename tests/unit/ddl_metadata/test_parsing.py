@@ -123,6 +123,10 @@ async def test_ddl_parser() -> None:
         "CREATE TABLE x (a INT); CREATE TABLE X (a INT)",
         "duplicate_table",
     )
+    await _assert_rejected(
+        "CREATE TABLE x (a INT)",
+        "missing_primary_key",
+    )
 
     tiny_limits = app_config.api.model_copy(
         update={"max_ddl_bytes": 8, "max_tables": 1, "max_columns": 1}

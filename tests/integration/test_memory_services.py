@@ -25,7 +25,7 @@ async def test_memory_rebuild_enqueue() -> None:
         "CREATE TABLE dim_region (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
     try:
-        await MetadataSnapshotService().persist(
+        await MetadataSnapshotService({schema.source: "source_demo"}).persist(
             schema,
             semantic_for(schema, fact=False),
             [],

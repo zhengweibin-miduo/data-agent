@@ -153,6 +153,78 @@ safe public summary fields remain for retention. The same atomic transition
 adds a checkpoint-cleanup outbox item; periodic cleanup acknowledges it only
 after thread deletion succeeds.
 
+## Scenario: Data Sync Retry, Conflict, and Dead State
+
+### 1. Scope / Trigger
+
+Use this contract when changing DW schema/backfill/replay failures, task leases,
+retry classification, or operational logging in the dedicated CDC process.
+
+### 2. Signatures
+
+```python
+await DataSyncService.dispatch_once() -> int
+await DataSyncRepository.retry_failure(
+    task, error_type, retry_base_seconds, retry_max_seconds, max_attempts
+) -> SyncPhase | None
+await DataSyncRepository.hold_failure(task, phase, error_type) -> bool
+```
+
+### 3. Contracts
+
+- `dw_primary_key_conflict` enters `conflict`; other deterministic
+  `DataAgentError` values enter `paused`.
+- Retryable `DataAgentError`, connection, OS, and timeout failures use bounded
+  database-clock exponential backoff. Exhaustion enters `dead`.
+- Every settlement compares task ID, desired hash, lease token, and an unexpired
+  lease. A late worker cannot overwrite a newer desired state.
+- Failure state stores only bounded `last_error_type`. Logs may include source,
+  target, task, phase, and exception class, never credentials or row images.
+- A failed DW transaction leaves the event unacknowledged and the applied
+  coordinate unchanged. Conflict also leaves the existing DW row unchanged.
+
+### 4. Validation & Error Matrix
+
+| Failure | State / action |
+|---|---|
+| Cross-source primary-key ownership | `conflict`, release lease, no retry |
+| Unsafe DW schema difference or malformed row | `paused`, release lease |
+| Temporary source transport failure | Keep phase, increment attempts, back off |
+| Retry reaches `max_attempts` | `dead`, preserve safe error type |
+| Lease/desired authority no longer matches | Settlement is a no-op |
+| Unknown system exception | Safe `unexpected_sync_error` retry; traceback stays server-side |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a timeout releases the lease and becomes claimable after its bounded
+  database deadline; the final failed attempt becomes visible as `dead`.
+- Base: an expired lease is reclaimed without consuming retry budget.
+- Bad: retry a deterministic collision, store an exception message or row
+  payload, or advance an event after a rolled-back DW write.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/integration/data_sync
+uv run pytest tests/unit/data_sync
+```
+
+Tests assert lease compare-and-set, bounded retry/dead state, deterministic
+conflict, rollback, and unchanged applied coordinates on failure.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: broad retries hide a permanent collision and repeatedly overwrite.
+except Exception:
+    await retry(task)
+
+# Correct: deterministic conflicts are held; transport failures back off.
+except DataAgentError as error:
+    if error.code == "dw_primary_key_conflict":
+        await hold(task, SyncPhase.CONFLICT, error.code)
+```
+
 ## Scenario: Local Asynchronous DDL Metadata API
 
 ### 1. Scope / Trigger

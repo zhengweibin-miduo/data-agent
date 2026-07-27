@@ -84,6 +84,16 @@ def _inline_role(
     return None
 
 
+def _column_nullable(column: exp.ColumnDef, *, primary_key: bool) -> bool:
+    """根据 AST 约束确定列是否允许空值。"""
+    if primary_key:
+        return False
+    return not any(
+        isinstance(constraint.kind, exp.NotNullColumnConstraint)
+        for constraint in column.constraints
+    )
+
+
 def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     """把单个 CREATE TABLE AST 转为物理表。"""
     # 步骤一：先确定完整表身份并生成稳定 ID，同时汇总表级约束；后续列解析才能把
@@ -137,6 +147,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
                 name=column_name,
                 data_type=data_type.sql(dialect="mysql"),
                 comment=_column_comment(item),
+                nullable=_column_nullable(item, primary_key=role == "primary_key"),
                 structural_role=role,
             )
         )
@@ -239,6 +250,23 @@ def _parse_ddl_sync(
                 "limit": str(limits.max_columns),
             },
         )
+    missing_primary_key = next(
+        (
+            table.qualified_name
+            for table in tables
+            if not any(
+                column.structural_role == "primary_key" for column in table.columns
+            )
+        ),
+        None,
+    )
+    if missing_primary_key is not None:
+        raise DataAgentError(
+            "missing_primary_key",
+            "parse_ddl",
+            f"表 {missing_primary_key} 必须声明主键才能同步到 DW",
+            details={"table": missing_primary_key},
+        )
 
     # 步骤四：DDL 哈希描述规范化语句文本；Schema 指纹只描述物理表列投影。
     # 两者分离，使格式变化与真实结构变化拥有不同的稳定判定依据。
@@ -256,6 +284,7 @@ def _parse_ddl_sync(
                         "name": column.name,
                         "type": column.data_type,
                         "comment": column.comment,
+                        "nullable": column.nullable,
                         "role": column.structural_role,
                     }
                     for column in table.columns

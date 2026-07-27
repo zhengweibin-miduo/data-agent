@@ -261,6 +261,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langgraph-checkpoint-redis" },
     { name = "loguru" },
+    { name = "mysql-replication" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "qdrant-client" },
@@ -291,6 +292,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2,<1.3" },
     { name = "langgraph-checkpoint-redis", specifier = ">=0.5,<0.6" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "mysql-replication", specifier = ">=1.0.12,<2" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "qdrant-client", specifier = ">=1.18.0" },
@@ -909,6 +911,19 @@ wheels = [
 ]
 
 [[package]]
+name = "mysql-replication"
+version = "1.0.16"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pymysql" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9a/1f/bcbde6d71cb49f173899a64a66ed032e6cd64502de6a604fc8e423c30780/mysql_replication-1.0.16.tar.gz", hash = "sha256:69625094ea47b9d6059607b394c77ee1a0a0dad5ba6787016950ddc6a4bd9a51", size = 75980, upload-time = "2026-07-12T05:15:42.46Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/15/830a44eaafcfba3bfebfdcb0c4f48da119a318a2f86057aba55f7c3c44ea/mysql_replication-1.0.16-py3-none-any.whl", hash = "sha256:d121d41517500a1a7ea93b0f2950193ae37f9d638635b10f5fa190ca7b83f9b6", size = 84526, upload-time = "2026-07-12T05:15:41.431Z" },
+]
+
+[[package]]
 name = "nodeenv"
 version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1149,6 +1164,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+]
+
+[[package]]
+name = "pymysql"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/bc/1c6a92f385940f727daeecf3bacaf186e03875dff57197801046c583bcf0/pymysql-1.2.0.tar.gz", hash = "sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33", size = 49021, upload-time = "2026-05-19T08:26:22.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/bd/2534e130295c8cfd4f0a2e31623baab7502278f1e97bcfe61db75656a77f/pymysql-1.2.0-py3-none-any.whl", hash = "sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0", size = 45716, upload-time = "2026-05-19T08:26:20.974Z" },
 ]
 
 [[package]]

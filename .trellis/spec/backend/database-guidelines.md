@@ -14,11 +14,15 @@ The DDL metadata feature uses SQLAlchemy Core table definitions in
 definitions under `conversation/mysql_tables.py`. All three import the single
 `MetaData` owner from `data_agent/persistence/schema.py`. The project
 deliberately does not add ORM entities or a migration framework.
-`MetadataRepository` owns the four Meta snapshot tables; `MemoryRepository`
+`MetadataRepository` owns the four Meta snapshot tables; `DataSyncRepository`
+owns schema-qualified tasks, Binlog event buffers, offsets, leases, retries,
+and DW key ownership in `data_sync`; `MemoryRepository`
 owns authoritative records, append-only events, typed links, and browser
 mutations; `MemoryIndexOutboxRepository` owns derived-index desired state,
 claiming, retry, acknowledgement, projections, and rebuild scans. The Meta
-tables use the default database in `mysql.url`; all four memory tables are
+tables use the default database in `mysql.url`; data-sync control tables use
+`data_sync.database`, DW business rows use `data_sync.dw_database`, and all
+four memory tables are
 schema-qualified to `memory.database` (`data_agent` by default). They still
 share one engine and caller-owned Session so MySQL commits both InnoDB
 databases and record-plus-outbox changes atomically.
@@ -286,14 +290,99 @@ async with MySQLDatabase.session() as session:
     await memory_repository.persist(session, candidates)
 ```
 
+## Scenario: Asynchronous DW Materialization and CDC State
+
+### 1. Scope / Trigger
+
+Use this contract when changing accepted-snapshot handoff, DW DDL, historical
+backfill, Binlog replay, source collision handling, or `data_sync` persistence.
+
+### 2. Signatures
+
+```python
+await DataSyncRepository(session).upsert_desired(desired_tables) -> None
+await DWSchemaSynchronizer(session, database="dw").synchronize(desired) -> None
+await apply_backfill_batch(session, task, rows, dw_database="dw")
+await apply_buffered_event(session, task, event, dw_database="dw") -> None
+```
+
+### 3. Contracts
+
+- `meta` stores definitions, `dw` stores business rows, and `data_sync` stores
+  only tasks, leases, retries, Binlog coordinates/events, backfill cursors, and
+  `(target_table, primary_key) -> source` ownership.
+- Accepted Meta rows and `data_sync` desired state commit in the same managed
+  MySQL Session. DDL Job success does not wait for DW work.
+- A task is unique by source, source schema/table, and target table. Claims use
+  database-clock leases and compare desired hash plus lease token when settling.
+- DW evolution permits create table, add column, and safe type widening only.
+  Destructive or ambiguous differences pause work without altering Meta.
+- Initial load records a Binlog coordinate, persists later ROW events, reads
+  source rows by bounded simple/composite-PK keyset, replays the buffer, then
+  enters streaming.
+- Target DML, key ownership, event acknowledgement, and applied-coordinate
+  advancement share one MySQL transaction. Captured and applied coordinates are
+  separate.
+- The first source to write a target primary key owns it permanently, including
+  after DELETE. Another source conflicts before DW DML and cannot advance the
+  event.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Accepted table has no primary key | Reject before Meta or desired-state writes |
+| Missing target table/column or safe widening | Apply idempotently |
+| Drop, rename, narrowing, PK drift, or incompatible type | Pause with a safe deterministic error |
+| Backfill batch fails | Roll back DW rows, ownership, and cursor |
+| Binlog event fails | Roll back DW DML, acknowledgement, and applied coordinate |
+| Cross-source primary-key collision | Preserve existing DW row and enter `conflict` |
+| Lease expires or desired hash changes | Stale settlement updates zero rows |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Meta plus desired state commits, the worker creates DW structure,
+  keyset-backfills, replays buffered ROW events, and reaches streaming.
+- Base: replaying identical desired state or a duplicate event is idempotent.
+- Bad: put cursors in `dw`, business rows in `data_sync`, hold a transaction
+  while reading the source, or advance the applied coordinate before DW commit.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/unit/data_sync
+uv run pytest tests/integration/data_sync
+```
+
+Tests assert DDL idempotency and widening rules, composite-PK continuation,
+INSERT/UPDATE/DELETE convergence, captured/applied offset separation,
+cross-source collision without overwrite, retry/dead-letter state, and scoped
+cleanup.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: a separate commit can publish Meta without recoverable desired state.
+await metadata_repository.synchronize(snapshot)
+await data_sync_repository.upsert_desired(desired)
+
+# Correct: one accepted-snapshot transaction owns both writes.
+async with MySQLDatabase.session() as session:
+    await MetadataRepository(session).synchronize(...)
+    await DataSyncRepository(session).upsert_desired(desired)
+```
+
 ## Schema and Migrations
 
 No migration tool or migration directory exists. Local MySQL bootstrap
-initializes the `dw`, `meta`, and application `data_agent` databases from
+initializes `data_agent`, `data_sync`, `dw`, `meta`, and the local
+`source_demo` database from
 `docs/docker/mysql/`. `meta.sql` contains only `table_info`, `column_info`,
 `metric_info`, and `column_metric`; `data_agent.sql` defines the fresh
 conversation schema plus `agent_memory`, `agent_memory_event`,
-`agent_memory_link`, and `memory_index_outbox`. SQLAlchemy Core definitions must
+`agent_memory_link`, and `memory_index_outbox`. `data_sync.sql` owns the three
+CDC control tables; `source_demo.sql` owns only the local source database and
+replication-user grants. SQLAlchemy Core definitions must
 remain compatible with those bootstrap schemas. Integration fixtures may call
 `metadata.create_all()` using the default `meta` connection because the memory
 tables are schema-qualified, but they are not a production migration
@@ -318,8 +407,8 @@ volumes:
   - ./mysql:/docker-entrypoint-initdb.d:ro
 ```
 
-The current script order is lexical: `data_agent.sql`, `dw.sql`, then
-`meta.sql`.
+The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
+`dw.sql`, `meta.sql`, then `source_demo.sql`.
 
 ### 3. Contracts
 
@@ -328,9 +417,12 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Execution boundary: the official `mysql:8.4` entrypoint processes the scripts
   only when `/var/lib/mysql` is uninitialized.
 - Persistence: normal restarts reuse `mysql_data` and do not rerun the scripts.
-- Identity: `MYSQL_USER=data_agent`; every bootstrap `GRANT` must target
-  `'data_agent'@'%'` unless Compose is changed in the same task.
-- Databases: the bootstrap scripts create `data_agent`, `dw`, and `meta`;
+- Identity: `MYSQL_USER=data_agent`; application grants target
+  `'data_agent'@'%'`. The local source additionally creates
+  `'data_agent_replica'@'%'` with `SELECT`, `REPLICATION SLAVE`, and
+  `REPLICATION CLIENT` only.
+- Databases: the bootstrap scripts create `data_agent`, `data_sync`, `dw`,
+  `meta`, and `source_demo`;
   Compose does not set `MYSQL_DATABASE`.
 - Documentation: every bootstrap `CREATE TABLE` has a Chinese table-level
   `COMMENT`, and every business column has a Chinese column-level `COMMENT`.
@@ -339,7 +431,10 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Ownership: `meta.sql` owns exactly the four Meta tables. `data_agent.sql` uses
   InnoDB and owns the application conversation tables plus exactly four
   long-term-memory lifecycle tables; it does not manage retired memory
-  contracts.
+  contracts. `data_sync.sql` owns only `data_sync_task`, `data_sync_event`, and
+  `data_sync_key_owner`; `source_demo.sql` owns no application control tables.
+- Binlog: local Compose enables a nonzero server ID, ROW format, FULL row image,
+  a named binary log, and bounded retention.
 - Existing volume: entrypoint scripts do not rerun. Applying `data_agent.sql`
   explicitly can create missing objects but cannot upgrade an incompatible old
   memory schema. Reprovision only the exact confirmed application-memory
@@ -349,9 +444,9 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 
 | Condition | Expected result |
 |-----------|-----------------|
-| Empty `mysql_data` | Execute `data_agent.sql`, `dw.sql`, then `meta.sql` |
+| Empty `mysql_data` | Execute all five scripts in lexical order |
 | Initialized `mysql_data` | Skip bootstrap scripts and preserve data |
-| Missing init-directory mount | Start MySQL without creating the three local databases |
+| Missing init-directory mount | Start MySQL without creating the five local databases |
 | `GRANT` user differs from `MYSQL_USER` and does not exist | Initialization fails at `GRANT` |
 | A table or business column lacks a Chinese `COMMENT` | Static bootstrap review fails before merge |
 | Compose cannot resolve `./mysql` | `docker compose config` or startup reports the invalid mount |
@@ -359,7 +454,8 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 
 ### 5. Good / Base / Bad Cases
 
-- Good: an empty disposable volume creates `data_agent`, `dw`, and `meta`; the
+- Good: an empty disposable volume creates `data_agent`, `data_sync`, `dw`,
+  `meta`, and `source_demo`; the
   application user can access each owned schema, Meta contains only its four
   business tables, and database inspection exposes Chinese table and column
   meanings.
@@ -374,8 +470,8 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Run `docker compose -f docs/docker/docker-compose.yml config` and assert that
   both `/var/lib/mysql` and the read-only `/docker-entrypoint-initdb.d` mount
   are present.
-- Search all files under `docs/docker/mysql/` and assert that bootstrap grants
-  target `'data_agent'@'%'` and do not reference stale users.
+- Assert application grants target `'data_agent'@'%'`; the replica account has
+  source `SELECT` plus replication privileges and no source DDL/DML grants.
 - Statically assert that every bootstrap table and business column carries a
   non-empty Chinese `COMMENT`; compare SQL tokens with comments removed when a
   comment-only task must prove that no schema or seed-data behavior changed.
@@ -384,7 +480,7 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
   `schema=memory.database` and a forced memory-side constraint failure rolls
   back preceding Meta writes.
 - When Docker is available and initialization behavior changes, use a
-  disposable project/volume to assert that `data_agent`, `dw`, and `meta`
+  disposable project/volume to assert that all five local databases
   exist after the first healthy startup. Never delete the developer's shared
   `mysql_data` volume for this check.
 
