@@ -1223,3 +1223,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: 建立 Codex 审查意见自动处理闭环
+
+**Date**: 2026-07-27
+**Task**: 建立 Codex 审查意见自动处理闭环
+**Branch**: `fix/codex-review-resolution-loop-20260727`
+
+### Summary
+
+移除 Claude 裁决依赖；GitHub Action 使用 CODEX_TRIGGER_TOKEN 以配置用户身份幂等委派 Codex cloud task，要求逐条修复或说明并 resolve，推送后依赖自动 Codex Review 进入下一轮。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8ff8ae` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
