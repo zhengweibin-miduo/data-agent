@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查新增脚本、测试和完整质量门禁"}
+{"file": ".trellis/tasks/07-27-codex-review-resolution-loop/research/codex-action-and-review-thread-api.md", "reason": "核对权限隔离、结构化输出和 thread resolve 契约"}

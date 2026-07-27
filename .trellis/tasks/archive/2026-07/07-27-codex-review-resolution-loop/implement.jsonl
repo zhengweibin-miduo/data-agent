@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现 GitHub workflow 辅助脚本时遵守仓库质量与测试约定"}
+{"file": ".trellis/tasks/07-27-codex-review-resolution-loop/research/codex-action-and-review-thread-api.md", "reason": "Codex Action 输入输出、安全边界和 review thread API 契约"}

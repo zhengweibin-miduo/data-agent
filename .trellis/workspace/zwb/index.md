@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
+- **Total Sessions**: 39
 - **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1192 | Active |
+| `journal-1.md` | ~1258 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 39 | 2026-07-27 | 建立 Codex 审查意见自动处理闭环 | `b8ff8ae` | `fix/codex-review-resolution-loop-20260727` |
+| 38 | 2026-07-27 | 完善 Codex 代码审查闭环 | `903e69d` | `chore/codex-review-loop-20260727` |
 | 37 | 2026-07-27 | 补齐外部服务超时与会话轮次租约 | `75e07e9` | `fix/service-timeouts-turn-lease-20260726` |
 | 36 | 2026-07-27 | 修复架构审查发现的可靠性与一致性缺陷 | `7c67f06`, `bd80e72` | `fix/arch-review-reliability-20260726` |
 | 35 | 2026-07-27 | 为精确基线检索建立文本哈希索引 | `57d2f8f` | `perf/exact-query-text-hash-20260727` |
