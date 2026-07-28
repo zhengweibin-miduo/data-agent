@@ -74,22 +74,17 @@ class DataSyncRepository:
 
     async def upsert_desired(self, desired_tables: Sequence[DesiredSyncTable]) -> None:
         """幂等写入 Meta 快照派生的当前同步期望状态。"""
-        for desired in desired_tables:
+        for target_table in dict.fromkeys(item.target_table for item in desired_tables):
             lock_name = (
-                f"data_sync_schema:{app_config.data_sync.dw_database}:"
-                f"{desired.target_table}"
+                f"data_sync_schema:{app_config.data_sync.dw_database}:{target_table}"
             )[:64]
             acquired = await self._session.scalar(
                 text("SELECT GET_LOCK(:lock_name, 10)"), {"lock_name": lock_name}
             )
             if acquired != 1:
                 raise RuntimeError("无法取得 DW 结构 generation 串行锁")
-            try:
-                await self._upsert_one_desired(desired)
-            finally:
-                await self._session.execute(
-                    text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
-                )
+        for desired in desired_tables:
+            await self._upsert_one_desired(desired)
 
     async def _upsert_one_desired(self, desired: DesiredSyncTable) -> None:
         """在目标表 generation 串行锁内更新一项期望。"""
@@ -264,6 +259,18 @@ class DataSyncRepository:
                 data_sync_key_owner.c.source == source,
             )
         )
+
+    async def release_schema_locks(
+        self, desired_tables: Sequence[DesiredSyncTable]
+    ) -> None:
+        """在期望状态事务提交后释放连接级结构串行锁。"""
+        for target_table in dict.fromkeys(item.target_table for item in desired_tables):
+            lock_name = (
+                f"data_sync_schema:{app_config.data_sync.dw_database}:{target_table}"
+            )[:64]
+            await self._session.execute(
+                text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
+            )
 
     async def settle_phase(
         self,

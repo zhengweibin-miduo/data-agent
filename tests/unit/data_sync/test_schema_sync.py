@@ -87,6 +87,51 @@ def test_boolean_alias_matches_mysql_introspection() -> None:
 
 
 @pytest.mark.parametrize(
+    ("desired_type", "current_type"),
+    [("DECIMAL", "decimal(10,0)"), ("DECIMAL(10)", "decimal(10,0)")],
+)
+def test_decimal_defaults_match_mysql_introspection(
+    desired_type: str, current_type: str
+) -> None:
+    """MySQL 补全 DECIMAL 默认精度和 scale 后仍保持幂等。"""
+    desired = _desired(amount_type=desired_type)
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", current_type, False),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        "DECIMAL 默认参数等价",
+        plan_schema_changes(database="dw", desired=desired, current=current),
+        [],
+    )
+
+
+def test_plan_accepts_nullable_columns_from_other_sources() -> None:
+    """共享目标中其他来源贡献的 nullable 字段不阻塞当前来源。"""
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "decimal(12,2)", False),
+            CurrentColumn("crm_note", "varchar(100)", True),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        "其他来源 nullable 字段可安全省略",
+        plan_schema_changes(
+            database="dw",
+            desired=_desired(),
+            current=current,
+            compatible_extra_columns={"crm_note"},
+        ),
+        [],
+    )
+
+
+@pytest.mark.parametrize(
     ("current", "reason"),
     [
         (

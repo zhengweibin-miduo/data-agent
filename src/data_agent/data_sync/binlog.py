@@ -105,10 +105,19 @@ class MySQLSourceClient:
         if str(row["log_bin"]).upper() not in {"1", "ON"}:
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 Binary Logging")
         try:
-            await self.current_coordinate()
+            coordinate = await self.current_coordinate()
+            # A non-blocking dump at the current tail exercises the replication
+            # protocol permission without consuming or persisting business rows.
+            await asyncio.to_thread(
+                self._capture_sync,
+                source_schema=self._url.database or "",
+                source_table="__data_agent_capability_probe__",
+                start=coordinate,
+                limit=1,
+            )
         except Exception as error:
             raise SourceCapabilityError(
-                f"数据源 {self.name} 无法读取当前 Binlog 位点"
+                f"数据源 {self.name} 无法读取或消费 Binlog"
             ) from error
 
     async def current_coordinate(self) -> BinlogCoordinate:

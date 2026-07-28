@@ -2,7 +2,7 @@ SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS data_sync
     DEFAULT CHARACTER SET utf8mb4
-    COLLATE utf8mb4_general_ci;
+    COLLATE utf8mb4_0900_bin;
 GRANT ALL PRIVILEGES ON data_sync.* TO 'data_agent'@'%';
 
 USE data_sync;

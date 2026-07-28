@@ -110,6 +110,11 @@ class MetadataSnapshotService:
             # 步骤七：同步严格受本次提交表约束的 Meta 快照及其关联清理。
             await metadata_repository.synchronize(schema, metadata, metrics)
             # 步骤八：写入同事务 durable handoff，不在图内连接 DW 或源库。
-            await DataSyncRepository(session).upsert_desired(desired_tables)
+            sync_repository = DataSyncRepository(session)
+            await sync_repository.upsert_desired(desired_tables)
             # 步骤九：最后写入权威记忆、审计事件、关系和双索引 outbox。
             await memory_repository.upsert_candidates(accepted)
+            # MySQL named locks are connection scoped: publish the complete desired
+            # transaction before releasing them so stale workers cannot observe G-1.
+            await session.commit()
+            await sync_repository.release_schema_locks(desired_tables)

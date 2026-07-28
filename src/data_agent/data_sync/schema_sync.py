@@ -6,12 +6,13 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlglot import exp, parse
 
 from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
+from data_agent.data_sync.tables import data_sync_task
 from data_agent.errors import DataAgentError
 
 _TYPE_PATTERN = re.compile(
@@ -77,11 +78,13 @@ class DWSchemaSynchronizer:
         try:
             # 步骤一：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
+            compatible_extra_columns = await self._shared_columns(desired)
             # 步骤二：每条自动提交 DDL 前重新确认 generation authority。
             for statement in plan_schema_changes(
                 database=self._database,
                 desired=desired,
                 current=current,
+                compatible_extra_columns=compatible_extra_columns,
             ):
                 if before_ddl is not None and not await before_ddl():
                     raise RuntimeError("执行 DW DDL 前同步任务 generation 已失效")
@@ -90,6 +93,7 @@ class DWSchemaSynchronizer:
                 database=self._database,
                 desired=desired,
                 current=await self.inspect(desired.target_table),
+                compatible_extra_columns=compatible_extra_columns,
             )
             if remaining:
                 _raise_conflict(desired.target_table, "DDL 执行后目标结构仍未收敛")
@@ -97,6 +101,19 @@ class DWSchemaSynchronizer:
             await self._session.execute(
                 text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
             )
+
+    async def _shared_columns(self, desired: DesiredSyncTable) -> set[str]:
+        """读取共享目标其他有效来源贡献的字段集合。"""
+        result = await self._session.execute(
+            select(data_sync_task.c.desired_json).where(
+                data_sync_task.c.target_table == desired.target_table
+            )
+        )
+        columns: set[str] = set()
+        for payload in result.scalars():
+            peer = DesiredSyncTable.model_validate(payload)
+            columns.update(column.name for column in peer.columns)
+        return columns - {column.name for column in desired.columns}
 
     async def inspect(self, table_name: str) -> CurrentTable | None:
         """读取一张 DW 表的字段与主键结构。"""
@@ -177,6 +194,7 @@ def plan_schema_changes(
     database: str,
     desired: DesiredSyncTable,
     current: CurrentTable | None,
+    compatible_extra_columns: set[str] | None = None,
 ) -> list[str]:
     """返回使当前 DW 结构收敛到期望状态的最小 DDL 列表。"""
     _validate_metric_dependencies(desired)
@@ -205,10 +223,11 @@ def plan_schema_changes(
     current_by_name = {column.name: column for column in current.columns}
     desired_by_name = {column.name: column for column in desired.columns}
     extra = sorted(current_by_name.keys() - desired_by_name.keys())
-    if extra:
+    incompatible_extra = sorted(set(extra) - (compatible_extra_columns or set()))
+    if incompatible_extra:
         _raise_conflict(
             desired.target_table,
-            f"目标表存在待删除字段：{','.join(extra)}",
+            f"目标表存在待删除字段：{','.join(incompatible_extra)}",
         )
     if current.primary_key != tuple(desired.primary_key):
         _raise_conflict(desired.target_table, "目标表主键与已接受 DDL 不一致")
@@ -333,6 +352,11 @@ def _normalize_type(data_type: str) -> str:
         normalized = re.sub(r"\s+", " ", raw.upper())
     if normalized in {"BOOL", "BOOLEAN", "TINYINT(1)"}:
         return "BOOLEAN"
+    decimal_match = re.fullmatch(r"DECIMAL(?:\((\d+)(?:,(\d+))?\))?", normalized)
+    if decimal_match:
+        precision = int(decimal_match.group(1) or 10)
+        scale = int(decimal_match.group(2) or 0)
+        return f"DECIMAL({precision},{scale})"
     return normalized
 
 

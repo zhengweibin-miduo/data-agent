@@ -89,7 +89,7 @@ async def reset_source_rows(
     *,
     dw_database: str,
 ) -> None:
-    """新 generation 建立基线前删除该来源旧行及归属。"""
+    """新 generation 建立基线前删除该来源旧行并保留永久归属。"""
     repository = DataSyncRepository(session)
     documents = await repository.source_key_documents(
         target_table=task.desired.target_table,
@@ -101,10 +101,6 @@ async def reset_source_rows(
             name: decode_row_value(encoded[name]) for name in task.desired.primary_key
         }
         await session.execute(_delete_statement(task.desired, row, dw_database))
-    await repository.delete_source_key_owners(
-        target_table=task.desired.target_table,
-        source=task.desired.source,
-    )
 
 
 async def apply_buffered_event(
