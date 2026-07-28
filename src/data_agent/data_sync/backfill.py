@@ -224,8 +224,15 @@ def _primary_key_identity(
 ) -> tuple[str, str]:
     """编码目标主键及其稳定哈希。"""
     encoded: dict[str, EncodedValue] = {}
+    columns = {column.name: column for column in desired.columns}
     for name in desired.primary_key:
-        encoded[name] = encode_row_value(row[name])
+        value = row[name]
+        if columns[name].data_type.strip().upper().startswith("BIT"):
+            if isinstance(value, bytes):
+                value = int.from_bytes(value, byteorder="big", signed=False)
+            elif not isinstance(value, int):
+                raise TypeError("MySQL BIT 主键必须解码为 bytes 或 int")
+        encoded[name] = encode_row_value(value)
     return canonical_primary_key(desired.primary_key, encoded)
 
 

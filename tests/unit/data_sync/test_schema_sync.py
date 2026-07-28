@@ -131,6 +131,25 @@ def test_plan_accepts_nullable_columns_from_other_sources() -> None:
     )
 
 
+def test_plan_rejects_required_columns_from_other_sources() -> None:
+    """共享目标中其他来源的必填字段不能由当前来源安全省略。"""
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "decimal(12,2)", False),
+            CurrentColumn("required_value", "int", False),
+        ),
+        primary_key=("order_id",),
+    )
+    with pytest.raises(DataAgentError, match="待删除字段"):
+        plan_schema_changes(
+            database="dw",
+            desired=_desired(),
+            current=current,
+            compatible_extra_columns=set(),
+        )
+
+
 @pytest.mark.parametrize(
     ("current", "reason"),
     [

@@ -25,7 +25,6 @@ from data_agent.data_sync.tables import (
     data_sync_key_owner,
     data_sync_task,
 )
-from data_agent.settings import app_config
 
 _RUNNABLE_PHASES = (
     SyncPhase.PENDING_SCHEMA.value,
@@ -74,15 +73,6 @@ class DataSyncRepository:
 
     async def upsert_desired(self, desired_tables: Sequence[DesiredSyncTable]) -> None:
         """幂等写入 Meta 快照派生的当前同步期望状态。"""
-        for target_table in dict.fromkeys(item.target_table for item in desired_tables):
-            lock_name = (
-                f"data_sync_schema:{app_config.data_sync.dw_database}:{target_table}"
-            )[:64]
-            acquired = await self._session.scalar(
-                text("SELECT GET_LOCK(:lock_name, 10)"), {"lock_name": lock_name}
-            )
-            if acquired != 1:
-                raise RuntimeError("无法取得 DW 结构 generation 串行锁")
         for desired in desired_tables:
             await self._upsert_one_desired(desired)
 
@@ -259,18 +249,6 @@ class DataSyncRepository:
                 data_sync_key_owner.c.source == source,
             )
         )
-
-    async def release_schema_locks(
-        self, desired_tables: Sequence[DesiredSyncTable]
-    ) -> None:
-        """在期望状态事务提交后释放连接级结构串行锁。"""
-        for target_table in dict.fromkeys(item.target_table for item in desired_tables):
-            lock_name = (
-                f"data_sync_schema:{app_config.data_sync.dw_database}:{target_table}"
-            )[:64]
-            await self._session.execute(
-                text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
-            )
 
     async def settle_phase(
         self,

@@ -16,7 +16,7 @@ from data_agent.data_sync.backfill import (
     reset_source_rows,
 )
 from data_agent.data_sync.binlog import MySQLSourceClient
-from data_agent.data_sync.models import SyncPhase
+from data_agent.data_sync.models import BinlogCoordinate, SyncPhase
 from data_agent.data_sync.repository import ClaimedSyncTask, DataSyncRepository
 from data_agent.data_sync.schema_sync import DWSchemaSynchronizer
 from data_agent.errors import DataAgentError
@@ -95,18 +95,9 @@ class DataSyncService:
             coordinate = await self._with_lease_heartbeat(
                 task, source.current_coordinate()
             )
-            async with MySQLDatabase.session() as session:
-                repository = DataSyncRepository(session)
-                if not await repository.has_authority(task):
-                    raise LeaseLostError("建立新基线前同步任务租约已失效")
-                await reset_source_rows(
-                    session, task, dw_database=self._settings.dw_database
-                )
-                if not await repository.record_snapshot(task, coordinate):
-                    return
-                if not await repository.advance_captured_coordinate(task, coordinate):
-                    raise RuntimeError("初始化 Binlog 捕获位点失败")
-                await repository.settle_phase(task, SyncPhase.BACKFILLING)
+            await self._with_lease_heartbeat(
+                task, self._reset_generation(task, coordinate)
+            )
             return
         if task.phase == SyncPhase.BACKFILLING:
             await self._with_lease_heartbeat(task, self._capture(task, source))
@@ -180,6 +171,24 @@ class DataSyncService:
                         else 0
                     ),
                 )
+
+    async def _reset_generation(
+        self, task: ClaimedSyncTask, coordinate: BinlogCoordinate
+    ) -> None:
+        """在可续租事务内清理旧物化行并原子建立新基线。"""
+        async with MySQLDatabase.session() as session:
+            repository = DataSyncRepository(session)
+            if not await repository.has_authority(task):
+                raise LeaseLostError("建立新基线前同步任务租约已失效")
+            await reset_source_rows(
+                session, task, dw_database=self._settings.dw_database
+            )
+            if not await repository.record_snapshot(task, coordinate):
+                raise LeaseLostError("清理旧物化行后同步任务租约已失效")
+            if not await repository.advance_captured_coordinate(task, coordinate):
+                raise LeaseLostError("初始化 Binlog 捕获位点时同步任务租约已失效")
+            if not await repository.settle_phase(task, SyncPhase.BACKFILLING):
+                raise LeaseLostError("建立新基线后同步任务租约已失效")
 
     async def _synchronize_schema(self, task: ClaimedSyncTask) -> None:
         """应用 DW 安全结构演进并切换到位点捕获阶段。"""

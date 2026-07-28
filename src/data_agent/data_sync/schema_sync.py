@@ -6,7 +6,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlglot import exp, parse
@@ -79,6 +79,8 @@ class DWSchemaSynchronizer:
             # 步骤一：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
             compatible_extra_columns = await self._shared_columns(desired)
+            if current is not None:
+                await self._validate_existing_provenance(desired)
             # 步骤二：每条自动提交 DDL 前重新确认 generation authority。
             for statement in plan_schema_changes(
                 database=self._database,
@@ -112,8 +114,41 @@ class DWSchemaSynchronizer:
         columns: set[str] = set()
         for payload in result.scalars():
             peer = DesiredSyncTable.model_validate(payload)
-            columns.update(column.name for column in peer.columns)
+            for column in peer.columns:
+                if column.name not in {item.name for item in desired.columns}:
+                    if not column.nullable:
+                        _raise_conflict(
+                            desired.target_table,
+                            f"其他来源字段 {column.name} 为 NOT NULL，"
+                            "当前来源无法安全省略",
+                        )
+                    columns.add(column.name)
         return columns - {column.name for column in desired.columns}
+
+    async def _validate_existing_provenance(self, desired: DesiredSyncTable) -> None:
+        """拒绝无法证明来源归属的非空既有目标。"""
+        quote = mysql_dialect().identifier_preparer.quote
+        qualified = f"{quote(self._database)}.{quote(desired.target_table)}"
+        row_count = await self._session.scalar(
+            text(f"SELECT COUNT(*) FROM {qualified}")
+        )
+        if not row_count:
+            return
+        from data_agent.data_sync.tables import data_sync_key_owner
+
+        owner_count = await self._session.scalar(
+            select(func.count())
+            .select_from(data_sync_key_owner)
+            .where(
+                data_sync_key_owner.c.target_table == desired.target_table,
+                data_sync_key_owner.c.deleted.is_(False),
+            )
+        )
+        if not owner_count:
+            _raise_conflict(
+                desired.target_table,
+                "非空目标表缺少可审计的主键 ownership",
+            )
 
     async def inspect(self, table_name: str) -> CurrentTable | None:
         """读取一张 DW 表的字段与主键结构。"""

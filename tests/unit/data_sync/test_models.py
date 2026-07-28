@@ -7,6 +7,8 @@ from decimal import Decimal
 from tests.helpers.checks import check_equal
 
 from data_agent.data_sync.models import (
+    DesiredColumn,
+    DesiredSyncTable,
     canonical_primary_key,
     decode_row_value,
     encode_row_value,
@@ -66,3 +68,31 @@ def test_json_scalar_codec_preserves_json_identity() -> None:
         if not isinstance(decoded, str):
             raise AssertionError("JSON 标量必须恢复为可绑定 JSON 文本")
         check_equal("JSON 标量语义可逆", json.loads(decoded), value)
+
+
+def test_set_row_value_codec_is_stable_and_bindable() -> None:
+    """MySQL SET 值按稳定顺序编码并恢复为驱动可绑定文本。"""
+    check_equal(
+        "多成员 SET 稳定排序",
+        decode_row_value(encode_row_value({"beta", "alpha"})),
+        "alpha,beta",
+    )
+    check_equal("空 SET 可逆", decode_row_value(encode_row_value(set())), "")
+
+
+def test_desired_hash_is_scoped_to_one_table_contract() -> None:
+    """全局 schema 指纹变化不重建结构未变化的单表任务。"""
+    column = DesiredColumn(id="id", name="id", data_type="BIGINT", nullable=False)
+    first = DesiredSyncTable(
+        source="local",
+        source_schema="business",
+        source_table="orders",
+        target_table="orders",
+        columns=[column],
+        primary_key=["id"],
+        schema_fingerprint="a" * 64,
+    )
+    second = first.model_copy(update={"schema_fingerprint": "b" * 64})
+    check_equal(
+        "无关全局指纹不改变 generation", first.desired_hash(), second.desired_hash()
+    )

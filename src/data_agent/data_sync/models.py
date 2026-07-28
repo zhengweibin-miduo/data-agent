@@ -101,7 +101,11 @@ class DesiredSyncTable(ContractModel):
 
     def desired_hash(self) -> str:
         """返回稳定期望状态哈希。"""
-        payload = self.model_dump_json(exclude_none=False)
+        # 全局 schema 指纹还包含其他表和注释，不能作为单表重建 generation。
+        payload = self.model_dump_json(
+            exclude_none=False,
+            exclude={"schema_fingerprint"},
+        )
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -157,6 +161,10 @@ def encode_row_value(value: object, *, json_value: bool = False) -> EncodedValue
         return {"$timedelta_microseconds": str(value // timedelta(microseconds=1))}
     if isinstance(value, bytes):
         return {"$binary": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, set):
+        if not all(isinstance(item, str) for item in value):
+            raise TypeError("MySQL SET 行值只能包含字符串")
+        return {"$set": ",".join(sorted(value))}
     if isinstance(value, (dict, list)):
         return {
             "$json": json.dumps(
@@ -185,6 +193,9 @@ def decode_row_value(value: EncodedValue) -> object:
         return timedelta(microseconds=int(value["$timedelta_microseconds"]))
     if "$binary" in value:
         return base64.b64decode(value["$binary"])
+    if "$set" in value:
+        # MySQL SET 绑定值使用逗号分隔文本；空集合对应空字符串。
+        return value["$set"]
     if "$json" in value:
         # 动态 SQL 使用原生绑定参数；规范 JSON 文本可由 MySQL JSON 列直接接收。
         return value["$json"]
@@ -229,6 +240,7 @@ def build_desired_tables(
             details={"columns": ",".join(sorted(missing))},
         )
     desired: list[DesiredSyncTable] = []
+    task_identities: set[tuple[str, str]] = set()
     for table in schema.tables:
         if table.id not in semantic_table_ids:
             raise DataAgentError(
@@ -250,6 +262,15 @@ def build_desired_tables(
                 details={"table": table.qualified_name},
             )
         column_ids = {column.id for column in table.columns}
+        identity = (schema.source, table.name)
+        if identity in task_identities:
+            raise DataAgentError(
+                "ambiguous_sync_target",
+                "persist_snapshot",
+                "同一数据源不能把多个物理表同步到同一 DW 目标",
+                details={"source": schema.source, "target_table": table.name},
+            )
+        task_identities.add(identity)
         desired.append(
             DesiredSyncTable(
                 source=schema.source,
