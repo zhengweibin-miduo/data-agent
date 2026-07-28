@@ -15,7 +15,7 @@ function delegationBody(reviewId, headSha, headRef, threads) {
     .map((thread) => `- ${thread.url || thread.id} (${thread.id})`)
     .join("\n");
   return `${marker(reviewId, headSha)}
-@codex fix all valid unresolved review issues listed below.
+@codex 修复下方列出的所有有效且尚未解决的审查问题。
 
 PR branch: \`${headRef}\`
 Expected head: \`${headSha}\`
@@ -29,7 +29,7 @@ ${threadList}
 - 不需要修复：在原 thread 说明依据并 resolve。
 - 无法安全完成：在原 thread 说明阻塞原因，并保持 unresolved。
 
-需要修改代码时只创建一个提交，然后执行 \`git push origin HEAD:${headRef}\`，禁止 force-push。推送成功后，仅对已完成修复或确认不需要修复的 thread 回复提交与验证依据并 resolve；无法安全完成的 thread 回复阻塞原因并保持 unresolved。不要创建新 PR，也不要另发起复审请求。`;
+需要修改代码时只创建一个提交，然后执行 \`git push origin HEAD:${headRef}\`，禁止 force-push。推送成功后，仅对已完成修复或确认不需要修复的 thread 回复提交与验证依据并 resolve；无法安全完成的 thread 回复阻塞原因并保持 unresolved。不要创建新 PR，也不要另发起复审请求。所有 GitHub 回复和最终任务总结均使用简体中文，代码标识符、路径、命令、日志和错误原文除外。`;
 }
 
 async function unresolvedThreads(github, owner, repo, pullNumber, reviewId, reviewer) {
@@ -141,7 +141,8 @@ async function selfTest() {
     { id: "THREAD_1", url: "https://github.com/owner/repo/pull/7#discussion_r1" },
   ]);
   assert.match(body, /codex-review-loop:42:abc123/);
-  assert.match(body, /fix all valid unresolved review issues/);
+  assert.match(body, /修复下方列出的所有有效且尚未解决的审查问题/);
+  assert.match(body, /所有 GitHub 回复和最终任务总结均使用简体中文/);
   assert.doesNotMatch(body, /\bP1\b/);
   assert.match(body, /discussion_r1/);
   assert.match(body, /Expected head: `abc123`/);
