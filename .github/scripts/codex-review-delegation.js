@@ -29,7 +29,16 @@ ${threadList}
 - 不需要修复：在原 thread 说明依据并 resolve。
 - 无法安全完成：在原 thread 说明阻塞原因，并保持 unresolved。
 
-需要修改代码时只创建一个提交，然后执行 \`git push origin HEAD:${headRef}\`，禁止 force-push。推送成功后，仅对已完成修复或确认不需要修复的 thread 回复提交与验证依据并 resolve；无法安全完成的 thread 回复阻塞原因并保持 unresolved。不要创建新 PR，也不要另发起复审请求。所有 GitHub 回复和最终任务总结均使用简体中文，代码标识符、路径、命令、日志和错误原文除外。`;
+需要修改代码时只创建一个提交，然后执行 \`git push origin HEAD:${headRef}\`，禁止 force-push。推送成功后，仅对已完成修复或确认不需要修复的 thread 回复提交与验证依据并 resolve；无法安全完成的 thread 回复阻塞原因并保持 unresolved。不要创建新 PR，也不要另发起复审请求。所有 GitHub 回复和最终任务总结均使用简体中文，代码标识符、路径、命令、日志和错误原文除外。
+
+每个已处理 thread 的回复保持简短，并使用以下结构：
+
+提交 \`<实际提交 SHA>\` 已修复：<一句话说明根因和修复方式>。
+
+验证：\`<测试命令>\` 通过（<简要结果>）。
+该 thread 已 resolve。
+
+只有验证未完成时才说明原因并保持 unresolved。禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出；只保留测试命令、通过数量及与本次修改直接相关的异常。最终任务总结中的代码链接必须指向推送后的实际提交 SHA，不得使用任务开始时的 Expected head。`;
 }
 
 async function unresolvedThreads(github, owner, repo, pullNumber, reviewId, reviewer) {
@@ -143,6 +152,9 @@ async function selfTest() {
   assert.match(body, /codex-review-loop:42:abc123/);
   assert.match(body, /修复下方列出的所有有效且尚未解决的审查问题/);
   assert.match(body, /所有 GitHub 回复和最终任务总结均使用简体中文/);
+  assert.match(body, /提交 `<实际提交 SHA>` 已修复/);
+  assert.match(body, /禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出/);
+  assert.match(body, /代码链接必须指向推送后的实际提交 SHA/);
   assert.doesNotMatch(body, /\bP1\b/);
   assert.match(body, /discussion_r1/);
   assert.match(body, /Expected head: `abc123`/);
