@@ -1,0 +1,41 @@
+name: Delegate Codex Conflict Resolution
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: codex-conflict-resolution-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  delegate:
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/codex-resolve-conflicts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # 只检出默认分支上的受信任脚本，绝不执行 PR head 中的代码。
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Require user PAT
+        env:
+          CODEX_TRIGGER_TOKEN: ${{ secrets.CODEX_TRIGGER_TOKEN }}
+        run: test -n "$CODEX_TRIGGER_TOKEN"
+
+      - uses: actions/github-script@v8
+        env:
+          PR_AUTHORS: ${{ vars.PR_AUTHORS || 'zhengweibin-miduo,iuiiui,chatgpt-codex-connector[bot]' }}
+        with:
+          github-token: ${{ secrets.CODEX_TRIGGER_TOKEN }}
+          script: |
+            const { delegateConflictResolution } = require('./.github/scripts/codex-conflict-resolution-delegation.js');
+            await delegateConflictResolution({ github, context, core, authors: process.env.PR_AUTHORS });

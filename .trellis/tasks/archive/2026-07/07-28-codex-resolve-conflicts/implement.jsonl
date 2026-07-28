@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"用户触发 Codex 自动化的命令、安全校验、幂等和 Git 合同"}
+{"file":"code_review.md","reason":"Codex GitHub 回复语言与处理约束"}
