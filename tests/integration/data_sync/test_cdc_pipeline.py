@@ -181,9 +181,23 @@ async def test_backfill_then_binlog_converges() -> None:
                 )
             ).mappings().one()
             check_equal(
-                "捕获与应用位点最终一致",
+                "捕获位点推进到安全事务边界",
                 tuple(coordinate.values())[:3],
+                (
+                    captured.tail.file,
+                    captured.tail.position,
+                    captured.tail.row_index,
+                ),
+            )
+            last_event_coordinate = captured.events[-1].coordinate
+            check_equal(
+                "应用位点推进到最后一条行事件",
                 tuple(coordinate.values())[3:],
+                (
+                    last_event_coordinate.file,
+                    last_event_coordinate.position,
+                    last_event_coordinate.row_index,
+                ),
             )
 
         # 步骤五：其他来源碰撞同一主键时，冲突先于 DW 写入发生。
