@@ -1355,3 +1355,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 43: 修复冲突委派 base SHA 来源
+
+**Date**: 2026-07-28
+**Task**: 修复冲突委派 base SHA 来源
+**Branch**: `fix/codex-conflict-live-base-20260728`
+
+### Summary
+
+冲突委派改用 Git refs API 获取实时 base tip，允许同 base ref 正常前进，同时继续严格保护 PR head；未操作 PR #58。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fbdd1a5` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
