@@ -107,6 +107,64 @@ services. CI runs `uv run pytest -m "not tei"` after MySQL and Redis are ready.
 Run the focused TEI test explicitly when that optional local service is
 available.
 
+## Scenario: User-triggered Codex CI Fix
+
+### 1. Scope / Trigger
+
+- A PR author explicitly requests repair by posting the exact `/codex-fix-ci`
+  comment. CI failure alone never starts a Codex repair loop.
+
+### 2. Signatures
+
+- Command: `/codex-fix-ci`
+- Event: `issue_comment.created` on a pull request.
+
+### 3. Contracts
+
+- Both the PR author and command author must be listed in `PR_AUTHORS`.
+- The PR must be non-draft, use a same-repository head, and still point to the
+  inspected head SHA.
+- `CODEX_TRIGGER_TOKEN` is required to create the `@codex` delegation comment.
+- Only completed failed `pull_request` runs associated with the current PR and
+  head SHA are delegated.
+
+### 4. Validation & Error Matrix
+
+- Non-exact command, ineligible PR, or unauthorized user -> no delegation.
+- No matching failed run -> no delegation.
+- Head changes during inspection -> stop without delegation.
+- Existing marker for the same head and failed-run set -> no duplicate comment.
+- Ten prior CI-fix delegations -> publish one limit notice and stop.
+
+### 5. Good/Base/Bad Cases
+
+- Good: an authorized user triggers a current failing PR and receives one
+  actionable Codex delegation.
+- Base: the current head has no failed run, so the workflow exits without a
+  comment.
+- Bad: a run has the same SHA but belongs to a push or another PR; it must not
+  enter the delegation.
+
+### 6. Tests Required
+
+- The standalone Node self-check covers exact command parsing, both allowlist
+  gates, run/PR/head filtering, head changes, idempotency, and push constraints.
+- Parse the workflow YAML and run `git diff --check`; run `actionlint` when it
+  is available.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Delegate every failed workflow sharing the commit SHA or automatically trigger
+Codex whenever CI fails.
+
+#### Correct
+
+Require `/codex-fix-ci`, verify the current PR/head and failed PR runs, then
+delegate once with an expected-head guard and a non-force push back to the
+original PR branch.
+
 Before persistence integration tests, CI applies
 `docs/docker/mysql/data_agent.sql` through the root account. MySQL entrypoint
 bootstrap scripts run only for an empty volume. Reapplying the script can create
