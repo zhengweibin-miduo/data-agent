@@ -1322,3 +1322,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: 规范 Codex 审查处理回复
+
+**Date**: 2026-07-28
+**Task**: 规范 Codex 审查处理回复
+**Branch**: `fix/codex-review-hide-decision-label-20260728`
+
+### Summary
+
+禁止 GitHub 审查处理回复暴露内部裁决标签，并移除 Delegate Codex Review Resolution 的自动委派轮数上限，同时保留同一 review/head 幂等去重。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dc38627` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
