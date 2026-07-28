@@ -60,6 +60,22 @@ def test_decimal_primary_key_uses_mysql_numeric_equivalence() -> None:
     check_equal("DECIMAL 主键忽略无意义 scale", first, second)
 
 
+def test_decimal_codec_preserves_mysql_maximum_precision() -> None:
+    """移除尾零时不受进程 Decimal context 精度影响。"""
+    first = Decimal("123456789012345678901234567890.00")
+    second = Decimal("123456789012345678901234567891.00")
+    check_equal(
+        "高精度 DECIMAL 无损往返",
+        [decode_row_value(encode_row_value(value)) for value in (first, second)],
+        [first, second],
+    )
+    check_equal(
+        "不同高精度 DECIMAL 保持不同身份",
+        encode_row_value(first) != encode_row_value(second),
+        True,
+    )
+
+
 def test_json_scalar_codec_preserves_json_identity() -> None:
     """JSON 标量与普通 SQL 标量使用不同的可逆编码。"""
     for value in ("paid", 3, True, None):

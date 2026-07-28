@@ -89,6 +89,9 @@ class DataSyncService:
                 details={"source": task.desired.source},
             )
         if task.phase == SyncPhase.PENDING_SCHEMA:
+            await source.check_select_access(
+                task.desired.source_schema, task.desired.source_table
+            )
             await self._synchronize_schema(task)
             return
         if task.phase == SyncPhase.BUFFERING:

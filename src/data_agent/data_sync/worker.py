@@ -8,6 +8,7 @@ from loguru import logger
 from sqlalchemy.exc import SQLAlchemyError
 
 from data_agent.data_sync.binlog import MySQLSourceClient, close_sources
+from data_agent.data_sync.repository import DataSyncRepository
 from data_agent.data_sync.service import DataSyncService
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.logging import logging_boundary, setup_logging
@@ -32,6 +33,17 @@ async def run_worker() -> None:
         # 步骤一：启动前验证全部源满足 ROW/FULL Binlog 契约。
         await asyncio.gather(
             *(source.check_capabilities() for source in sources.values())
+        )
+        async with MySQLDatabase.session() as session:
+            desired_tables = await DataSyncRepository(session).read_desired_tables()
+        await asyncio.gather(
+            *(
+                sources[item.source].check_select_access(
+                    item.source_schema, item.source_table
+                )
+                for item in desired_tables
+                if item.source in sources
+            )
         )
         logger.info("数据同步进程启动成功，开始消费 DW 结构与 Binlog 任务")
         # 步骤二：每轮只执行有界任务步骤；空闲时按配置暂停，避免忙轮询。

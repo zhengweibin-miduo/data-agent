@@ -16,6 +16,7 @@ from pymysqlreplication.row_event import (
     WriteRowsEvent,
 )
 from sqlalchemy import text
+from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -134,6 +135,18 @@ class MySQLSourceClient:
             position=int(row["Position"]),
             row_index=0,
         )
+
+    async def check_select_access(self, source_schema: str, source_table: str) -> None:
+        """以零行业务查询验证源表读取权限。"""
+        quote = mysql_dialect().identifier_preparer.quote
+        qualified = f"{quote(source_schema)}.{quote(source_table)}"
+        try:
+            async with self._engine.connect() as connection:
+                await connection.execute(text(f"SELECT 1 FROM {qualified} LIMIT 0"))
+        except Exception as error:
+            raise SourceCapabilityError(
+                f"数据源 {self.name} 无法读取同步表 {source_schema}.{source_table}"
+            ) from error
 
     async def capture(
         self,

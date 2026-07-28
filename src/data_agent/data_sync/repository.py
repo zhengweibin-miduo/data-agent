@@ -25,6 +25,7 @@ from data_agent.data_sync.tables import (
     data_sync_key_owner,
     data_sync_task,
 )
+from data_agent.errors import DataAgentError
 
 _RUNNABLE_PHASES = (
     SyncPhase.PENDING_SCHEMA.value,
@@ -74,7 +75,28 @@ class DataSyncRepository:
     async def upsert_desired(self, desired_tables: Sequence[DesiredSyncTable]) -> None:
         """幂等写入 Meta 快照派生的当前同步期望状态。"""
         for desired in desired_tables:
+            await self._reject_conflicting_target(desired)
             await self._upsert_one_desired(desired)
+
+    async def _reject_conflicting_target(self, desired: DesiredSyncTable) -> None:
+        """拒绝同一命名来源跨快照复用同一 DW 目标。"""
+        conflict = await self._session.scalar(
+            select(data_sync_task.c.id).where(
+                data_sync_task.c.source == desired.source,
+                data_sync_task.c.target_table == desired.target_table,
+                or_(
+                    data_sync_task.c.source_schema != desired.source_schema,
+                    data_sync_task.c.source_table != desired.source_table,
+                ),
+            ).limit(1)
+        )
+        if conflict is not None:
+            raise DataAgentError(
+                "duplicate_data_sync_target",
+                "persist_snapshot",
+                "同一数据源的多个物理表不能映射到同一 DW 目标",
+                details={"target_table": desired.target_table},
+            )
 
     async def _upsert_one_desired(self, desired: DesiredSyncTable) -> None:
         """在目标表 generation 串行锁内更新一项期望。"""
@@ -143,7 +165,22 @@ class DataSyncRepository:
         max_attempts: int,
     ) -> list[ClaimedSyncTask]:
         """用数据库时钟领取一批可执行任务。"""
-        # 步骤一：锁定已到执行时间且租约为空或过期的有限任务。
+        # 步骤一：配置下调后，先把已耗尽新预算的任务收敛到死信。
+        await self._session.execute(
+            update(data_sync_task)
+            .where(
+                data_sync_task.c.phase.in_(_RUNNABLE_PHASES),
+                data_sync_task.c.attempts >= max_attempts,
+            )
+            .values(
+                phase=SyncPhase.DEAD.value,
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type="retry_budget_exhausted",
+                updated_at=func.now(),
+            )
+        )
+        # 步骤二：锁定已到执行时间且租约为空或过期的有限任务。
         result = await self._session.execute(
             select(data_sync_task)
             .where(
@@ -161,7 +198,7 @@ class DataSyncRepository:
         )
         rows = result.mappings().all()
         claimed: list[ClaimedSyncTask] = []
-        # 步骤二：为每个任务生成独立令牌并在同一短事务内写入租约。
+        # 步骤三：为每个任务生成独立令牌并在同一短事务内写入租约。
         for row in rows:
             lease_token = secrets.token_hex(16)
             await self._session.execute(
@@ -179,6 +216,11 @@ class DataSyncRepository:
             )
             claimed.append(self._claimed_task(row, lease_token))
         return claimed
+
+    async def read_desired_tables(self) -> list[DesiredSyncTable]:
+        """读取启动权限探测所需的全部当前源表契约。"""
+        result = await self._session.execute(select(data_sync_task.c.desired_json))
+        return [DesiredSyncTable.model_validate(item) for item in result.scalars()]
 
     async def read_readiness_phases(
         self,

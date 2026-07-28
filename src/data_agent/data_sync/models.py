@@ -8,7 +8,7 @@ import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from pydantic import Field
 
@@ -147,10 +147,27 @@ def encode_row_value(value: object, *, json_value: bool = False) -> EncodedValue
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, Decimal):
-        normalized = value.normalize()
-        if normalized == 0:
-            normalized = Decimal(0)
-        return {"$decimal": format(normalized, "f")}
+        if not value.is_finite():
+            raise TypeError("MySQL DECIMAL 不支持非有限值")
+        sign, digits, raw_exponent = value.as_tuple()
+        exponent = cast(int, raw_exponent)
+        digits_list = list(digits)
+        while digits_list and digits_list[-1] == 0 and exponent < 0:
+            digits_list.pop()
+            exponent += 1
+        if not digits_list:
+            return {"$decimal": "0"}
+        coefficient = "".join(str(digit) for digit in digits_list)
+        if exponent >= 0:
+            rendered = coefficient + ("0" * exponent)
+        else:
+            split = len(coefficient) + exponent
+            rendered = (
+                coefficient[:split] + "." + coefficient[split:]
+                if split > 0
+                else "0." + ("0" * -split) + coefficient
+            )
+        return {"$decimal": ("-" if sign else "") + rendered}
     if isinstance(value, datetime):
         return {"$datetime": value.isoformat(timespec="microseconds")}
     if isinstance(value, date):

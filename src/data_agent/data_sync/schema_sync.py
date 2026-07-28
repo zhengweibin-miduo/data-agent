@@ -6,7 +6,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlglot import exp, parse
@@ -108,12 +108,25 @@ class DWSchemaSynchronizer:
         """读取共享目标其他有效来源贡献的字段集合。"""
         result = await self._session.execute(
             select(data_sync_task.c.desired_json).where(
-                data_sync_task.c.target_table == desired.target_table
+                data_sync_task.c.target_table == desired.target_table,
+                ~and_(
+                    data_sync_task.c.source == desired.source,
+                    data_sync_task.c.source_schema == desired.source_schema,
+                    data_sync_task.c.source_table == desired.source_table,
+                ),
             )
         )
         columns: set[str] = set()
         for payload in result.scalars():
             peer = DesiredSyncTable.model_validate(payload)
+            peer_names = {column.name for column in peer.columns}
+            for column in desired.columns:
+                if column.name not in peer_names and not column.nullable:
+                    _raise_conflict(
+                        desired.target_table,
+                        f"当前来源字段 {column.name} 为 NOT NULL，"
+                        "其他来源无法安全省略",
+                    )
             for column in peer.columns:
                 if column.name not in {item.name for item in desired.columns}:
                     if not column.nullable:
@@ -286,7 +299,7 @@ def plan_schema_changes(
         if current_column is None:
             changes.append(f"ALTER TABLE {qualified_table} ADD COLUMN {definition}")
             continue
-        if current_column.nullable != desired_column.nullable:
+        if not current_column.nullable and desired_column.nullable:
             _raise_conflict(
                 desired.target_table,
                 f"字段 {desired_column.name} 的可空性变化不允许自动执行",

@@ -231,6 +231,22 @@ def test_plan_adds_and_safely_widens_columns() -> None:
     )
 
 
+def test_plan_accepts_nullable_target_for_required_source_column() -> None:
+    """目标允许 NULL 是来源 NOT NULL 契约的安全超集。"""
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "decimal(12,2)", True),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        "更宽松目标可空性无需修改",
+        plan_schema_changes(database="dw", desired=_desired(), current=current),
+        [],
+    )
+
+
 def test_plan_rejects_non_binary_string_primary_key_collation() -> None:
     """已有字符串主键必须与字节 ownership 使用相同等价语义。"""
     desired = _desired()
