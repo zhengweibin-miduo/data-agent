@@ -1291,7 +1291,40 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 41: 规范 Codex 审查处理回复
+## Session 41: 用户触发 Codex 解决 PR 冲突
+
+**Date**: 2026-07-28
+**Task**: 用户触发 Codex 解决 PR 冲突
+**Branch**: `feature/codex-resolve-conflicts-20260728`
+
+### Summary
+
+新增 /codex-resolve-conflicts workflow，严格校验 mergeability、双白名单、base/head 竞态与幂等，并要求 Codex 仅创建一个 merge commit 普通推送回原 PR 分支。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b59f216` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 42: 规范 Codex 审查处理回复
 
 **Date**: 2026-07-28
 **Task**: 规范 Codex 审查处理回复

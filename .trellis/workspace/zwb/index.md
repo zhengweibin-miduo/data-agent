@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 41
+- **Total Sessions**: 42
 - **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1324 | Active |
+| `journal-1.md` | ~1357 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,7 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 41 | 2026-07-28 | 规范 Codex 审查处理回复 | `dc38627` | `fix/codex-review-hide-decision-label-20260728` |
+| 42 | 2026-07-28 | 规范 Codex 审查处理回复 | `dc38627` | `fix/codex-review-hide-decision-label-20260728` |
+| 41 | 2026-07-28 | 用户触发 Codex 解决 PR 冲突 | `b59f216` | `feature/codex-resolve-conflicts-20260728` |
 | 40 | 2026-07-28 | 用户触发 Codex 修复 CI | `abdcdab` | `feature/codex-fix-ci-trigger-20260728` |
 | 39 | 2026-07-27 | 建立 Codex 审查意见自动处理闭环 | `b8ff8ae` | `fix/codex-review-resolution-loop-20260727` |
 | 38 | 2026-07-27 | 完善 Codex 代码审查闭环 | `903e69d` | `chore/codex-review-loop-20260727` |
