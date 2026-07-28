@@ -74,8 +74,8 @@ async def test_ready_dependencies_proceed() -> None:
     check_equal("就绪工具调用次数", invoke.await_count, 1)
 
 
-async def test_all_source_dependency_expands_catalog_sources() -> None:
-    """未限定来源的依赖必须检查目录声明的每一个有效来源。"""
+async def test_all_source_dependency_remains_unscoped() -> None:
+    """未限定来源的依赖必须由工具查询控制库中的全部有效任务。"""
     service, invoke = _service(
         AnswerReadinessIntent(
             requires_sync_completion=True,
@@ -89,12 +89,9 @@ async def test_all_source_dependency_expands_catalog_sources() -> None:
     await service.evaluate("订单总数", catalog)
     invocation = invoke.await_args_list[0]
     check_equal(
-        "全部目录来源均传给工具",
+        "未限定来源原样传给工具",
         invocation.args[0]["dependencies"],
-        [
-            {"target_table": "orders", "source": "erp"},
-            {"target_table": "orders", "source": "crm"},
-        ],
+        [{"target_table": "orders", "source": None}],
     )
 
 
