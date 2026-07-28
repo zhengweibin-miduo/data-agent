@@ -1,6 +1,6 @@
 """数据同步值编码和主键身份的确定性检查。"""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from tests.helpers.checks import check_equal
@@ -18,6 +18,8 @@ def test_row_value_codec_and_primary_key_are_stable() -> None:
         Decimal("12.30"),
         datetime(2026, 7, 27, 12, 34, 56, 123456),
         b"\x00\xff",
+        timedelta(days=-2, seconds=3, microseconds=456),
+        timedelta(hours=49, microseconds=7),
         None,
         "文本",
     ]

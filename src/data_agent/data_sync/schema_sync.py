@@ -136,7 +136,8 @@ def plan_schema_changes(
         primary_key = ", ".join(quote(name) for name in desired.primary_key)
         return [
             f"CREATE TABLE {qualified_table} "
-            f"({columns}, PRIMARY KEY ({primary_key})) ENGINE=InnoDB"
+            f"({columns}, PRIMARY KEY ({primary_key})) ENGINE=InnoDB "
+            "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin"
         ]
 
     current_by_name = {column.name: column for column in current.columns}
@@ -249,7 +250,10 @@ def _canonical_type(data_type: str) -> str:
 
 def _normalize_type(data_type: str) -> str:
     """规范化 information_schema 与 SQLGlot 的类型文本。"""
-    return re.sub(r"\s+", " ", data_type.strip().upper())
+    normalized = re.sub(r"\s+", " ", data_type.strip().upper())
+    if normalized in {"BOOL", "BOOLEAN", "TINYINT(1)"}:
+        return "BOOLEAN"
+    return normalized
 
 
 def _type_parts(data_type: str) -> tuple[str, int | None, int | None, bool] | None:

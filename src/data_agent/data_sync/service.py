@@ -130,9 +130,7 @@ class DataSyncService:
                     await DataSyncRepository(session).settle_phase(task, task.phase)
                 return
             next_phase = (
-                SyncPhase.STREAMING
-                if task.phase == SyncPhase.REPLAYING
-                else task.phase
+                SyncPhase.STREAMING if task.phase == SyncPhase.REPLAYING else task.phase
             )
             async with MySQLDatabase.session() as session:
                 repository = DataSyncRepository(session)
@@ -140,7 +138,15 @@ class DataSyncService:
                     task.id,
                     limit=self._settings.event_cleanup_batch_size,
                 )
-                await repository.settle_phase(task, next_phase)
+                await repository.settle_phase(
+                    task,
+                    next_phase,
+                    delay_seconds=(
+                        self._settings.poll_interval_seconds
+                        if next_phase == SyncPhase.STREAMING
+                        else 0
+                    ),
+                )
 
     async def _synchronize_schema(self, task: ClaimedSyncTask) -> None:
         """应用 DW 安全结构演进并切换到位点捕获阶段。"""

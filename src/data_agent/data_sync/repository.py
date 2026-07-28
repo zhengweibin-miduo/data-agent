@@ -17,6 +17,8 @@ from data_agent.data_sync.models import (
     KeyConflict,
     SyncPhase,
     SyncRowEvent,
+    decode_row_value,
+    encode_row_value,
 )
 from data_agent.data_sync.tables import (
     data_sync_event,
@@ -74,7 +76,17 @@ class DataSyncRepository:
         for desired in desired_tables:
             desired_hash = desired.desired_hash()
             identity = self._identity_predicate(desired)
-            # 步骤一：只在结构身份变化时重置结构阶段和失败状态。
+            changed_task_ids = select(data_sync_task.c.id).where(
+                identity,
+                data_sync_task.c.desired_hash != desired_hash,
+            )
+            # 步骤一：结构身份变化时删除旧 generation 的缓冲事件。
+            await self._session.execute(
+                delete(data_sync_event).where(
+                    data_sync_event.c.task_id.in_(changed_task_ids)
+                )
+            )
+            # 步骤二：清空旧基线、游标和位点，从新 generation 完整回填。
             await self._session.execute(
                 update(data_sync_task)
                 .where(identity, data_sync_task.c.desired_hash != desired_hash)
@@ -87,10 +99,19 @@ class DataSyncRepository:
                     lease_token=None,
                     lease_expires_at=None,
                     last_error_type=None,
+                    snapshot_file=None,
+                    snapshot_position=None,
+                    captured_file=None,
+                    captured_position=None,
+                    captured_row_index=None,
+                    applied_file=None,
+                    applied_position=None,
+                    applied_row_index=None,
+                    last_backfill_key=None,
                     updated_at=func.now(),
                 )
             )
-            # 步骤二：插入首次出现的期望；重复快照保留当前阶段、租约和位点。
+            # 步骤三：插入首次出现的期望；重复快照保留当前阶段、租约和位点。
             statement = insert(data_sync_task).values(
                 source=desired.source,
                 source_schema=desired.source_schema,
@@ -204,21 +225,24 @@ class DataSyncRepository:
         phase: SyncPhase,
         *,
         release_lease: bool = True,
+        delay_seconds: float = 0,
     ) -> bool:
         """在期望身份和租约仍有效时推进任务阶段。"""
         values: dict[str, object] = {
             "phase": phase.value,
             "attempts": 0,
-            "available_at": func.now(),
+            "available_at": func.timestampadd(
+                text("MICROSECOND"),
+                max(0, int(delay_seconds * 1_000_000)),
+                func.now(),
+            ),
             "last_error_type": None,
             "updated_at": func.now(),
         }
         if release_lease:
             values.update(lease_token=None, lease_expires_at=None)
         result = await self._session.execute(
-            update(data_sync_task)
-            .where(self._task_authority(task))
-            .values(**values)
+            update(data_sync_task).where(self._task_authority(task)).values(**values)
         )
         return bool(_rowcount(result))
 
@@ -248,7 +272,10 @@ class DataSyncRepository:
         result = await self._session.execute(
             update(data_sync_task)
             .where(self._task_authority(task))
-            .values(last_backfill_key=list(primary_key), updated_at=func.now())
+            .values(
+                last_backfill_key=[encode_row_value(value) for value in primary_key],
+                updated_at=func.now(),
+            )
         )
         return bool(_rowcount(result))
 
@@ -279,8 +306,7 @@ class DataSyncRepository:
         current_file_is_older = or_(
             func.char_length(data_sync_task.c.applied_file) < len(coordinate.file),
             and_(
-                func.char_length(data_sync_task.c.applied_file)
-                == len(coordinate.file),
+                func.char_length(data_sync_task.c.applied_file) == len(coordinate.file),
                 data_sync_task.c.applied_file < coordinate.file,
             ),
         )
@@ -443,15 +469,18 @@ class DataSyncRepository:
 
     async def cleanup_events(self, task_id: int, *, limit: int) -> int:
         """分批删除已确认的暂存事件。"""
-        ids = (
+        ids_result = await self._session.execute(
             select(data_sync_event.c.id)
             .where(
                 data_sync_event.c.task_id == task_id,
                 data_sync_event.c.acknowledged_at.is_not(None),
             )
             .order_by(data_sync_event.c.id)
-            .limit(limit)
+            .limit(max(0, limit))
         )
+        ids = list(ids_result.scalars())
+        if not ids:
+            return 0
         result = await self._session.execute(
             delete(data_sync_event).where(data_sync_event.c.id.in_(ids))
         )
@@ -593,7 +622,7 @@ class DataSyncRepository:
             captured=captured,
             applied=applied,
             last_backfill_key=(
-                tuple(raw_cursor)
+                tuple(decode_row_value(value) for value in raw_cursor)
                 if isinstance(raw_cursor, (list, tuple))
                 else None
             ),

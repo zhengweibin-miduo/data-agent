@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import TypeAlias
@@ -144,6 +144,8 @@ def encode_row_value(value: object) -> EncodedValue:
         return {"$date": value.isoformat()}
     if isinstance(value, time):
         return {"$time": value.isoformat(timespec="microseconds")}
+    if isinstance(value, timedelta):
+        return {"$timedelta_microseconds": str(value // timedelta(microseconds=1))}
     if isinstance(value, bytes):
         return {"$binary": base64.b64encode(value).decode("ascii")}
     raise TypeError(f"不支持的 MySQL 行值类型：{type(value).__name__}")
@@ -161,6 +163,8 @@ def decode_row_value(value: EncodedValue) -> object:
         return date.fromisoformat(value["$date"])
     if "$time" in value:
         return time.fromisoformat(value["$time"])
+    if "$timedelta_microseconds" in value:
+        return timedelta(microseconds=int(value["$timedelta_microseconds"]))
     if "$binary" in value:
         return base64.b64decode(value["$binary"])
     raise ValueError("未知的数据同步行值编码")
@@ -193,9 +197,7 @@ def build_desired_tables(
         column.id for table in schema.tables for column in table.columns
     }
     metric_dependencies = {
-        column_id
-        for metric in metrics
-        for column_id in metric.relevant_column_ids
+        column_id for metric in metrics for column_id in metric.relevant_column_ids
     }
     missing = metric_dependencies - physical_column_ids
     if missing:
@@ -244,9 +246,7 @@ def build_desired_tables(
                 ],
                 primary_key=primary_key,
                 schema_fingerprint=schema.schema_fingerprint,
-                metric_dependency_column_ids=sorted(
-                    metric_dependencies & column_ids
-                ),
+                metric_dependency_column_ids=sorted(metric_dependencies & column_ids),
             )
         )
     return desired

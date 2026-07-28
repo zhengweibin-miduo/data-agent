@@ -62,6 +62,28 @@ def test_plan_creates_missing_table_and_quotes_identifiers() -> None:
         "PRIMARY KEY (order_id)" in statements[0],
         actual=statements[0],
     )
+    check_condition(
+        "字符串主键使用字节身份一致的 NO PAD 排序规则",
+        "COLLATE utf8mb4_0900_bin" in statements[0],
+        actual=statements[0],
+    )
+
+
+def test_boolean_alias_matches_mysql_introspection() -> None:
+    """MySQL 将 BOOLEAN introspect 为 tinyint(1) 后仍保持幂等。"""
+    desired = _desired(amount_type="BOOLEAN")
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "tinyint(1)", False),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        "BOOLEAN 与 tinyint(1) 等价",
+        plan_schema_changes(database="dw", desired=desired, current=current),
+        [],
+    )
 
 
 def test_plan_adds_and_safely_widens_columns() -> None:
