@@ -6,16 +6,8 @@ function marker(reviewId, headSha) {
   return `<!-- codex-review-loop:${reviewId}:${headSha} -->`;
 }
 
-function headMarker(headSha) {
-  return `<!-- codex-review-head:${headSha} -->`;
-}
-
 function limitMarker() {
   return `<!-- codex-review-limit:${MAX_AUTOMATED_ROUNDS} -->`;
-}
-
-function wasHeadDelegated(body, headSha) {
-  return body?.includes(headMarker(headSha)) || body?.includes(`:${headSha} -->`);
 }
 
 function delegationBody(reviewId, headSha, headRef, threads) {
@@ -23,7 +15,6 @@ function delegationBody(reviewId, headSha, headRef, threads) {
     .map((thread) => `- ${thread.url || thread.id} (${thread.id})`)
     .join("\n");
   return `${marker(reviewId, headSha)}
-${headMarker(headSha)}
 @codex fix all valid unresolved review issues listed below.
 
 PR branch: \`${headRef}\`
@@ -111,8 +102,12 @@ async function delegateReview({ github, context, core }) {
     data: { login: triggerUser },
   } = await github.rest.users.getAuthenticated();
   const ownComments = comments.filter((comment) => comment.user?.login === triggerUser);
-  if (ownComments.some((comment) => wasHeadDelegated(comment.body, pull.head.sha))) {
-    core.info("This head commit was already delegated.");
+  if (
+    ownComments.some((comment) =>
+      comment.body?.includes(marker(review.id, pull.head.sha)),
+    )
+  ) {
+    core.info("This review and head commit were already delegated.");
     return;
   }
 
@@ -146,7 +141,6 @@ async function selfTest() {
     { id: "THREAD_1", url: "https://github.com/owner/repo/pull/7#discussion_r1" },
   ]);
   assert.match(body, /codex-review-loop:42:abc123/);
-  assert.match(body, /codex-review-head:abc123/);
   assert.match(body, /fix all valid unresolved review issues/);
   assert.doesNotMatch(body, /\bP1\b/);
   assert.match(body, /discussion_r1/);
@@ -158,8 +152,6 @@ async function selfTest() {
   assert.match(body, /git push origin HEAD:feature\/test/);
   assert.doesNotMatch(body, /@codex review/);
   assert.equal(MAX_AUTOMATED_ROUNDS, 10);
-  assert.equal(wasHeadDelegated(marker(41, "abc123"), "abc123"), true);
-  assert.equal(wasHeadDelegated(headMarker("abc123"), "abc123"), true);
 
   const context = {
     repo: { owner: "owner", repo: "repo" },
@@ -259,9 +251,25 @@ async function selfTest() {
     { body: marker(41, "abc123"), user: { login: "trusted-user" } },
   ];
   await delegateReview({ github, context, core });
-  assert.equal(createdBodies.length, 0, "an existing head marker must prevent delegation");
+  assert.equal(
+    createdBodies.length,
+    1,
+    "a different review on the same head must still be delegated",
+  );
 
   page = 0;
+  github.paginate = async () => [
+    { body: marker(42, "abc123"), user: { login: "trusted-user" } },
+  ];
+  await delegateReview({ github, context, core });
+  assert.equal(
+    createdBodies.length,
+    1,
+    "the same review and head must not be delegated twice",
+  );
+
+  page = 0;
+  createdBodies.length = 0;
   context.payload.pull_request.head = { ref: "feature/next", sha: "def456" };
   github.paginate = async () =>
     Array.from({ length: MAX_AUTOMATED_ROUNDS }, (_, index) => ({
@@ -297,8 +305,6 @@ module.exports = {
   MAX_AUTOMATED_ROUNDS,
   delegateReview,
   delegationBody,
-  headMarker,
   marker,
   unresolvedThreads,
-  wasHeadDelegated,
 };
