@@ -38,7 +38,7 @@ ${threadList}
 - 不需要修复：在原 thread 说明依据并 resolve。
 - 无法安全完成：在原 thread 说明阻塞原因，并保持 unresolved。
 
-需要修改代码时只创建一个提交，然后执行 \`git push origin HEAD:${headRef}\`，禁止 force-push。推送成功后，在每个原 thread 下分别回复提交和验证依据，再 resolve；不要创建新 PR，也不要另发起复审请求。`;
+需要修改代码时只创建一个提交，然后执行 \`git push origin HEAD:${headRef}\`，禁止 force-push。推送成功后，仅对已完成修复或确认不需要修复的 thread 回复提交与验证依据并 resolve；无法安全完成的 thread 回复阻塞原因并保持 unresolved。不要创建新 PR，也不要另发起复审请求。`;
 }
 
 async function unresolvedThreads(github, owner, repo, pullNumber, reviewId, reviewer) {
@@ -152,9 +152,9 @@ async function selfTest() {
   assert.match(body, /discussion_r1/);
   assert.match(body, /Expected head: `abc123`/);
   assert.match(body, /最小修复并验证/);
-  assert.match(body, /每个原 thread 下分别回复/);
+  assert.match(body, /仅对已完成修复或确认不需要修复的 thread.*resolve/);
   assert.match(body, /说明依据并 resolve/);
-  assert.match(body, /保持 unresolved/);
+  assert.match(body, /无法安全完成的 thread 回复阻塞原因并保持 unresolved/);
   assert.match(body, /git push origin HEAD:feature\/test/);
   assert.doesNotMatch(body, /@codex review/);
   assert.equal(MAX_AUTOMATED_ROUNDS, 10);
