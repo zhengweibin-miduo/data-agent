@@ -1256,3 +1256,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: 用户触发 Codex 修复 CI
+
+**Date**: 2026-07-28
+**Task**: 用户触发 Codex 修复 CI
+**Branch**: `feature/codex-fix-ci-trigger-20260728`
+
+### Summary
+
+新增 /codex-fix-ci 用户触发 workflow，校验双白名单、当前 PR/head 的失败 Actions run、幂等与轮次上限，并要求 Codex 单提交推送回原 PR 分支。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `abdcdab` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
