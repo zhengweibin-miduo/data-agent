@@ -1,5 +1,6 @@
 """数据同步值编码和主键身份的确定性检查。"""
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -37,3 +38,14 @@ def test_row_value_codec_and_primary_key_are_stable() -> None:
         {"tenant_id": "a", "order_id": 7},
     )
     check_equal("复合主键身份稳定", first, second)
+
+
+def test_json_row_value_codec_returns_bindable_canonical_text() -> None:
+    """嵌套 MySQL JSON 值编码后可恢复为驱动可绑定的规范文本。"""
+    value = {"nested": [1, None, {"enabled": True}], "name": "示例"}
+    encoded = encode_row_value(value)
+    decoded = decode_row_value(encoded)
+    check_equal("JSON 解码结果可由 MySQL JSON 列接收", isinstance(decoded, str), True)
+    if not isinstance(decoded, str):
+        raise AssertionError("JSON codec 必须返回可绑定文本")
+    check_equal("JSON 嵌套值语义可逆", json.loads(decoded), value)

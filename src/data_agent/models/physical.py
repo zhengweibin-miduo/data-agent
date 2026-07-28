@@ -29,6 +29,10 @@ class PhysicalTable(ContractModel):
     qualified_name: str = Field(description="限定名称。")
     comment: str | None = Field(default=None, description="对象注释。")
     columns: list[PhysicalColumn] = Field(description="列列表。")
+    primary_key: list[str] = Field(
+        default_factory=list,
+        description="按 DDL 声明顺序排列的主键字段名称。",
+    )
 
 
 class PhysicalSchema(ContractModel):

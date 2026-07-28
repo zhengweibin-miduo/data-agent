@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from contextlib import suppress
+from typing import Awaitable, TypeVar
 
 from loguru import logger
 
@@ -19,6 +21,12 @@ from data_agent.data_sync.schema_sync import DWSchemaSynchronizer
 from data_agent.errors import DataAgentError
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import DataSyncSettings
+
+_T = TypeVar("_T")
+
+
+class LeaseLostError(RuntimeError):
+    """任务在长步骤执行期间失去租约所有权。"""
 
 
 class DataSyncService:
@@ -49,6 +57,9 @@ class DataSyncService:
         """分类一次任务失败并持久化退避、冲突或暂停。"""
         try:
             await self._process(task)
+        except LeaseLostError:
+            # 另一 worker 已取得所有权；旧持有者不得再尝试结算或消耗重试预算。
+            logger.warning("DW 增量同步任务租约已失效，当前步骤已安全让渡")
         except DataAgentError as error:
             if error.code == "dw_primary_key_conflict":
                 logger.warning("DW 增量同步检测到跨数据源主键冲突，任务已暂停等待处理")
@@ -80,7 +91,9 @@ class DataSyncService:
             await self._synchronize_schema(task)
             return
         if task.phase == SyncPhase.BUFFERING:
-            coordinate = await source.current_coordinate()
+            coordinate = await self._with_lease_heartbeat(
+                task, source.current_coordinate()
+            )
             async with MySQLDatabase.session() as session:
                 repository = DataSyncRepository(session)
                 if not await repository.record_snapshot(task, coordinate):
@@ -90,20 +103,26 @@ class DataSyncService:
                 await repository.settle_phase(task, SyncPhase.BACKFILLING)
             return
         if task.phase == SyncPhase.BACKFILLING:
-            await self._capture(task, source)
-            rows = await read_backfill_batch(
-                source.engine,
-                task.desired,
-                after_key=task.last_backfill_key,
-                limit=self._settings.backfill_batch_size,
+            await self._with_lease_heartbeat(task, self._capture(task, source))
+            rows = await self._with_lease_heartbeat(
+                task,
+                read_backfill_batch(
+                    source.engine,
+                    task.desired,
+                    after_key=task.last_backfill_key,
+                    limit=self._settings.backfill_batch_size,
+                ),
             )
             async with MySQLDatabase.session() as session:
                 if rows:
-                    await apply_backfill_batch(
-                        session,
+                    await self._with_lease_heartbeat(
                         task,
-                        rows,
-                        dw_database=self._settings.dw_database,
+                        apply_backfill_batch(
+                            session,
+                            task,
+                            rows,
+                            dw_database=self._settings.dw_database,
+                        ),
                     )
                     await DataSyncRepository(session).settle_phase(
                         task, SyncPhase.BACKFILLING
@@ -116,18 +135,26 @@ class DataSyncService:
                 await asyncio.sleep(self._settings.backfill_interval_seconds)
             return
         if task.phase in (SyncPhase.REPLAYING, SyncPhase.STREAMING):
-            await self._capture(task, source)
+            await self._with_lease_heartbeat(task, self._capture(task, source))
             async with MySQLDatabase.session() as session:
                 events = await DataSyncRepository(session).read_events(task.id, limit=1)
             if events:
                 async with MySQLDatabase.session() as session:
-                    await apply_buffered_event(
-                        session,
+                    await self._with_lease_heartbeat(
                         task,
-                        events[0],
-                        dw_database=self._settings.dw_database,
+                        apply_buffered_event(
+                            session,
+                            task,
+                            events[0],
+                            dw_database=self._settings.dw_database,
+                        ),
                     )
-                    await DataSyncRepository(session).settle_phase(task, task.phase)
+                    repository = DataSyncRepository(session)
+                    await repository.cleanup_events(
+                        task.id,
+                        limit=self._settings.event_cleanup_batch_size,
+                    )
+                    await repository.settle_phase(task, task.phase)
                 return
             next_phase = (
                 SyncPhase.STREAMING if task.phase == SyncPhase.REPLAYING else task.phase
@@ -151,10 +178,13 @@ class DataSyncService:
     async def _synchronize_schema(self, task: ClaimedSyncTask) -> None:
         """应用 DW 安全结构演进并切换到位点捕获阶段。"""
         async with MySQLDatabase.session() as session:
-            await DWSchemaSynchronizer(
-                session,
-                database=self._settings.dw_database,
-            ).synchronize(task.desired)
+            await self._with_lease_heartbeat(
+                task,
+                DWSchemaSynchronizer(
+                    session,
+                    database=self._settings.dw_database,
+                ).synchronize(task.desired),
+            )
             await DataSyncRepository(session).settle_phase(task, SyncPhase.BUFFERING)
 
     async def _capture(
@@ -197,6 +227,35 @@ class DataSyncService:
             )
         if phase == SyncPhase.DEAD:
             logger.error("DW 增量同步重试预算耗尽，任务已进入死信等待处理")
+
+    async def _with_lease_heartbeat(
+        self,
+        task: ClaimedSyncTask,
+        operation: Awaitable[_T],
+    ) -> _T:
+        """执行长步骤，并按租期三分之一使用数据库时钟续租。"""
+        running = asyncio.ensure_future(operation)
+        interval = max(0.1, self._settings.claim_lease_seconds / 3)
+        try:
+            while True:
+                done, _ = await asyncio.wait({running}, timeout=interval)
+                if done:
+                    return await running
+                async with MySQLDatabase.session() as session:
+                    renewed = await DataSyncRepository(session).renew_lease(
+                        task.id,
+                        task.lease_token,
+                        lease_seconds=self._settings.claim_lease_seconds,
+                    )
+                if not renewed:
+                    running.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await running
+                    raise LeaseLostError("同步任务租约已失效")
+        except BaseException:
+            if not running.done():
+                running.cancel()
+            raise
 
     async def _hold(
         self,

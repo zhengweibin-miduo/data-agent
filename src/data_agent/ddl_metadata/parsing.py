@@ -49,15 +49,15 @@ def _table_comment(create: exp.Create) -> str | None:
 
 def _constraint_column_names(
     schema: exp.Schema,
-) -> tuple[set[str], set[str]]:
+) -> tuple[list[str], set[str]]:
     """提取表级主键与外键列名。"""
-    primary_keys: set[str] = set()
+    primary_keys: list[str] = []
     foreign_keys: set[str] = set()
     for item in schema.expressions:
         expressions = item.expressions if isinstance(item, exp.Constraint) else [item]
         for constraint in expressions:
             if isinstance(constraint, exp.PrimaryKey):
-                primary_keys.update(
+                primary_keys.extend(
                     identifier.name.casefold()
                     for identifier in constraint.expressions
                     if isinstance(identifier, exp.Identifier)
@@ -114,6 +114,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     )
     identifier = table_id(source, qualified_name.casefold())
     table_primary, table_foreign = _constraint_column_names(schema)
+    table_primary_set = set(table_primary)
     # 步骤二：逐列执行名称去重、角色优先级和类型完整性校验，再投影为物理列模型。
     columns: list[PhysicalColumn] = []
     seen_columns: set[str] = set()
@@ -130,7 +131,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
             )
         seen_columns.add(normalized_name)
         role = _inline_role(item)
-        if normalized_name in table_primary:
+        if normalized_name in table_primary_set:
             role = "primary_key"
         elif normalized_name in table_foreign and role != "primary_key":
             role = "foreign_key"
@@ -158,7 +159,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
             "parse_ddl",
             f"表 {qualified_name} 未定义列",
         )
-    unknown_keys = (table_primary | table_foreign) - seen_columns
+    unknown_keys = (table_primary_set | table_foreign) - seen_columns
     if unknown_keys:
         raise DataAgentError(
             "unknown_constraint_column",
@@ -173,6 +174,19 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
         qualified_name=qualified_name,
         comment=_table_comment(create),
         columns=columns,
+        primary_key=(
+            [
+                column.name
+                for name in table_primary
+                for column in columns
+                if column.name.casefold() == name
+            ]
+            or [
+                column.name
+                for column in columns
+                if column.structural_role == "primary_key"
+            ]
+        ),
     )
 
 

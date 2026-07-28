@@ -148,6 +148,15 @@ def encode_row_value(value: object) -> EncodedValue:
         return {"$timedelta_microseconds": str(value // timedelta(microseconds=1))}
     if isinstance(value, bytes):
         return {"$binary": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, (dict, list)):
+        return {
+            "$json": json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        }
     raise TypeError(f"不支持的 MySQL 行值类型：{type(value).__name__}")
 
 
@@ -167,6 +176,9 @@ def decode_row_value(value: EncodedValue) -> object:
         return timedelta(microseconds=int(value["$timedelta_microseconds"]))
     if "$binary" in value:
         return base64.b64decode(value["$binary"])
+    if "$json" in value:
+        # 动态 SQL 使用原生绑定参数；规范 JSON 文本可由 MySQL JSON 列直接接收。
+        return value["$json"]
     raise ValueError("未知的数据同步行值编码")
 
 
@@ -216,7 +228,7 @@ def build_desired_tables(
                 "同步表缺少已验证的语义表定义",
                 details={"table": table.qualified_name},
             )
-        primary_key = [
+        primary_key = table.primary_key or [
             column.name
             for column in table.columns
             if column.structural_role == "primary_key"
@@ -240,7 +252,11 @@ def build_desired_tables(
                         id=column.id,
                         name=column.name,
                         data_type=column.data_type,
-                        nullable=column.nullable,
+                        nullable=(
+                            False
+                            if column.structural_role == "primary_key"
+                            else column.nullable
+                        ),
                     )
                     for column in table.columns
                 ],

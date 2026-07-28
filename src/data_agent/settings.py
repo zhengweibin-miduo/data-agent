@@ -146,10 +146,12 @@ class DataSyncSourceSettings(SettingsModel):
     @field_validator("url")
     @classmethod
     def validate_mysql_url(cls, value: str) -> str:
-        """校验源连接使用 MySQL 协议且包含数据库名。"""
+        """校验源连接使用受支持的异步 MySQL 驱动且包含数据库名。"""
         url = make_url(value)
-        if not url.drivername.startswith("mysql") or url.database is None:
-            raise ValueError("data_sync.sources.*.url 必须是包含数据库名的 MySQL 地址")
+        if url.drivername != "mysql+asyncmy" or url.database is None:
+            raise ValueError(
+                "data_sync.sources.*.url 必须是包含数据库名的 mysql+asyncmy 地址"
+            )
         return value
 
 

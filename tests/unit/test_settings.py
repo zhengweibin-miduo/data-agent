@@ -113,6 +113,28 @@ def test_default_app_config_loads_expected_values() -> None:
         app_config.redis.event_stream_max_events,
         256,
     )
+
+
+def test_data_sync_source_rejects_synchronous_mysql_driver() -> None:
+    """CDC 查询引擎只接受项目安装的 asyncmy 异步 dialect。"""
+    payload = app_config.model_dump(mode="json")
+    payload["data_sync"]["sources"]["source_demo"]["url"] = (
+        "mysql+pymysql://user:password@localhost/business"
+    )
+    try:
+        AppSettings.model_validate(payload)
+    except ValidationError as error:
+        check_condition(
+            "同步 MySQL driver 被明确拒绝",
+            "mysql+asyncmy" in str(error),
+            actual=str(error),
+        )
+    else:
+        fail_check(
+            "同步 MySQL driver 被拒绝",
+            actual="mysql+pymysql",
+            expected="mysql+asyncmy",
+        )
     check_condition(
         "test_default_app_config_loads_expected_values 结构化输出方式",
         app_config.llm.structured_output_method in {"json_schema", "function_calling"},

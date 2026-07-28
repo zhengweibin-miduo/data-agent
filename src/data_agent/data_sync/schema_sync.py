@@ -47,6 +47,8 @@ class CurrentTable:
 
     columns: tuple[CurrentColumn, ...]
     primary_key: tuple[str, ...]
+    engine: str = "InnoDB"
+    unique_indexes: tuple[str, ...] = ()
 
 
 class DWSchemaSynchronizer:
@@ -93,6 +95,17 @@ class DWSchemaSynchronizer:
         column_rows = columns_result.mappings().all()
         if not column_rows:
             return None
+        table_result = await self._session.execute(
+            text(
+                """
+                SELECT ENGINE
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = :database AND TABLE_NAME = :table_name
+                """
+            ),
+            {"database": self._database, "table_name": table_name},
+        )
+        engine = table_result.scalar_one()
         primary_result = await self._session.execute(
             text(
                 """
@@ -102,6 +115,20 @@ class DWSchemaSynchronizer:
                   AND TABLE_NAME = :table_name
                   AND INDEX_NAME = 'PRIMARY'
                 ORDER BY SEQ_IN_INDEX
+                """
+            ),
+            {"database": self._database, "table_name": table_name},
+        )
+        unique_result = await self._session.execute(
+            text(
+                """
+                SELECT DISTINCT INDEX_NAME
+                FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA = :database
+                  AND TABLE_NAME = :table_name
+                  AND NON_UNIQUE = 0
+                  AND INDEX_NAME <> 'PRIMARY'
+                ORDER BY INDEX_NAME
                 """
             ),
             {"database": self._database, "table_name": table_name},
@@ -116,6 +143,8 @@ class DWSchemaSynchronizer:
                 for row in column_rows
             ),
             primary_key=tuple(str(row[0]) for row in primary_result),
+            engine=str(engine),
+            unique_indexes=tuple(str(name) for name in unique_result.scalars()),
         )
 
 
@@ -139,6 +168,15 @@ def plan_schema_changes(
             f"({columns}, PRIMARY KEY ({primary_key})) ENGINE=InnoDB "
             "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin"
         ]
+
+    if current.engine.casefold() != "innodb":
+        _raise_conflict(desired.target_table, "目标表必须使用 InnoDB 存储引擎")
+    if current.unique_indexes:
+        _raise_conflict(
+            desired.target_table,
+            "目标表存在会改变主键 upsert 语义的额外唯一索引："
+            + ",".join(current.unique_indexes),
+        )
 
     current_by_name = {column.name: column for column in current.columns}
     desired_by_name = {column.name: column for column in desired.columns}

@@ -83,13 +83,14 @@ class MySQLSourceClient:
         return self._engine
 
     async def check_capabilities(self) -> None:
-        """确认源库开启 ROW Binlog 和 FULL 行镜像。"""
+        """确认源库开启可读取的 ROW Binlog 和 FULL 行镜像。"""
         # 步骤一：只读取服务器能力变量，不查询或记录任何业务行。
         async with self._engine.connect() as connection:
             result = await connection.execute(
                 text(
                     "SELECT @@GLOBAL.binlog_format AS binlog_format, "
-                    "@@GLOBAL.binlog_row_image AS binlog_row_image"
+                    "@@GLOBAL.binlog_row_image AS binlog_row_image, "
+                    "@@GLOBAL.log_bin AS log_bin"
                 )
             )
             row = result.mappings().one()
@@ -98,6 +99,14 @@ class MySQLSourceClient:
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 ROW Binlog")
         if str(row["binlog_row_image"]).upper() != "FULL":
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 FULL Binlog 行镜像")
+        if str(row["log_bin"]).upper() not in {"1", "ON"}:
+            raise SourceCapabilityError(f"数据源 {self.name} 未启用 Binary Logging")
+        try:
+            await self.current_coordinate()
+        except Exception as error:
+            raise SourceCapabilityError(
+                f"数据源 {self.name} 无法读取当前 Binlog 位点"
+            ) from error
 
     async def current_coordinate(self) -> BinlogCoordinate:
         """读取开始历史回填前的当前 Binlog 位点。"""

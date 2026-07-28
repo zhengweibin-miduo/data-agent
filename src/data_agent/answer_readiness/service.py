@@ -4,6 +4,7 @@ from langchain_core.tools import BaseTool
 
 from data_agent.answer_readiness.classifier import AnswerReadinessClassifier
 from data_agent.answer_readiness.models import (
+    AnswerDataDependency,
     AnswerGateDecision,
     AnswerGateResult,
     AnswerTargetCatalog,
@@ -44,11 +45,25 @@ class AnswerReadinessService:
         if not intent.requires_sync_completion:
             return AnswerGateResult(decision=AnswerGateDecision.PROCEED)
         # 步骤三：所有依赖一次性交给只读工具，以 ready 作为唯一分支依据。
+        catalog_sources = {
+            target.target_table: target.sources for target in catalog.targets
+        }
+        dependencies = [
+            AnswerDataDependency(
+                target_table=dependency.target_table,
+                source=source,
+            )
+            for dependency in intent.dependencies
+            for source in (
+                [dependency.source]
+                if dependency.source is not None
+                else catalog_sources[dependency.target_table]
+            )
+        ]
         raw_result = await self._readiness_tool.ainvoke(
             {
                 "dependencies": [
-                    dependency.model_dump(mode="json")
-                    for dependency in intent.dependencies
+                    dependency.model_dump(mode="json") for dependency in dependencies
                 ]
             }
         )

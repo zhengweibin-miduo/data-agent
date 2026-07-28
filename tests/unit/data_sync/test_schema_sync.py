@@ -86,6 +86,41 @@ def test_boolean_alias_matches_mysql_introspection() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("current", "reason"),
+    [
+        (
+            CurrentTable(
+                columns=(CurrentColumn("order_id", "bigint", False),),
+                primary_key=("order_id",),
+                engine="MyISAM",
+            ),
+            "InnoDB",
+        ),
+        (
+            CurrentTable(
+                columns=(CurrentColumn("order_id", "bigint", False),),
+                primary_key=("order_id",),
+                unique_indexes=("uq_email",),
+            ),
+            "额外唯一索引",
+        ),
+    ],
+)
+def test_plan_rejects_non_transactional_or_extra_unique_constraints(
+    current: CurrentTable,
+    reason: str,
+) -> None:
+    """已有目标表必须保持事务原子性和仅主键冲突语义。"""
+    try:
+        plan_schema_changes(database="dw", desired=_desired(), current=current)
+    except DataAgentError as error:
+        check_equal("不兼容目标表错误码", error.code, "dw_schema_conflict")
+        check_condition("错误说明具体不兼容项", reason in str(error), actual=str(error))
+    else:
+        fail_check("不兼容目标表被拒绝", actual=current, expected=reason)
+
+
 def test_plan_adds_and_safely_widens_columns() -> None:
     """已有表只添加缺失列或扩大被支持的字段类型。"""
     missing_column = CurrentTable(

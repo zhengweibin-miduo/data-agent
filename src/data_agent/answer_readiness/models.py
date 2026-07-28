@@ -110,7 +110,7 @@ class DataReadinessToolInput(ContractModel):
 
     dependencies: list[AnswerDataDependency] = Field(
         min_length=1,
-        max_length=20,
+        max_length=1000,
         description="本次回答必须满足的全部 DW 数据依赖。",
     )
 

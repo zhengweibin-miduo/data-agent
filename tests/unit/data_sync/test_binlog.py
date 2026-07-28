@@ -53,6 +53,15 @@ def _event(event_type: type[Any], rows: list[dict[str, object]]) -> object:
             {"id": 1, "amount": 3},
             None,
         ),
+        (
+            _event(
+                WriteRowsEvent,
+                [{"values": {"id": 1, "payload": {"items": [1, None]}}}],
+            ),
+            RowOperation.INSERT,
+            None,
+            {"id": 1, "payload": {"$json": '{"items":[1,null]}'}},
+        ),
     ],
 )
 def test_decode_rows_event(
