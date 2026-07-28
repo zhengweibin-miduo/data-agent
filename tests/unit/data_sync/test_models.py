@@ -49,3 +49,20 @@ def test_json_row_value_codec_returns_bindable_canonical_text() -> None:
     if not isinstance(decoded, str):
         raise AssertionError("JSON codec 必须返回可绑定文本")
     check_equal("JSON 嵌套值语义可逆", json.loads(decoded), value)
+
+
+def test_decimal_primary_key_uses_mysql_numeric_equivalence() -> None:
+    """不同 scale 的数值相等 DECIMAL 生成相同 ownership 身份。"""
+    first = canonical_primary_key(["id"], {"id": encode_row_value(Decimal("1.0"))})
+    second = canonical_primary_key(["id"], {"id": encode_row_value(Decimal("1.00"))})
+    check_equal("DECIMAL 主键忽略无意义 scale", first, second)
+
+
+def test_json_scalar_codec_preserves_json_identity() -> None:
+    """JSON 标量与普通 SQL 标量使用不同的可逆编码。"""
+    for value in ("paid", 3, True, None):
+        encoded = encode_row_value(value, json_value=True)
+        decoded = decode_row_value(encoded)
+        if not isinstance(decoded, str):
+            raise AssertionError("JSON 标量必须恢复为可绑定 JSON 文本")
+        check_equal("JSON 标量语义可逆", json.loads(decoded), value)

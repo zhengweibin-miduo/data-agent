@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -38,9 +39,7 @@ async def read_backfill_batch(
     preparer = engine.dialect.identifier_preparer
     quote = preparer.quote
     columns = ", ".join(quote(item.name) for item in desired.columns)
-    qualified = (
-        f"{quote(desired.source_schema)}.{quote(desired.source_table)}"
-    )
+    qualified = f"{quote(desired.source_schema)}.{quote(desired.source_table)}"
     order_by = ", ".join(quote(name) for name in desired.primary_key)
     parameters: dict[str, object] = {"limit": limit}
     where = ""
@@ -53,14 +52,10 @@ async def read_backfill_batch(
         )
         where = f" WHERE ({names}) > ({placeholders})"
         parameters.update(
-            {
-                f"backfill_key_{index}": value
-                for index, value in enumerate(after_key)
-            }
+            {f"backfill_key_{index}": value for index, value in enumerate(after_key)}
         )
     statement = text(
-        f"SELECT {columns} FROM {qualified}{where} "
-        f"ORDER BY {order_by} LIMIT :limit"
+        f"SELECT {columns} FROM {qualified}{where} ORDER BY {order_by} LIMIT :limit"
     )
     async with engine.connect() as connection:
         result = await connection.execute(statement, parameters)
@@ -86,6 +81,30 @@ async def apply_backfill_batch(
     if not await repository.record_backfill_cursor(task, last_key):
         raise RuntimeError("回填批次完成后同步任务租约已失效")
     return last_key
+
+
+async def reset_source_rows(
+    session: AsyncSession,
+    task: ClaimedSyncTask,
+    *,
+    dw_database: str,
+) -> None:
+    """新 generation 建立基线前删除该来源旧行及归属。"""
+    repository = DataSyncRepository(session)
+    documents = await repository.source_key_documents(
+        target_table=task.desired.target_table,
+        source=task.desired.source,
+    )
+    for document in documents:
+        encoded = json.loads(document)
+        row = {
+            name: decode_row_value(encoded[name]) for name in task.desired.primary_key
+        }
+        await session.execute(_delete_statement(task.desired, row, dw_database))
+    await repository.delete_source_key_owners(
+        target_table=task.desired.target_table,
+        source=task.desired.source,
+    )
 
 
 async def apply_buffered_event(

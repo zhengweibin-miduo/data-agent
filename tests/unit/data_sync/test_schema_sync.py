@@ -153,6 +153,47 @@ def test_plan_adds_and_safely_widens_columns() -> None:
         ["ALTER TABLE dw.fact_order MODIFY COLUMN amount DECIMAL(12, 2) NOT NULL"],
     )
 
+    already_wider = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "decimal(18,4)", False),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        "共享目标已更宽时无需缩窄",
+        plan_schema_changes(database="dw", desired=_desired(), current=already_wider),
+        [],
+    )
+
+
+def test_plan_rejects_non_binary_string_primary_key_collation() -> None:
+    """已有字符串主键必须与字节 ownership 使用相同等价语义。"""
+    desired = _desired()
+    desired.columns[0] = DesiredColumn(
+        id="order_id", name="order_id", data_type="VARCHAR(64)", nullable=False
+    )
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "varchar(64)", False, "utf8mb4_general_ci"),
+            CurrentColumn("amount", "decimal(12,2)", False),
+        ),
+        primary_key=("order_id",),
+    )
+    with pytest.raises(DataAgentError, match="utf8mb4_0900_bin"):
+        plan_schema_changes(database="dw", desired=desired, current=current)
+
+
+def test_enum_literals_keep_original_case() -> None:
+    """生成 DDL 时不改写 ENUM 业务字面值。"""
+    desired = _desired(amount_type="ENUM('pending','Done')")
+    statements = plan_schema_changes(database="dw", desired=desired, current=None)
+    check_condition(
+        "ENUM 字面量保留大小写",
+        "'pending'" in statements[0] and "'Done'" in statements[0],
+        actual=statements[0],
+    )
+
 
 @pytest.mark.parametrize(
     ("current", "desired", "expected"),

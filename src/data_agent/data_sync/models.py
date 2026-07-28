@@ -132,12 +132,21 @@ class KeyConflict(ContractModel):
     contender_source: str = Field(description="尝试覆盖该主键的数据源。")
 
 
-def encode_row_value(value: object) -> EncodedValue:
+def encode_row_value(value: object, *, json_value: bool = False) -> EncodedValue:
     """把 MySQL 行值编码为可逆且稳定的 JSON 值。"""
+    if json_value:
+        return {
+            "$json": json.dumps(
+                value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            )
+        }
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, Decimal):
-        return {"$decimal": str(value)}
+        normalized = value.normalize()
+        if normalized == 0:
+            normalized = Decimal(0)
+        return {"$decimal": format(normalized, "f")}
     if isinstance(value, datetime):
         return {"$datetime": value.isoformat(timespec="microseconds")}
     if isinstance(value, date):

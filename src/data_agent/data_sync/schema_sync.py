@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -39,6 +40,7 @@ class CurrentColumn:
     name: str
     data_type: str
     nullable: bool
+    collation: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,32 +61,49 @@ class DWSchemaSynchronizer:
         self._session = session
         self._database = database
 
-    async def synchronize(self, desired: DesiredSyncTable) -> None:
+    async def synchronize(
+        self,
+        desired: DesiredSyncTable,
+        *,
+        before_ddl: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
         """重查当前结构并执行创建、加列或安全扩宽。"""
-        # 步骤一：从 information_schema 读取当前权威结构。
-        current = await self.inspect(desired.target_table)
-        # 步骤二：只执行确定性的加法式 DDL；MySQL 可在每条语句后自动提交。
-        for statement in plan_schema_changes(
-            database=self._database,
-            desired=desired,
-            current=current,
-        ):
-            await self._session.execute(text(statement))
-        # 步骤三：重新读取并要求最终结构完全满足同一期望状态。
-        remaining = plan_schema_changes(
-            database=self._database,
-            desired=desired,
-            current=await self.inspect(desired.target_table),
+        lock_name = _schema_lock_name(self._database, desired.target_table)
+        acquired = await self._session.scalar(
+            text("SELECT GET_LOCK(:lock_name, 10)"), {"lock_name": lock_name}
         )
-        if remaining:
-            _raise_conflict(desired.target_table, "DDL 执行后目标结构仍未收敛")
+        if acquired != 1:
+            raise RuntimeError("无法取得 DW 结构 generation 串行锁")
+        try:
+            # 步骤一：从 information_schema 读取当前权威结构。
+            current = await self.inspect(desired.target_table)
+            # 步骤二：每条自动提交 DDL 前重新确认 generation authority。
+            for statement in plan_schema_changes(
+                database=self._database,
+                desired=desired,
+                current=current,
+            ):
+                if before_ddl is not None and not await before_ddl():
+                    raise RuntimeError("执行 DW DDL 前同步任务 generation 已失效")
+                await self._session.execute(text(statement))
+            remaining = plan_schema_changes(
+                database=self._database,
+                desired=desired,
+                current=await self.inspect(desired.target_table),
+            )
+            if remaining:
+                _raise_conflict(desired.target_table, "DDL 执行后目标结构仍未收敛")
+        finally:
+            await self._session.execute(
+                text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
+            )
 
     async def inspect(self, table_name: str) -> CurrentTable | None:
         """读取一张 DW 表的字段与主键结构。"""
         columns_result = await self._session.execute(
             text(
                 """
-                SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE
+                SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLLATION_NAME
                 FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA = :database AND TABLE_NAME = :table_name
                 ORDER BY ORDINAL_POSITION
@@ -139,6 +158,11 @@ class DWSchemaSynchronizer:
                     name=str(row["COLUMN_NAME"]),
                     data_type=str(row["COLUMN_TYPE"]),
                     nullable=str(row["IS_NULLABLE"]) == "YES",
+                    collation=(
+                        str(row["COLLATION_NAME"])
+                        if row["COLLATION_NAME"] is not None
+                        else None
+                    ),
                 )
                 for row in column_rows
             ),
@@ -189,6 +213,18 @@ def plan_schema_changes(
     if current.primary_key != tuple(desired.primary_key):
         _raise_conflict(desired.target_table, "目标表主键与已接受 DDL 不一致")
 
+    for name in desired.primary_key:
+        desired_key = desired_by_name[name]
+        current_key = current_by_name[name]
+        if (
+            _is_text_type(desired_key.data_type)
+            and (current_key.collation or "").casefold() != "utf8mb4_0900_bin"
+        ):
+            _raise_conflict(
+                desired.target_table,
+                f"字符串主键 {name} 必须使用 utf8mb4_0900_bin 排序规则",
+            )
+
     changes: list[str] = []
     for desired_column in desired.columns:
         current_column = current_by_name.get(desired_column.name)
@@ -204,6 +240,8 @@ def plan_schema_changes(
         desired_type = _canonical_type(desired_column.data_type)
         current_type = _normalize_type(current_column.data_type)
         if current_type == desired_type:
+            continue
+        if is_safe_widening(desired_type, current_type):
             continue
         if not is_safe_widening(current_type, desired_type):
             _raise_conflict(
@@ -288,10 +326,52 @@ def _canonical_type(data_type: str) -> str:
 
 def _normalize_type(data_type: str) -> str:
     """规范化 information_schema 与 SQLGlot 的类型文本。"""
-    normalized = re.sub(r"\s+", " ", data_type.strip().upper())
+    raw = data_type.strip()
+    if re.match(r"(?i)^(ENUM|SET)\s*\(", raw):
+        normalized = _normalize_literal_type(raw)
+    else:
+        normalized = re.sub(r"\s+", " ", raw.upper())
     if normalized in {"BOOL", "BOOLEAN", "TINYINT(1)"}:
         return "BOOLEAN"
     return normalized
+
+
+def _normalize_literal_type(data_type: str) -> str:
+    """仅规范 ENUM/SET 引号外文本，完整保留业务字面值。"""
+    result: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for character in data_type:
+        if quote is not None:
+            result.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+        elif character in {"'", '"'}:
+            quote = character
+            result.append(character)
+        elif character.isspace():
+            continue
+        else:
+            result.append(character.upper())
+    return "".join(result)
+
+
+def _is_text_type(data_type: str) -> bool:
+    """判断主键类型是否受字符排序规则影响。"""
+    return _normalize_type(data_type).split("(", 1)[0] in {
+        "CHAR",
+        "VARCHAR",
+        "TEXT",
+        "TINYTEXT",
+        "MEDIUMTEXT",
+        "LONGTEXT",
+        "ENUM",
+        "SET",
+    }
 
 
 def _type_parts(data_type: str) -> tuple[str, int | None, int | None, bool] | None:
@@ -326,3 +406,8 @@ def _raise_conflict(table_name: str, reason: str) -> None:
         reason,
         details={"table": table_name, "reason": reason},
     )
+
+
+def _schema_lock_name(database: str, table_name: str) -> str:
+    """返回 MySQL 允许长度内稳定的结构串行锁名称。"""
+    return f"data_sync_schema:{database}:{table_name}"[:64]

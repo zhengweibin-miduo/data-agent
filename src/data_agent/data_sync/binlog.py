@@ -7,7 +7,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from pymysql.constants import FIELD_TYPE
 from pymysqlreplication import BinLogStreamReader
+from pymysqlreplication.event import XidEvent
 from pymysqlreplication.row_event import (
     DeleteRowsEvent,
     UpdateRowsEvent,
@@ -36,6 +38,7 @@ class RawRowsEvent(Protocol):
     table: str
     rows: list[Mapping[str, Mapping[str, object]]]
     packet: Any
+    columns: list[Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +167,7 @@ class MySQLSourceClient:
             server_id=self._settings.server_id,
             resume_stream=True,
             blocking=False,
-            only_events=list(_ROW_EVENTS),
+            only_events=[*_ROW_EVENTS, XidEvent],
             only_schemas=[source_schema],
             only_tables=[source_table],
             log_file=start.file,
@@ -184,6 +187,11 @@ class MySQLSourceClient:
                     position=int(stream.log_pos),
                     row_index=0,
                 )
+                if isinstance(raw_event, XidEvent):
+                    tail = coordinate
+                    if len(events) >= limit:
+                        break
+                    continue
                 decoded = decode_rows_event(
                     raw_event,
                     source=self.name,
@@ -194,8 +202,8 @@ class MySQLSourceClient:
                     tail = decoded[-1].coordinate
                 else:
                     tail = coordinate
-                if len(events) >= limit:
-                    break
+                # RowsEvent 可能共享前置 Table_map；达到软上限后继续到事务 XID
+                # 边界，确保下一轮可从具备独立解码上下文的位置恢复。
             if (
                 not events
                 and stream.log_file is not None
@@ -247,16 +255,30 @@ def decode_rows_event(
                     row_index=coordinate.row_index + row_index,
                 ),
                 operation=operation,
-                before=_encode_row(row[before_key]) if before_key is not None else None,
-                after=_encode_row(row[after_key]) if after_key is not None else None,
+                before=_encode_row(row[before_key], event)
+                if before_key is not None
+                else None,
+                after=_encode_row(row[after_key], event)
+                if after_key is not None
+                else None,
             )
         )
     return decoded
 
 
-def _encode_row(row: Mapping[str, object]) -> dict[str, EncodedValue]:
+def _encode_row(
+    row: Mapping[str, object], event: RawRowsEvent
+) -> dict[str, EncodedValue]:
     """编码第三方事件中的一行值。"""
-    return {name: encode_row_value(value) for name, value in row.items()}
+    json_columns = {
+        str(column.name)
+        for column in getattr(event, "columns", ())
+        if getattr(column, "type", None) == FIELD_TYPE.JSON
+    }
+    return {
+        name: encode_row_value(value, json_value=name in json_columns)
+        for name, value in row.items()
+    }
 
 
 def _replication_connection_settings(

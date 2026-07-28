@@ -25,6 +25,7 @@ from data_agent.data_sync.tables import (
     data_sync_key_owner,
     data_sync_task,
 )
+from data_agent.settings import app_config
 
 _RUNNABLE_PHASES = (
     SyncPhase.PENDING_SCHEMA.value,
@@ -74,63 +75,80 @@ class DataSyncRepository:
     async def upsert_desired(self, desired_tables: Sequence[DesiredSyncTable]) -> None:
         """幂等写入 Meta 快照派生的当前同步期望状态。"""
         for desired in desired_tables:
-            desired_hash = desired.desired_hash()
-            identity = self._identity_predicate(desired)
-            changed_task_ids = select(data_sync_task.c.id).where(
-                identity,
-                data_sync_task.c.desired_hash != desired_hash,
+            lock_name = (
+                f"data_sync_schema:{app_config.data_sync.dw_database}:"
+                f"{desired.target_table}"
+            )[:64]
+            acquired = await self._session.scalar(
+                text("SELECT GET_LOCK(:lock_name, 10)"), {"lock_name": lock_name}
             )
-            # 步骤一：结构身份变化时删除旧 generation 的缓冲事件。
-            await self._session.execute(
-                delete(data_sync_event).where(
-                    data_sync_event.c.task_id.in_(changed_task_ids)
+            if acquired != 1:
+                raise RuntimeError("无法取得 DW 结构 generation 串行锁")
+            try:
+                await self._upsert_one_desired(desired)
+            finally:
+                await self._session.execute(
+                    text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
                 )
+
+    async def _upsert_one_desired(self, desired: DesiredSyncTable) -> None:
+        """在目标表 generation 串行锁内更新一项期望。"""
+        desired_hash = desired.desired_hash()
+        identity = self._identity_predicate(desired)
+        changed_task_ids = select(data_sync_task.c.id).where(
+            identity,
+            data_sync_task.c.desired_hash != desired_hash,
+        )
+        # 步骤一：结构身份变化时删除旧 generation 的缓冲事件。
+        await self._session.execute(
+            delete(data_sync_event).where(
+                data_sync_event.c.task_id.in_(changed_task_ids)
             )
-            # 步骤二：清空旧基线、游标和位点，从新 generation 完整回填。
-            await self._session.execute(
-                update(data_sync_task)
-                .where(identity, data_sync_task.c.desired_hash != desired_hash)
-                .values(
-                    desired_json=desired.model_dump(mode="json"),
-                    desired_hash=desired_hash,
-                    phase=SyncPhase.PENDING_SCHEMA.value,
-                    attempts=0,
-                    available_at=func.now(),
-                    lease_token=None,
-                    lease_expires_at=None,
-                    last_error_type=None,
-                    snapshot_file=None,
-                    snapshot_position=None,
-                    captured_file=None,
-                    captured_position=None,
-                    captured_row_index=None,
-                    applied_file=None,
-                    applied_position=None,
-                    applied_row_index=None,
-                    last_backfill_key=None,
-                    updated_at=func.now(),
-                )
-            )
-            # 步骤三：插入首次出现的期望；重复快照保留当前阶段、租约和位点。
-            statement = insert(data_sync_task).values(
-                source=desired.source,
-                source_schema=desired.source_schema,
-                source_table=desired.source_table,
-                target_table=desired.target_table,
+        )
+        # 步骤二：清空旧基线、游标和位点，从新 generation 完整回填。
+        await self._session.execute(
+            update(data_sync_task)
+            .where(identity, data_sync_task.c.desired_hash != desired_hash)
+            .values(
                 desired_json=desired.model_dump(mode="json"),
                 desired_hash=desired_hash,
                 phase=SyncPhase.PENDING_SCHEMA.value,
+                attempts=0,
+                available_at=func.now(),
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type=None,
+                snapshot_file=None,
+                snapshot_position=None,
+                captured_file=None,
+                captured_position=None,
+                captured_row_index=None,
+                applied_file=None,
+                applied_position=None,
+                applied_row_index=None,
+                last_backfill_key=None,
+                updated_at=func.now(),
             )
-            await self._session.execute(
-                statement.on_duplicate_key_update(
-                    desired_json=func.if_(
-                        data_sync_task.c.desired_hash
-                        == statement.inserted.desired_hash,
-                        statement.inserted.desired_json,
-                        data_sync_task.c.desired_json,
-                    )
+        )
+        # 步骤三：插入首次出现的期望；重复快照保留当前阶段、租约和位点。
+        statement = insert(data_sync_task).values(
+            source=desired.source,
+            source_schema=desired.source_schema,
+            source_table=desired.source_table,
+            target_table=desired.target_table,
+            desired_json=desired.model_dump(mode="json"),
+            desired_hash=desired_hash,
+            phase=SyncPhase.PENDING_SCHEMA.value,
+        )
+        await self._session.execute(
+            statement.on_duplicate_key_update(
+                desired_json=func.if_(
+                    data_sync_task.c.desired_hash == statement.inserted.desired_hash,
+                    statement.inserted.desired_json,
+                    data_sync_task.c.desired_json,
                 )
             )
+        )
 
     async def claim_tasks(
         self,
@@ -218,6 +236,34 @@ class DataSyncRepository:
             )
         )
         return bool(_rowcount(result))
+
+    async def has_authority(self, task: ClaimedSyncTask) -> bool:
+        """使用数据库时钟确认 generation 与租约仍由当前 worker 持有。"""
+        result = await self._session.execute(
+            select(data_sync_task.c.id).where(self._task_authority(task)).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def source_key_documents(
+        self, *, target_table: str, source: str
+    ) -> list[str]:
+        """读取一个来源曾拥有的全部目标主键文档。"""
+        result = await self._session.execute(
+            select(data_sync_key_owner.c.primary_key_json).where(
+                data_sync_key_owner.c.target_table == target_table,
+                data_sync_key_owner.c.source == source,
+            )
+        )
+        return [str(value) for value in result.scalars()]
+
+    async def delete_source_key_owners(self, *, target_table: str, source: str) -> None:
+        """在新基线建立前删除一个来源的旧主键归属。"""
+        await self._session.execute(
+            delete(data_sync_key_owner).where(
+                data_sync_key_owner.c.target_table == target_table,
+                data_sync_key_owner.c.source == source,
+            )
+        )
 
     async def settle_phase(
         self,

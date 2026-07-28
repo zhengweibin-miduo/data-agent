@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from loguru import logger
+from sqlalchemy.exc import SQLAlchemyError
 
 from data_agent.data_sync.binlog import MySQLSourceClient, close_sources
 from data_agent.data_sync.service import DataSyncService
@@ -35,7 +36,12 @@ async def run_worker() -> None:
         logger.info("数据同步进程启动成功，开始消费 DW 结构与 Binlog 任务")
         # 步骤二：每轮只执行有界任务步骤；空闲时按配置暂停，避免忙轮询。
         while True:
-            processed = await service.dispatch_once()
+            try:
+                processed = await service.dispatch_once()
+            except (ConnectionError, OSError, TimeoutError, SQLAlchemyError):
+                logger.exception("数据同步控制库轮询失败，将在退避后重试")
+                await asyncio.sleep(app_config.data_sync.poll_interval_seconds)
+                continue
             if processed == 0:
                 await asyncio.sleep(app_config.data_sync.poll_interval_seconds)
     finally:

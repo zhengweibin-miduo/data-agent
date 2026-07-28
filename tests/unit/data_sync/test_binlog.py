@@ -1,6 +1,7 @@
 """MySQL ROW Binlog 事件解码检查。"""
 
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,7 +22,26 @@ def _event(event_type: type[Any], rows: list[dict[str, object]]) -> object:
     setattr(event, "schema", "business")
     setattr(event, "table", "fact_order")
     setattr(event, "_RowsEvent__rows", rows)
+    setattr(event, "columns", [])
     return event
+
+
+def test_decode_json_scalar_uses_column_metadata() -> None:
+    """Binlog JSON 列的顶层标量不会退化为普通 SQL 标量。"""
+    from pymysql.constants import FIELD_TYPE
+
+    event = _event(WriteRowsEvent, [{"values": {"id": 1, "payload": None}}])
+    setattr(event, "columns", [SimpleNamespace(name="payload", type=FIELD_TYPE.JSON)])
+    decoded = decode_rows_event(
+        event,
+        source="source_demo",
+        coordinate=BinlogCoordinate(file="mysql-bin.000001", position=120, row_index=0),
+    )
+    check_equal(
+        "JSON null 使用独立标签",
+        decoded[0].after,
+        {"id": 1, "payload": {"$json": "null"}},
+    )
 
 
 @pytest.mark.parametrize(

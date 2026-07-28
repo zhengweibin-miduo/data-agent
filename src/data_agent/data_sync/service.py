@@ -13,6 +13,7 @@ from data_agent.data_sync.backfill import (
     apply_backfill_batch,
     apply_buffered_event,
     read_backfill_batch,
+    reset_source_rows,
 )
 from data_agent.data_sync.binlog import MySQLSourceClient
 from data_agent.data_sync.models import SyncPhase
@@ -96,6 +97,11 @@ class DataSyncService:
             )
             async with MySQLDatabase.session() as session:
                 repository = DataSyncRepository(session)
+                if not await repository.has_authority(task):
+                    raise LeaseLostError("建立新基线前同步任务租约已失效")
+                await reset_source_rows(
+                    session, task, dw_database=self._settings.dw_database
+                )
                 if not await repository.record_snapshot(task, coordinate):
                     return
                 if not await repository.advance_captured_coordinate(task, coordinate):
@@ -183,9 +189,17 @@ class DataSyncService:
                 DWSchemaSynchronizer(
                     session,
                     database=self._settings.dw_database,
-                ).synchronize(task.desired),
+                ).synchronize(
+                    task.desired,
+                    before_ddl=lambda: self._has_authority(task),
+                ),
             )
             await DataSyncRepository(session).settle_phase(task, SyncPhase.BUFFERING)
+
+    async def _has_authority(self, task: ClaimedSyncTask) -> bool:
+        """在不可逆 DDL 之前重新读取 generation 与租约权威。"""
+        async with MySQLDatabase.session() as session:
+            return await DataSyncRepository(session).has_authority(task)
 
     async def _capture(
         self,
