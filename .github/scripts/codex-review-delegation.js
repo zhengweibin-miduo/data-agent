@@ -47,8 +47,7 @@ async function unresolvedThreadIds(github, owner, repo, pullNumber, reviewId, re
       const firstComment = thread.comments.nodes[0];
       const belongsToReview =
         firstComment?.pullRequestReview?.databaseId === reviewId &&
-        firstComment.author?.login?.replace(/\[bot\]$/, "") ===
-          reviewer.replace(/\[bot\]$/, "");
+        firstComment.author?.login === reviewer;
       if (!thread.isResolved && belongsToReview) ids.push(thread.id);
     }
     cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
@@ -186,9 +185,6 @@ async function selfTest() {
   };
   const ids = await unresolvedThreadIds(github, "owner", "repo", 7, 42, "codex");
   assert.deepEqual(ids, ["THREAD_1"], "only new threads from the current review are delegated");
-  page = 0;
-  const botIds = await unresolvedThreadIds(github, "owner", "repo", 7, 42, "codex[bot]");
-  assert.deepEqual(botIds, ["THREAD_1"], "GitHub bot login variants must match");
   page = 0;
   github.paginate = async () => [
     { body: marker(42, "abc123"), user: { login: "trusted-user" } },
