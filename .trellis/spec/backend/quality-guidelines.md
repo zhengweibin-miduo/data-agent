@@ -183,17 +183,20 @@ original PR branch.
 - The PR author and command author must both be in `PR_AUTHORS`.
 - The PR must remain non-draft with a same-repository head.
 - `CODEX_TRIGGER_TOKEN` creates the `@codex` delegation comment.
-- The delegation records the actual base/head refs and SHAs and requires one
-  ordinary merge commit pushed back to the original head branch.
+- The delegation reads the current base tip through the Git refs API, records
+  the observed base SHA plus the actual base/head refs and head SHA, and
+  requires one ordinary merge commit pushed back to the original head branch.
 
 ### 4. Validation & Error Matrix
 
 - `mergeable=null` or `mergeable_state=unknown` -> retry with finite backoff;
   if still unknown, stop.
 - `blocked`, `behind`, `clean`, or `unstable` -> not a content conflict; stop.
-- Base/head ref or SHA, draft status, repository ownership, or conflict status
-  changes during inspection -> stop.
-- Existing marker for the same base/head -> no duplicate delegation.
+- Head ref/SHA, base ref, draft status, repository ownership, or conflict
+  status changes during inspection -> stop. A base SHA advance on the same base
+  ref is normal and must not stop delegation.
+- Existing marker for the same observed live base SHA/head -> no duplicate
+  delegation; a later live base tip permits a new round.
 - Ten prior delegations -> publish one limit notice and stop.
 
 ### 5. Good/Base/Bad Cases
@@ -206,8 +209,8 @@ original PR branch.
 ### 6. Tests Required
 
 - The Node self-check covers exact commands, both allowlists, mergeability
-  retries and states, fork/draft transitions, base/head races, idempotency,
-  limits, and Git push constraints.
+  retries and states, fork/draft transitions, historical versus live base SHA,
+  base/head races, idempotency, limits, and Git push constraints.
 - Parse workflow YAML and run `git diff --check`; run `actionlint` when
   available.
 
@@ -220,9 +223,11 @@ the shared branch, or force-push a resolution.
 
 #### Correct
 
-Require explicit `dirty`/non-mergeable evidence, merge the PR's actual base
-into its current head, resolve only the conflicts, create one merge commit, and
-ordinary-push only while the remote base/head still match the recorded SHAs.
+Require explicit `dirty`/non-mergeable evidence, fetch and merge the latest
+`origin/<base.ref>` into the protected current head, resolve only the conflicts,
+create one merge commit, and ordinary-push only while the remote head still
+matches the recorded SHA. Base advancement on the same ref does not block the
+push.
 
 Before persistence integration tests, CI applies
 `docs/docker/mysql/data_agent.sql` through the root account. MySQL entrypoint

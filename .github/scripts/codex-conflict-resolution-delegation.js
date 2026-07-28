@@ -44,8 +44,8 @@ async function getPullWithMergeability(github, owner, repo, pullNumber, sleep) {
   return pull;
 }
 
-function marker(pull) {
-  return `<!-- codex-conflict-resolution:${pull.number}:${pull.base.sha}:${pull.head.sha} -->`;
+function marker(pull, observedBaseSha) {
+  return `<!-- codex-conflict-resolution:${pull.number}:${observedBaseSha}:${pull.head.sha} -->`;
 }
 
 function limitMarker() {
@@ -56,23 +56,22 @@ function samePullVersion(left, right) {
   return (
     left.head.sha === right.head.sha &&
     left.head.ref === right.head.ref &&
-    left.base.sha === right.base.sha &&
     left.base.ref === right.base.ref
   );
 }
 
-function delegationBody(pull) {
-  return `${marker(pull)}
+function delegationBody(pull, observedBaseSha) {
+  return `${marker(pull, observedBaseSha)}
 @codex 解决当前 PR 与实际 base 分支的内容冲突，只处理冲突，不顺带修改业务逻辑。
 
 PR head: \`${pull.head.ref}\`
 Expected head: \`${pull.head.sha}\`
 PR base: \`${pull.base.ref}\`
-Expected base: \`${pull.base.sha}\`
+Observed base: \`${observedBaseSha}\`
 
-开始前执行 \`git fetch --prune origin\`，确认 \`origin/${pull.head.ref}\` 等于 Expected head，且 \`origin/${pull.base.ref}\` 等于 Expected base；任一不一致都停止。检出原 head 分支，执行 \`git merge --no-ff --no-commit origin/${pull.base.ref}\`，只解决冲突后创建 merge commit；无法可靠判断取舍时停止并报告。禁止 rebase，最终只创建一个 merge commit，不创建其他业务修改提交。
+开始前执行 \`git fetch --prune origin\`，确认 \`origin/${pull.head.ref}\` 等于 Expected head；不一致就停止。检出原 head 分支，执行 \`git merge --no-ff --no-commit origin/${pull.base.ref}\` 合并 fetch 后最新的 base，只解决冲突后创建 merge commit；无法可靠判断取舍时停止并报告。禁止 rebase，最终只创建一个 merge commit，不创建其他业务修改提交。
 
-完成最小验证后，推送前重新 fetch 并确认远端 head 和 base 仍分别等于 Expected head 和 Expected base；任一变化都停止且不得推送。仅使用 \`git push origin HEAD:${pull.head.ref}\` 推送回原 PR 分支，禁止 force-push，不要创建新 PR。
+完成最小验证后，推送前重新 fetch 并只确认远端 head 仍等于 Expected head；head 变化就停止且不得推送，base 前进不阻止推送。仅使用 \`git push origin HEAD:${pull.head.ref}\` 推送回原 PR 分支，禁止 force-push，不要创建新 PR。
 
 所有 GitHub 回复和最终总结使用简体中文，只保留冲突处理、merge commit SHA 和测试摘要。`;
 }
@@ -112,6 +111,15 @@ async function delegateConflictResolution({
   }
 
   const {
+    data: {
+      object: { sha: observedBaseSha },
+    },
+  } = await github.rest.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${pull.base.ref}`,
+  });
+  const {
     data: currentPull,
   } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
   if (
@@ -135,7 +143,7 @@ async function delegateConflictResolution({
     data: { login: commentAuthor },
   } = await github.rest.users.getAuthenticated();
   const ownComments = comments.filter((comment) => comment.user?.login === commentAuthor);
-  const delegationMarker = marker(currentPull);
+  const delegationMarker = marker(currentPull, observedBaseSha);
   if (ownComments.some((comment) => comment.body?.includes(delegationMarker))) {
     core.info("This pull request head and base were already delegated.");
     return;
@@ -162,7 +170,7 @@ async function delegateConflictResolution({
     owner,
     repo,
     issue_number: pullNumber,
-    body: delegationBody(currentPull),
+    body: delegationBody(currentPull, observedBaseSha),
   });
 }
 
@@ -190,13 +198,15 @@ async function selfTest() {
     mergeable_state: "dirty",
     user: { login: "alice" },
     head: { ref: "feature/conflict", sha: "head123", repo: { full_name: "owner/repo" } },
-    base: { ref: "dev", sha: "base123" },
+    base: { ref: "release/dev", sha: "base123" },
   };
-  const body = delegationBody(basePull);
+  const body = delegationBody(basePull, "livebase456");
   assert.match(body, /Expected head: `head123`/);
-  assert.match(body, /Expected base: `base123`/);
-  assert.match(body, /origin\/dev/);
-  assert.match(body, /git merge --no-ff --no-commit origin\/dev/);
+  assert.match(body, /Observed base: `livebase456`/);
+  assert.doesNotMatch(body, /Expected base/);
+  assert.match(body, /base 前进不阻止推送/);
+  assert.match(body, /origin\/release\/dev/);
+  assert.match(body, /git merge --no-ff --no-commit origin\/release\/dev/);
   assert.match(body, /只创建一个 merge commit/);
   assert.match(body, /禁止 rebase/);
   assert.match(body, /禁止 force-push/);
@@ -212,10 +222,17 @@ async function selfTest() {
   const core = { info() {}, warning() {} };
   const createdBodies = [];
   let pulls = [];
+  let liveBaseSha = "livebase456";
   const github = {
     paginate: async () => [],
     rest: {
       pulls: { get: async () => ({ data: pulls.shift() }) },
+      git: {
+        getRef: async ({ ref }) => {
+          assert.equal(ref, "heads/release/dev");
+          return { data: { object: { sha: liveBaseSha } } };
+        },
+      },
       issues: {
         listComments() {},
         createComment: async ({ body: commentBody }) => createdBodies.push(commentBody),
@@ -240,6 +257,8 @@ async function selfTest() {
   });
   assert.deepEqual(delays, [1000, 2000], "unknown mergeability uses finite backoff");
   assert.equal(createdBodies.length, 1, "a confirmed conflict is delegated once");
+  assert.match(createdBodies[0], /codex-conflict-resolution:7:livebase456:head123/);
+  assert.match(createdBodies[0], /Observed base: `livebase456`/);
 
   createdBodies.length = 0;
   pulls = Array(MAX_MERGEABLE_ATTEMPTS).fill({
@@ -264,7 +283,9 @@ async function selfTest() {
     authors: "alice,bob",
     sleep: async () => {},
   });
-  assert.equal(createdBodies.length, 0, "a changed base must stop delegation");
+  assert.equal(createdBodies.length, 1, "a historical base SHA change must not stop delegation");
+  assert.match(createdBodies[0], /Observed base: `livebase456`/);
+  createdBodies.length = 0;
 
   pulls = [basePull, { ...basePull, head: { ...basePull.head, sha: "changed" } }];
   await delegateConflictResolution({
@@ -330,8 +351,9 @@ async function selfTest() {
   assert.equal(createdBodies.length, 0, "a pull request becoming draft must stop delegation");
 
   pulls = [basePull, basePull];
+  const priorLiveBaseMarker = marker(basePull, liveBaseSha);
   github.paginate = async () => [
-    { body: marker(basePull), user: { login: "token-owner" } },
+    { body: priorLiveBaseMarker, user: { login: "token-owner" } },
   ];
   await delegateConflictResolution({
     github,
@@ -341,6 +363,19 @@ async function selfTest() {
     sleep: async () => {},
   });
   assert.equal(createdBodies.length, 0, "the same base and head are idempotent");
+
+  liveBaseSha = "livebase789";
+  pulls = [basePull, basePull];
+  await delegateConflictResolution({
+    github,
+    context,
+    core,
+    authors: "alice,bob",
+    sleep: async () => {},
+  });
+  assert.equal(createdBodies.length, 1, "an advanced live base permits a new delegation");
+  assert.match(createdBodies[0], /codex-conflict-resolution:7:livebase789:head123/);
+  createdBodies.length = 0;
 
   context.payload.comment.user.login = "mallory";
   pulls = [basePull];
