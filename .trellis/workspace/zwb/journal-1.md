@@ -1455,3 +1455,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 46: 修复 Codex 未完成审查线程重新委派
+
+**Date**: 2026-07-29
+**Task**: 修复 Codex 未完成审查线程重新委派
+**Branch**: `fix/codex-review-redelegation-20260729`
+
+### Summary
+
+手动审查补偿入口改为依据当前 thread 状态判断完成；历史 marker 不再阻止 active unresolved 线程重新委派，保留 resolved、outdated、非 Codex 和明确阻塞线程的排除规则。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `52775c6` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -193,16 +193,16 @@ original PR branch.
   `@codex` comment as the configured user.
 - The scanner includes every unresolved thread whose first comment author is
   in `REVIEW_BOTS`, regardless of the originating review or its head SHA.
-- A thread ID already listed in a trusted `codex-review-loop` or
-  `codex-review-manual` comment has been processed and must not be delegated
-  again, even when the PR head changes.
+- Historical `codex-review-loop` and `codex-review-manual` comments prove only
+  that a thread was delegated, not that its task completed. A thread that is
+  still active and unresolved must be eligible for manual delegation again.
 - An unresolved thread with a later reply beginning with
   `无法安全完成：` is terminally blocked and must not be delegated again.
 - An unresolved Codex thread with `isOutdated=true` is resolved directly and
   never enters the delegation comment.
-- Historical delegation detection uses explicit GraphQL thread IDs from
-  comments authored by `PR_AUTHORS` or the current token user; workflow-run
-  timing and review/head inference are not evidence of processing.
+- Completion is derived from current thread state: resolved threads are done,
+  explicitly blocked threads are terminally excluded, and remaining active
+  unresolved threads are unfinished.
 
 ### 4. Validation & Error Matrix
 
@@ -213,15 +213,15 @@ original PR branch.
   still delegated.
 - The automatic `pull_request_review` event skips the resolver step and retains
   its existing PAT-backed delegation behavior.
-- No missed unresolved Codex thread -> complete without a comment.
-- A changed head with only previously delegated threads -> no comment.
-- A newly discovered unresolved thread absent from all trusted delegation
-  comments -> permit a new delegation.
+- No active unresolved Codex thread -> complete without a comment.
+- A changed head with active unresolved threads -> permit a new delegation,
+  including threads present in historical delegation comments.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: several never-delegated unresolved Codex threads from different review
-  rounds are delegated together while outdated threads are resolved.
+- Good: active unresolved Codex threads from different review rounds are
+  delegated together while outdated threads are resolved, including unfinished
+  threads that were delegated previously.
 - Base: every unresolved thread has a later `无法安全完成：` reply, so no
   comment is created.
 - Bad: scanning only the first 100 replies misses a later blocked reply; thread
@@ -230,9 +230,10 @@ original PR branch.
 ### 6. Tests Required
 
 - The standalone Node self-check covers outdated-thread resolution,
-  blocked-thread exclusion, comment pagination, reviewer filtering, stable
-  marker ordering, duplicate suppression, invalid PR rejection, and the rule
-  that the PAT-backed delegation path never calls `resolveReviewThread`.
+  blocked-thread exclusion, comment pagination, reviewer filtering, resolved
+  thread exclusion, unfinished-thread redelegation, invalid PR rejection, and
+  the rule that the PAT-backed delegation path never calls
+  `resolveReviewThread`.
 - Parse the workflow YAML and verify the resolver uses `CODEX_TRIGGER_TOKEN`
   with `continue-on-error: true`; run `git diff --check` and `actionlint` when
   it is available.
@@ -242,16 +243,16 @@ original PR branch.
 #### Wrong
 
 Delegate only the latest review, use the ephemeral `${{ github.token }}` for
-`resolveReviewThread`, let a resolver failure block all missed threads,
-repeatedly delegate a thread already listed in a prior delegation, or retry a
-thread with an explicit `无法安全完成：` blocker.
+`resolveReviewThread`, let a resolver failure block all active threads, treat a
+historical delegation as proof of completion, or retry a thread with an
+explicit `无法安全完成：` blocker.
 
 #### Correct
 
 Use the user PAT in `CODEX_TRIGGER_TOKEN` to resolve outdated threads first,
 while allowing the later step to continue when resolution fails; then use the
-same PAT to exclude resolved, explicitly blocked, and previously delegated
-thread IDs and comment only the missed set.
+same PAT to exclude resolved and explicitly blocked threads, and delegate every
+remaining active unresolved thread even if it was delegated previously.
 
 ## Scenario: User-triggered Codex Conflict Resolution
 
