@@ -1,5 +1,7 @@
 """DW 结构同步规划的确定性单元检查。"""
 
+from unittest.mock import AsyncMock
+
 import pytest
 from tests.helpers.checks import (
     check_condition,
@@ -12,6 +14,7 @@ from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
 from data_agent.data_sync.schema_sync import (
     CurrentColumn,
     CurrentTable,
+    DWSchemaSynchronizer,
     is_safe_widening,
     plan_schema_changes,
 )
@@ -42,6 +45,16 @@ def _desired(*, amount_type: str = "DECIMAL(12, 2)") -> DesiredSyncTable:
         schema_fingerprint="a" * 64,
         metric_dependency_column_ids=["amount"],
     )
+
+
+async def test_existing_table_requires_ownership_for_every_row() -> None:
+    """非空目标表中只要存在未登记行就拒绝开始同步。"""
+    session = AsyncMock()
+    session.scalar = AsyncMock(side_effect=[2, 1])
+    synchronizer = DWSchemaSynchronizer(session, database="dw")
+
+    with pytest.raises(DataAgentError, match="未登记或多余"):
+        await synchronizer._validate_existing_provenance(_desired())
 
 
 def test_plan_creates_missing_table_and_quotes_identifiers() -> None:

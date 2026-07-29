@@ -429,7 +429,15 @@ class DataSyncRepository:
         if attempts is None:
             return None
         next_attempt = attempts + 1
-        phase = SyncPhase.DEAD if next_attempt >= max_attempts else task.phase
+        phase = (
+            SyncPhase.DEAD
+            if next_attempt >= max_attempts
+            else (
+                SyncPhase.REPLAYING
+                if task.phase is SyncPhase.STREAMING
+                else task.phase
+            )
+        )
         delay = min(
             retry_base_seconds * (2 ** min(attempts, 20)),
             retry_max_seconds,

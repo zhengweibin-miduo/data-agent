@@ -157,10 +157,10 @@ class DWSchemaSynchronizer:
                 data_sync_key_owner.c.deleted.is_(False),
             )
         )
-        if not owner_count:
+        if owner_count != row_count:
             _raise_conflict(
                 desired.target_table,
-                "非空目标表缺少可审计的主键 ownership",
+                "非空目标表存在未登记或多余的主键 ownership",
             )
 
     async def inspect(self, table_name: str) -> CurrentTable | None:
