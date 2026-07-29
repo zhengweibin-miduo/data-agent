@@ -124,12 +124,25 @@ class DataSyncService:
             )
             if not capture_has_capacity:
                 async with MySQLDatabase.session() as session:
-                    # 有界缓冲已无法继续保护当前基线。丢弃本轮未完成基线并从
-                    # 新位点重新建立，比原地等待一个永远不会被消费的缓冲安全。
-                    restarted = await DataSyncRepository(session).restart_backfill(task)
-                    if not restarted:
-                        raise LeaseLostError("重启饱和回填时同步任务租约已失效")
-                return
+                    repository = DataSyncRepository(session)
+                    events = await repository.read_events(task.id, limit=1)
+                    if not events:
+                        raise RuntimeError("Binlog 缓冲已饱和但没有待应用事件")
+                    # 先腾挪一个已持久化事件，再读取当前源端历史批次。这样既
+                    # 保留既有回填游标，也不会用旧快照覆盖刚应用的增量。
+                    await self._with_lease_heartbeat(
+                        task,
+                        apply_buffered_event(
+                            session,
+                            task,
+                            events[0],
+                            dw_database=self._settings.dw_database,
+                        ),
+                    )
+                    await repository.cleanup_events(
+                        task.id,
+                        limit=self._settings.event_cleanup_batch_size,
+                    )
             rows = await self._with_lease_heartbeat(
                 task,
                 read_backfill_batch(

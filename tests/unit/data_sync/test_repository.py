@@ -57,3 +57,20 @@ async def test_streaming_retry_returns_to_non_ready_replay_phase() -> None:
     )
 
     check_equal("失败退避撤销实时就绪阶段", phase, SyncPhase.REPLAYING)
+
+
+async def test_readiness_uses_dedicated_worker_heartbeat() -> None:
+    """控制面 updated_at 不得被解释为 CDC worker 活性。"""
+    session = AsyncMock()
+    result = Mock()
+    result.__iter__ = Mock(return_value=iter([(SyncPhase.STREAMING.value, False)]))
+    session.execute.return_value = result
+
+    phases = await DataSyncRepository(session).read_readiness_phases(
+        target_table="fact_order", source="local", heartbeat_timeout_seconds=30
+    )
+
+    check_equal("独立心跳过期关闭门禁", phases, [(SyncPhase.STREAMING, False)])
+    selected = list(session.execute.await_args.args[0].selected_columns)
+    check_equal("查询使用 worker 心跳", "worker_heartbeat_at" in str(selected[1]), True)
+    check_equal("查询不复用控制面时间", "updated_at" in str(selected[1]), False)

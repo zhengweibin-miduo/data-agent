@@ -76,16 +76,19 @@ async def test_unexpected_error_logs_redacted_traceback(
     safe_logger.error.assert_called_once()
 
 
-async def test_backfill_restarts_when_event_buffer_is_saturated(
+async def test_backfill_drains_event_and_keeps_progress_when_buffer_is_saturated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """捕获缓冲饱和后放弃旧基线并从新位点重新开始。"""
+    """捕获缓冲饱和后腾挪事件并继续推进既有回填游标。"""
     task = replace(_streaming_task(), phase=SyncPhase.BACKFILLING)
     repository = AsyncMock()
     monkeypatch.setattr(service, "DataSyncRepository", lambda session: repository)
     monkeypatch.setattr(service.MySQLDatabase, "session", _fake_session)
-    read_batch = AsyncMock()
+    read_batch = AsyncMock(return_value=[])
     monkeypatch.setattr(service, "read_backfill_batch", read_batch)
+    apply_event = AsyncMock()
+    monkeypatch.setattr(service, "apply_buffered_event", apply_event)
+    repository.read_events.return_value = [object()]
     sync_service = DataSyncService({"local": AsyncMock()}, AsyncMock())
     sync_service._capture = AsyncMock(return_value=False)
 
@@ -96,8 +99,10 @@ async def test_backfill_restarts_when_event_buffer_is_saturated(
 
     await sync_service._process(task)
 
-    read_batch.assert_not_awaited()
-    repository.restart_backfill.assert_awaited_once_with(task)
+    apply_event.assert_awaited_once()
+    read_batch.assert_awaited_once()
+    repository.restart_backfill.assert_not_awaited()
+    repository.settle_phase.assert_awaited_once_with(task, SyncPhase.REPLAYING)
 
 
 async def test_schema_lock_contention_does_not_consume_retry_budget() -> None:

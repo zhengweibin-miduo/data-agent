@@ -42,6 +42,7 @@ data_sync_task = Table(
     Column("available_at", DateTime, nullable=False, server_default=func.now()),
     Column("lease_token", String(32), nullable=True),
     Column("lease_expires_at", DateTime, nullable=True),
+    Column("worker_heartbeat_at", DateTime, nullable=True),
     Column("last_error_type", String(128), nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     Column(

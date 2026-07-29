@@ -154,7 +154,12 @@ def test_boolean_alias_matches_mysql_introspection() -> None:
 
 @pytest.mark.parametrize(
     ("desired_type", "current_type"),
-    [("DECIMAL", "decimal(10,0)"), ("DECIMAL(10)", "decimal(10,0)")],
+    [
+        ("DECIMAL", "decimal(10,0)"),
+        ("DECIMAL(10)", "decimal(10,0)"),
+        ("DECIMAL UNSIGNED", "decimal(10,0) unsigned"),
+        ("DECIMAL(12) UNSIGNED", "decimal(12,0) unsigned"),
+    ],
 )
 def test_decimal_defaults_match_mysql_introspection(
     desired_type: str, current_type: str

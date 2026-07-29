@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS data_sync_task
     available_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下一次允许领取任务的数据库时间',
     lease_token           CHAR(32) NULL COMMENT '当前 worker 持有的短期租约令牌',
     lease_expires_at      DATETIME NULL COMMENT '当前 worker 租约到期的数据库时间',
+    worker_heartbeat_at   DATETIME NULL COMMENT '仅由 CDC worker 更新的最近活性时间',
     last_error_type       VARCHAR(128) NULL COMMENT '最近一次失败的安全异常类型',
     created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '同步任务首次创建时间',
     updated_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

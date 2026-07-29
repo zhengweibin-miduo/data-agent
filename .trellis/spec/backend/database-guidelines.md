@@ -322,9 +322,10 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 - Initial load records a Binlog coordinate, persists later ROW events, reads
   source rows by bounded simple/composite-PK keyset, replays the buffer, then
   enters streaming. If the durable event buffer fills before the historical
-  scan completes, the worker atomically discards that incomplete baseline and
-  its buffered events, clears all cursors, and starts again from a fresh Binlog
-  coordinate; it must never leave a full buffer parked in `backfilling`.
+  scan completes, the worker applies a bounded persisted event before reading
+  the next current source batch and retains the completed primary-key cursor;
+  it must neither leave a full buffer parked in `backfilling` nor repeatedly
+  discard the baseline under sustained writes.
 - Per-target DW schema locks serialize inspection and additive DDL. Lock
   contention is normal scheduling pressure: release the task lease and delay
   the same phase without incrementing its failure attempts or moving it toward
@@ -338,10 +339,13 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   backfill values, CDC values, and DW provenance scans; container-backed MySQL
   types such as `BIT` and `SET` must encode identically in every path.
 - Answer readiness uses `DataSyncRepository.read_readiness_phases()` as a
-  separate read-only boundary. It selects only `phase`, takes no lock, and does
-  not claim, renew, settle, retry, or update a task. A source-scoped dependency
-  must match exactly one task; an unscoped dependency requires every matching
-  task to be `streaming`. Missing or ambiguous matches are not ready.
+  separate read-only boundary. It selects only `phase` and the dedicated
+  `worker_heartbeat_at`, takes no lock, and does not claim, renew, settle,
+  retry, or update a task. Only worker settlement and lease renewal refresh
+  that heartbeat; snapshot handoff may update `updated_at` but must not refresh
+  liveness. A source-scoped dependency must match exactly one task; an unscoped
+  dependency requires every matching task to be `streaming`. Missing or
+  ambiguous matches are not ready.
 
 ### 4. Validation & Error Matrix
 

@@ -469,11 +469,13 @@ def _normalize_type(data_type: str) -> str:
         normalized = re.sub(r"\s+", " ", raw.upper())
     if normalized in {"BOOL", "BOOLEAN", "TINYINT(1)"}:
         return "BOOLEAN"
-    decimal_match = re.fullmatch(r"DECIMAL(?:\((\d+)(?:,(\d+))?\))?", normalized)
+    decimal_match = re.fullmatch(
+        r"DECIMAL(?:\((\d+)(?:,(\d+))?\))?( UNSIGNED)?", normalized
+    )
     if decimal_match:
         precision = int(decimal_match.group(1) or 10)
         scale = int(decimal_match.group(2) or 0)
-        return f"DECIMAL({precision},{scale})"
+        return f"DECIMAL({precision},{scale}){decimal_match.group(3) or ''}"
     return normalized
 
 

@@ -245,11 +245,14 @@ class DataSyncRepository:
         # 步骤一：按稳定业务身份选择有限字段，不加锁、不领取租约也不推进状态。
         statement = select(
             data_sync_task.c.phase,
-            data_sync_task.c.updated_at
-            >= func.timestampadd(
-                text("MICROSECOND"),
-                -max(1, int(heartbeat_timeout_seconds * 1_000_000)),
-                func.now(),
+            data_sync_task.c.worker_heartbeat_at.is_not(None)
+            & (
+                data_sync_task.c.worker_heartbeat_at
+                >= func.timestampadd(
+                    text("MICROSECOND"),
+                    -max(1, int(heartbeat_timeout_seconds * 1_000_000)),
+                    func.now(),
+                )
             ),
         ).where(data_sync_task.c.target_table == target_table)
         if source is not None:
@@ -278,6 +281,7 @@ class DataSyncRepository:
                     lease_seconds,
                     func.now(),
                 ),
+                worker_heartbeat_at=func.now(),
                 updated_at=func.now(),
             )
         )
@@ -349,6 +353,7 @@ class DataSyncRepository:
                 func.now(),
             ),
             "last_error_type": None,
+            "worker_heartbeat_at": func.now(),
             "updated_at": func.now(),
         }
         if release_lease:
