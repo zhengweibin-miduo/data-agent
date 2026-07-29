@@ -152,15 +152,13 @@ async def apply_buffered_event(
     repository = DataSyncRepository(session)
     if event.operation == RowOperation.DELETE:
         before = _decoded_event_row(desired, event.before)
-        await _claim_owner(repository, desired, before)
-        await session.execute(_delete_statement(desired, before, dw_database))
-        key_document, key_hash = primary_key_identity(desired, before)
-        if not await repository.tombstone_key_owner(
+        _, key_hash = primary_key_identity(desired, before)
+        if await repository.tombstone_key_owner(
             target_table=desired.target_table,
             primary_key_hash=key_hash,
             source=desired.source,
         ):
-            raise RuntimeError("删除事件未找到当前来源拥有的目标主键")
+            await session.execute(_delete_statement(desired, before, dw_database))
     else:
         after = _decoded_event_row(desired, event.after)
         if event.operation == RowOperation.UPDATE and event.before is not None:
@@ -168,14 +166,15 @@ async def apply_buffered_event(
             if _primary_key_values(desired, before) != _primary_key_values(
                 desired, after
             ):
-                await _claim_owner(repository, desired, before)
-                await session.execute(_delete_statement(desired, before, dw_database))
                 _, old_hash = primary_key_identity(desired, before)
-                await repository.tombstone_key_owner(
+                if await repository.tombstone_key_owner(
                     target_table=desired.target_table,
                     primary_key_hash=old_hash,
                     source=desired.source,
-                )
+                ):
+                    await session.execute(
+                        _delete_statement(desired, before, dw_database)
+                    )
         await _claim_owner(repository, desired, after)
         await session.execute(_upsert_statement(desired, [after], dw_database))
     if not await repository.acknowledge_event(task.id, buffered.id):

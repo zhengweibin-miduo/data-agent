@@ -68,9 +68,9 @@ async def test_existing_bit_key_uses_the_ownership_codec() -> None:
     document, key_hash = primary_key_identity(desired, {"order_id": 5})
     owner_result.__iter__.return_value = iter([(key_hash, document)])
 
-    await DWSchemaSynchronizer(
-        session, database="dw"
-    )._validate_existing_provenance(desired)
+    await DWSchemaSynchronizer(session, database="dw")._validate_existing_provenance(
+        desired
+    )
 
 
 async def test_schema_lock_contention_has_a_distinct_error() -> None:
@@ -192,6 +192,48 @@ async def test_existing_table_rejects_equal_count_misaligned_ownership() -> None
         await DWSchemaSynchronizer(
             session, database="dw"
         )._validate_existing_provenance(_desired())
+
+
+async def test_provenance_snapshot_commits_before_existing_table_ddl() -> None:
+    """一致性读取事务必须在另一连接执行 ALTER TABLE 前结束。"""
+    desired = _desired()
+    session = AsyncMock()
+    session.connection.return_value = AsyncMock()
+    session.scalar.side_effect = [1, 1]
+    provenance = AsyncMock()
+    events: list[str] = []
+    provenance.commit.side_effect = lambda: events.append("snapshot_commit")
+    session.execute.side_effect = lambda statement: events.append(f"ddl:{statement}")
+    synchronizer = DWSchemaSynchronizer(session, database="dw").with_provenance_session(
+        provenance
+    )
+    synchronizer.inspect = AsyncMock(
+        side_effect=[
+            CurrentTable(
+                columns=(
+                    CurrentColumn(name="order_id", data_type="BIGINT", nullable=False),
+                ),
+                primary_key=("order_id",),
+            ),
+            CurrentTable(
+                columns=tuple(
+                    CurrentColumn(
+                        name=column.name,
+                        data_type=column.data_type,
+                        nullable=column.nullable,
+                    )
+                    for column in desired.columns
+                ),
+                primary_key=tuple(desired.primary_key),
+            ),
+        ]
+    )
+    synchronizer._shared_columns = AsyncMock(return_value=(set(), set()))
+    synchronizer._validate_existing_provenance = AsyncMock()
+
+    await synchronizer.synchronize(desired)
+
+    check_condition("快照在 DDL 前结束", events[0] == "snapshot_commit")
 
 
 def test_plan_creates_missing_table_and_quotes_identifiers() -> None:

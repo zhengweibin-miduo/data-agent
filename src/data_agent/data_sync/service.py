@@ -176,14 +176,14 @@ class DataSyncService:
                         ),
                     )
                     await DataSyncRepository(session).settle_phase(
-                        task, SyncPhase.BACKFILLING
+                        task,
+                        SyncPhase.BACKFILLING,
+                        delay_seconds=self._settings.backfill_interval_seconds,
                     )
                 else:
                     await DataSyncRepository(session).settle_phase(
                         task, SyncPhase.REPLAYING
                     )
-            if rows and self._settings.backfill_interval_seconds:
-                await asyncio.sleep(self._settings.backfill_interval_seconds)
             return
         if task.phase in (SyncPhase.REPLAYING, SyncPhase.STREAMING):
             async with MySQLDatabase.session() as session:

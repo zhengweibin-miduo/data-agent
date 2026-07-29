@@ -715,6 +715,18 @@ targets.
   its own bounded transaction and renew the task lease between transactions;
   do not run an independent heartbeat against a task row already locked by the
   current application transaction.
+- End the independent provenance consistent-read transaction before issuing
+  `ALTER TABLE` from the authority Session; otherwise the snapshot's metadata
+  read lock can block the DDL that its own caller is awaiting.
+- A CDC delete or primary-key old image may tombstone and delete only an
+  ownership row already held by that source. A missing ownership is an
+  idempotent no-op and must never be claimed by a delete event.
+- Persist historical-backfill throttling through the task's `available_at`
+  deadline. Never sleep inside the serial dispatcher after releasing a task
+  lease.
+- Reject sources whose global `binlog_row_value_options` contains
+  `PARTIAL_JSON` until partial-update row events are explicitly decoded and
+  replayed; do not advance a coordinate across filtered JSON updates.
 - A data-sync generation hash describes the physical table contract. Metric
   dependency metadata and the global schema fingerprint remain durable
   control-plane data but do not reset CDC coordinates or historical backfill.

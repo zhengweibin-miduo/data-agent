@@ -6,8 +6,15 @@ import pytest
 from tests.helpers.checks import check_equal
 
 from data_agent.data_sync import backfill
-from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable, SyncPhase
-from data_agent.data_sync.repository import ClaimedSyncTask
+from data_agent.data_sync.models import (
+    BinlogCoordinate,
+    DesiredColumn,
+    DesiredSyncTable,
+    RowOperation,
+    SyncPhase,
+    SyncRowEvent,
+)
+from data_agent.data_sync.repository import BufferedSyncEvent, ClaimedSyncTask
 
 
 def _task() -> ClaimedSyncTask:
@@ -135,3 +142,42 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
         3,
     )
     repository.claim_key_owner.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", [RowOperation.DELETE, RowOperation.UPDATE])
+async def test_missing_old_key_does_not_claim_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: RowOperation,
+) -> None:
+    """扫描前已删除或迁移的旧键不得被删除事件抢占归属。"""
+    repository = AsyncMock()
+    repository.tombstone_key_owner.return_value = False
+    repository.claim_key_owner.return_value = None
+    repository.acknowledge_event.return_value = True
+    repository.advance_applied_coordinate.return_value = True
+    monkeypatch.setattr(backfill, "DataSyncRepository", lambda session: repository)
+    session = AsyncMock()
+    coordinate = BinlogCoordinate(file="mysql-bin.000001", position=120, row_index=0)
+    event = SyncRowEvent(
+        source="local",
+        source_schema="business",
+        source_table="fact_order",
+        coordinate=coordinate,
+        operation=operation,
+        before={"id": 1},
+        after={"id": 2} if operation == RowOperation.UPDATE else None,
+    )
+
+    await backfill.apply_buffered_event(
+        session,
+        _task(),
+        BufferedSyncEvent(id=1, event=event),
+        dw_database="dw",
+    )
+
+    if operation == RowOperation.DELETE:
+        repository.claim_key_owner.assert_not_awaited()
+        session.execute.assert_not_awaited()
+    else:
+        repository.claim_key_owner.assert_awaited_once()
+        check_equal("主键迁移只写入新键", session.execute.await_count, 1)

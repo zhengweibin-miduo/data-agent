@@ -97,9 +97,10 @@ class DWSchemaSynchronizer:
                 raise RuntimeError("取得 DW 结构锁后同步任务 generation 已失效")
             # 步骤二：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
-            compatible_extra_columns, shared_nullable_columns = (
-                await self._shared_columns(desired)
-            )
+            (
+                compatible_extra_columns,
+                shared_nullable_columns,
+            ) = await self._shared_columns(desired)
             changes = plan_schema_changes(
                 database=self._database,
                 desired=desired,
@@ -109,6 +110,12 @@ class DWSchemaSynchronizer:
             )
             if current is not None:
                 await self._validate_existing_provenance(desired)
+                if self._provenance_session is not self._session:
+                    # End the consistent-read transaction before ALTER TABLE.
+                    # Otherwise its metadata read lock can block the DDL issued
+                    # below by the authority Session while both calls wait on
+                    # one another.
+                    await self._provenance_session.commit()
             # 步骤三：每条自动提交 DDL 前在同一 Session 重新确认 generation authority。
             for statement in changes:
                 if check_authority is not None and not await check_authority():

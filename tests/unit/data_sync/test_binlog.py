@@ -27,6 +27,7 @@ from data_agent.data_sync.binlog import (
     _ROWS_VALUE_DECODER_NAME,
     MySQLSourceClient,
     _replication_connection_settings,
+    _uses_partial_json,
     decode_rows_event,
 )
 from data_agent.data_sync.models import BinlogCoordinate, RowOperation
@@ -77,6 +78,16 @@ def test_locked_dependency_decoder_signature_is_compatible() -> None:
     )
 
 
+def test_partial_json_capability_is_rejected_case_insensitively() -> None:
+    """启动能力门禁必须识别组合配置中的 PARTIAL_JSON。"""
+    check_equal("空行值选项受支持", _uses_partial_json(""), False)
+    check_equal(
+        "PARTIAL_JSON 被拒绝",
+        _uses_partial_json("other, partial_json"),
+        True,
+    )
+
+
 @pytest.mark.parametrize(
     ("event_type", "sql_null_images", "before", "after"),
     [
@@ -114,11 +125,7 @@ def test_lazy_rows_adapter_preserves_json_sql_null_source(
     setattr(
         event,
         "table_map",
-        {
-            1: SimpleNamespace(
-                columns=[SimpleNamespace(name="payload", unsigned=False)]
-            )
-        },
+        {1: SimpleNamespace(columns=[SimpleNamespace(name="payload", unsigned=False)])},
     )
     setattr(event, "packet", SimpleNamespace(read_binary_json=Mock(return_value=None)))
 

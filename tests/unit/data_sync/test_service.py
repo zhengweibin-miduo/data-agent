@@ -173,6 +173,39 @@ async def test_backfill_drains_event_and_keeps_progress_when_buffer_is_saturated
     repository.settle_phase.assert_awaited_once_with(task, SyncPhase.REPLAYING)
 
 
+async def test_backfill_interval_is_persisted_without_dispatcher_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回填节流写入 available_at，不得阻塞串行 dispatcher。"""
+    task = replace(_streaming_task(), phase=SyncPhase.BACKFILLING)
+    repository = AsyncMock()
+    monkeypatch.setattr(service, "DataSyncRepository", lambda session: repository)
+    monkeypatch.setattr(service.MySQLDatabase, "session", _fake_session)
+    monkeypatch.setattr(
+        service, "read_backfill_batch", AsyncMock(return_value=[{"id": 1}])
+    )
+    monkeypatch.setattr(service, "apply_backfill_batch", AsyncMock())
+    sleep = AsyncMock()
+    monkeypatch.setattr(service.asyncio, "sleep", sleep)
+    sync_service = DataSyncService(
+        {"local": AsyncMock()},
+        AsyncMock(backfill_interval_seconds=60),
+    )
+    sync_service._capture = AsyncMock(return_value=True)
+
+    async def finish_operation(task: object, work: Awaitable[Any]) -> object:
+        return await work
+
+    sync_service._with_lease_heartbeat = AsyncMock(side_effect=finish_operation)
+
+    await sync_service._process(task)
+
+    repository.settle_phase.assert_awaited_once_with(
+        task, SyncPhase.BACKFILLING, delay_seconds=60
+    )
+    sleep.assert_not_awaited()
+
+
 async def test_schema_lock_contention_does_not_consume_retry_budget() -> None:
     """正常结构锁竞争只重新调度，不进入失败退避。"""
     task = replace(_streaming_task(), phase=SyncPhase.PENDING_SCHEMA)

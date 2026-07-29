@@ -126,6 +126,7 @@ class MySQLSourceClient:
                 text(
                     "SELECT @@GLOBAL.binlog_format AS binlog_format, "
                     "@@GLOBAL.binlog_row_image AS binlog_row_image, "
+                    "@@GLOBAL.binlog_row_value_options AS binlog_row_value_options, "
                     "@@GLOBAL.log_bin AS log_bin"
                 )
             )
@@ -135,6 +136,10 @@ class MySQLSourceClient:
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 ROW Binlog")
         if str(row["binlog_row_image"]).upper() != "FULL":
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 FULL Binlog 行镜像")
+        if _uses_partial_json(row["binlog_row_value_options"]):
+            raise SourceCapabilityError(
+                f"数据源 {self.name} 启用了不受支持的 PARTIAL_JSON Binlog"
+            )
         if str(row["log_bin"]).upper() not in {"1", "ON"}:
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 Binary Logging")
         try:
@@ -397,6 +402,15 @@ def _install_json_sql_null_adapter(event: RawRowsEvent) -> None:
         _ROWS_VALUE_DECODER_NAME,
         MethodType(read_value, event),
     )
+
+
+def _uses_partial_json(value: object) -> bool:
+    """判断服务端行值选项是否包含当前不支持的部分 JSON 事件。"""
+    return "PARTIAL_JSON" in {
+        option.strip().upper()
+        for option in str(value or "").split(",")
+        if option.strip()
+    }
 
 
 def _replication_connection_settings(
