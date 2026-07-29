@@ -47,6 +47,7 @@ async def test_tool_reads_real_state_without_modifying_tasks() -> None:
                         "desired_json": {},
                         "desired_hash": "b" * 64,
                         "phase": SyncPhase.PAUSED.value,
+                        "worker_heartbeat_at": None,
                         "attempts": 3,
                         "lease_token": None,
                         "last_error_type": "paused_error",
