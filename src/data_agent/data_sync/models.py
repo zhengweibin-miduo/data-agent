@@ -56,7 +56,7 @@ class DesiredColumn(ContractModel):
 
     id: str = Field(description="Meta 字段唯一标识。")
     name: str = Field(min_length=1, max_length=64, description="目标字段名称。")
-    data_type: str = Field(min_length=1, max_length=255, description="MySQL 字段类型。")
+    data_type: str = Field(min_length=1, description="MySQL 字段类型。")
     nullable: bool = Field(description="目标字段是否允许空值。")
 
 
@@ -312,13 +312,13 @@ def build_desired_tables(
             if columns_by_name[name]
             .data_type.strip()
             .upper()
-            .startswith(("ENUM", "SET"))
+            .startswith(("ENUM", "SET", "FLOAT", "DOUBLE"))
         ]
         if unsupported_cursor_columns:
             raise DataAgentError(
                 "unsupported_backfill_primary_key",
                 "persist_snapshot",
-                "同步表主键不能使用 ENUM 或 SET 类型",
+                "同步表主键不能使用 ENUM、SET、FLOAT 或 DOUBLE 类型",
                 details={"columns": ",".join(unsupported_cursor_columns)},
             )
         column_ids = {column.id for column in table.columns}

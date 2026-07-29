@@ -9,10 +9,14 @@ from tests.helpers.checks import check_equal
 from data_agent.data_sync.models import (
     DesiredColumn,
     DesiredSyncTable,
+    build_desired_tables,
     canonical_primary_key,
     decode_row_value,
     encode_row_value,
 )
+from data_agent.errors import DataAgentError
+from data_agent.models.physical import PhysicalColumn, PhysicalSchema, PhysicalTable
+from data_agent.models.semantic import SemanticMetadata, SemanticTable, TableRole
 
 
 def test_row_value_codec_and_primary_key_are_stable() -> None:
@@ -116,3 +120,62 @@ def test_desired_hash_is_scoped_to_one_table_contract() -> None:
     check_equal(
         "指标依赖不改变数据同步 generation", first.desired_hash(), third.desired_hash()
     )
+
+
+def test_long_literal_column_type_is_preserved_in_desired_handoff() -> None:
+    """合法的长 ENUM/SET 类型文本不得被 durable handoff 任意截断或拒绝。"""
+    data_type = "ENUM(" + ",".join(f"'member_{index:03d}'" for index in range(30)) + ")"
+    column = DesiredColumn(
+        id="status", name="status", data_type=data_type, nullable=True
+    )
+
+    check_equal("长字面量类型原样保留", column.data_type, data_type)
+
+
+def test_float_primary_key_is_rejected_before_handoff() -> None:
+    """浮点主键的 MySQL 等价规则无法形成可靠 ownership 身份。"""
+    schema = PhysicalSchema(
+        source="local",
+        canonical_ddl="CREATE TABLE readings (id DOUBLE PRIMARY KEY)",
+        ddl_hash="a" * 64,
+        schema_fingerprint="b" * 64,
+        tables=[
+            PhysicalTable(
+                id="readings",
+                name="readings",
+                qualified_name="readings",
+                columns=[
+                    PhysicalColumn(
+                        id="id",
+                        name="id",
+                        data_type="DOUBLE",
+                        nullable=False,
+                        structural_role="primary_key",
+                    )
+                ],
+                primary_key=["id"],
+            )
+        ],
+    )
+    metadata = SemanticMetadata(
+        tables=[
+            SemanticTable(
+                table_id="readings",
+                role=TableRole.FACT,
+                description="读数",
+                confidence=1,
+            )
+        ],
+        columns=[],
+    )
+
+    try:
+        build_desired_tables(schema, metadata, [], default_source_schema="business")
+    except DataAgentError as error:
+        check_equal(
+            "浮点主键拒绝错误码",
+            error.code,
+            "unsupported_backfill_primary_key",
+        )
+    else:
+        raise AssertionError("DOUBLE 主键必须在 durable handoff 前被拒绝")

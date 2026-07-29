@@ -342,7 +342,11 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   it must not perform ownership I/O once per row. Type-aware primary-key
   identity normalization is shared by source backfill values, CDC values, and
   DW provenance scans; container-backed MySQL types such as `BIT` and `SET`
-  must encode identically in every path.
+  must encode identically in every path. Accepted tables reject `ENUM`, `SET`,
+  `FLOAT`, and `DOUBLE` primary keys because keyset ordering or MySQL numeric
+  equivalence cannot be represented reliably by the durable cursor and
+  ownership document. Non-key `ENUM` and `SET` declarations retain their full
+  validated type text rather than an arbitrary per-column 255-character cap.
 - Answer readiness uses `DataSyncRepository.read_readiness_phases()` as a
   separate read-only boundary. It selects only `phase` and the dedicated
   `worker_heartbeat_at`, takes no lock, and does not claim, renew, settle,
@@ -357,6 +361,7 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 | Condition | Required behavior |
 |---|---|
 | Accepted table has no primary key | Reject before Meta or desired-state writes |
+| Primary key uses `ENUM`, `SET`, `FLOAT`, or `DOUBLE` | Reject before Meta or desired-state writes |
 | Missing target table/column or safe widening | Apply idempotently |
 | Drop, rename, narrowing, PK drift, or incompatible type | Pause with a safe deterministic error |
 | Backfill batch fails | Roll back DW rows, ownership, and cursor |
