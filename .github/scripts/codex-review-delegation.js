@@ -109,6 +109,18 @@ function allowedLogins(value, fallback) {
   return new Set((value || fallback).split(",").map((login) => login.trim()));
 }
 
+function assertManualPullEligible(pull, owner, repo, allowedAuthors) {
+  if (pull.draft) {
+    throw new Error("Draft pull requests cannot be delegated.");
+  }
+  if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+    throw new Error("Fork pull requests cannot be delegated.");
+  }
+  if (!allowedAuthors.has(pull.user.login)) {
+    throw new Error(`Pull request author ${pull.user.login} is not allowed.`);
+  }
+}
+
 function normalizedLogin(login) {
   return login?.replace(/\[bot\]$/, "");
 }
@@ -294,19 +306,11 @@ async function delegateManualReview({
     repo,
     pull_number: pullNumber,
   });
-  if (pull.draft) {
-    throw new Error("Draft pull requests cannot be delegated.");
-  }
-  if (pull.head.repo.full_name !== `${owner}/${repo}`) {
-    throw new Error("Fork pull requests cannot be delegated.");
-  }
   const allowedAuthors = allowedLogins(
     prAuthors,
     "zhengweibin-miduo,iuiiui,chatgpt-codex-connector[bot]",
   );
-  if (!allowedAuthors.has(pull.user.login)) {
-    throw new Error(`Pull request author ${pull.user.login} is not allowed.`);
-  }
+  assertManualPullEligible(pull, owner, repo, allowedAuthors);
 
   const allowedReviewers = allowedLogins(
     reviewBots,
@@ -332,6 +336,16 @@ async function delegateManualReview({
   if (missedThreads.length === 0) {
     core.info("This pull request has no missed unresolved Codex threads.");
     return;
+  }
+
+  const { data: currentPull } = await github.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  });
+  assertManualPullEligible(currentPull, owner, repo, allowedAuthors);
+  if (currentPull.head.sha !== pull.head.sha || currentPull.head.ref !== pull.head.ref) {
+    throw new Error("Pull request head changed while preparing manual delegation.");
   }
 
   await github.rest.issues.createComment({
@@ -701,6 +715,32 @@ async function selfTest() {
     1,
     "previously delegated unresolved threads must not be delegated again",
   );
+
+  manualComments.length = 0;
+  let pullReadCount = 0;
+  manualGithub.rest.pulls.get = async () => ({
+    data: {
+      draft: false,
+      head: {
+        ref: "feature/manual",
+        sha: pullReadCount++ === 0 ? "manual-sha" : "new-sha",
+        repo: { full_name: "owner/repo" },
+      },
+      user: { login: "allowed-author" },
+    },
+  });
+  await assert.rejects(
+    delegateManualReview({
+      github: manualGithub,
+      context: manualContext,
+      core,
+      prNumber: 7,
+      prAuthors: "allowed-author",
+      reviewBots: "codex-reviewer[bot]",
+    }),
+    /Pull request head changed while preparing manual delegation/,
+  );
+  assert.equal(manualBodies.length, 1, "a stale manual delegation must not be created");
 
   manualGithub.rest.pulls.get = async () => ({
     data: {
