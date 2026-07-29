@@ -179,13 +179,18 @@ original PR branch.
 - Input: `pr_number` (required positive integer).
 - Script entry point:
   `delegateManualReview({ github, context, core, prNumber, prAuthors, reviewBots })`.
+- Resolver entry point:
+  `resolveOutdatedReviewThreads({ github, context, core, prNumber, prAuthors, reviewBots })`.
 
 ### 3. Contracts
 
 - The PR must be non-draft, use a same-repository head, and have an author in
   `PR_AUTHORS`.
-- `CODEX_TRIGGER_TOKEN` is required to read the PR and create the `@codex`
-  delegation comment.
+- The job grants `pull-requests: write`; a separate
+  `resolveOutdatedReviewThreads` step uses the ephemeral `${{ github.token }}`
+  only to resolve outdated threads.
+- `CODEX_TRIGGER_TOKEN` is required by the later delegation step to read the PR
+  and create the `@codex` comment as the configured user.
 - The scanner includes every unresolved thread whose first comment author is
   in `REVIEW_BOTS`, regardless of the originating review or its head SHA.
 - A thread ID already listed in a trusted `codex-review-loop` or
@@ -205,6 +210,8 @@ original PR branch.
   without a comment.
 - Failure to resolve an outdated thread -> fail before creating a delegation
   comment.
+- The automatic `pull_request_review` event skips the resolver step and retains
+  its existing PAT-backed delegation behavior.
 - No missed unresolved Codex thread -> complete without a comment.
 - A changed head with only previously delegated threads -> no comment.
 - A newly discovered unresolved thread absent from all trusted delegation
@@ -223,7 +230,8 @@ original PR branch.
 
 - The standalone Node self-check covers outdated-thread resolution,
   blocked-thread exclusion, comment pagination, reviewer filtering, stable
-  marker ordering, duplicate suppression, and invalid PR rejection.
+  marker ordering, duplicate suppression, invalid PR rejection, and the rule
+  that the PAT-backed delegation path never calls `resolveReviewThread`.
 - Parse the workflow YAML and run `git diff --check`; run `actionlint` when it
   is available.
 
@@ -231,14 +239,15 @@ original PR branch.
 
 #### Wrong
 
-Delegate only the latest review, repeatedly delegate a thread already listed in
-a prior delegation, or retry a thread with an explicit `无法安全完成：` blocker.
+Delegate only the latest review, use `CODEX_TRIGGER_TOKEN` for
+`resolveReviewThread`, repeatedly delegate a thread already listed in a prior
+delegation, or retry a thread with an explicit `无法安全完成：` blocker.
 
 #### Correct
 
-Scan all review rounds, resolve outdated Codex threads, exclude resolved,
-explicitly blocked, and previously delegated thread IDs, then delegate only the
-missed thread set.
+Use `${{ github.token }}` with `pull-requests: write` to resolve outdated
+threads first; then use `CODEX_TRIGGER_TOKEN` to exclude resolved, explicitly
+blocked, and previously delegated thread IDs and comment only the missed set.
 
 ## Scenario: User-triggered Codex Conflict Resolution
 

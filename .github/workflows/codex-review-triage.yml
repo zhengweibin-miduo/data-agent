@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      pull-requests: write
     steps:
       # 只检出默认分支上的受信任脚本，绝不执行 PR head 中的代码。
       - uses: actions/checkout@v6
@@ -47,7 +48,30 @@ jobs:
           CODEX_TRIGGER_TOKEN: ${{ secrets.CODEX_TRIGGER_TOKEN }}
         run: test -n "$CODEX_TRIGGER_TOKEN"
 
-      - uses: actions/github-script@v8
+      - name: Resolve outdated Codex review threads
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_AUTHORS: ${{ vars.PR_AUTHORS }}
+          REVIEW_BOTS: ${{ vars.REVIEW_BOTS }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const {
+              resolveOutdatedReviewThreads,
+            } = require('./.github/scripts/codex-review-delegation.js');
+            await resolveOutdatedReviewThreads({
+              github,
+              context,
+              core,
+              prNumber: process.env.PR_NUMBER,
+              prAuthors: process.env.PR_AUTHORS,
+              reviewBots: process.env.REVIEW_BOTS,
+            });
+
+      - name: Delegate Codex review threads
+        uses: actions/github-script@v8
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           PR_AUTHORS: ${{ vars.PR_AUTHORS }}

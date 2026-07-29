@@ -287,10 +287,9 @@ async function delegateReview({ github, context, core }) {
   });
 }
 
-async function delegateManualReview({
+async function inspectManualReview({
   github,
   context,
-  core,
   prNumber,
   prAuthors,
   reviewBots,
@@ -323,7 +322,19 @@ async function delegateManualReview({
     pullNumber,
     allowedReviewers,
   );
+  return { active, allowedAuthors, outdated, owner, pull, pullNumber, repo };
+}
+
+async function resolveOutdatedReviewThreads(options) {
+  const { github, core } = options;
+  const { outdated } = await inspectManualReview(options);
   await resolveReviewThreads(github, core, outdated);
+}
+
+async function delegateManualReview(options) {
+  const { github, context, core } = options;
+  const { active, allowedAuthors, owner, pull, pullNumber, repo } =
+    await inspectManualReview(options);
   const comments = await issueComments(github, owner, repo, pullNumber);
   const {
     data: { login: triggerUser },
@@ -681,6 +692,23 @@ async function selfTest() {
     },
   };
   const manualContext = { repo: { owner: "owner", repo: "repo" } };
+  await resolveOutdatedReviewThreads({
+    github: manualGithub,
+    context: manualContext,
+    core,
+    prNumber: "7",
+    prAuthors: "allowed-author",
+    reviewBots: "codex-reviewer[bot]",
+  });
+  const resolvedGraphql = manualGithub.graphql;
+  manualGithub.graphql = async (query, variables) => {
+    assert.doesNotMatch(
+      query,
+      /resolveReviewThread/,
+      "the PAT-backed delegation client must not resolve threads",
+    );
+    return resolvedGraphql(query, variables);
+  };
   await delegateManualReview({
     github: manualGithub,
     context: manualContext,
@@ -693,7 +721,7 @@ async function selfTest() {
   assert.deepEqual(
     resolvedThreadIds,
     ["PRRT_OUTDATED"],
-    "manual dispatch must resolve outdated Codex threads",
+    "the resolver step must resolve outdated Codex threads",
   );
   assert.match(manualBodies[0], /PRRT_MANUAL/);
   assert.doesNotMatch(manualBodies[0], /PRRT_ALREADY_DELEGATED/);
@@ -776,6 +804,7 @@ module.exports = {
   manualDelegationBody,
   manualMarker,
   marker,
+  resolveOutdatedReviewThreads,
   resolveReviewThreads,
   scanUnresolvedCodexThreads,
   unresolvedThreads,
