@@ -78,6 +78,7 @@ class MySQLSourceClient:
             connect_args={
                 "connect_timeout": connect_timeout_seconds,
                 "read_timeout": read_timeout_seconds,
+                "init_command": "SET time_zone = '+00:00'",
             },
         )
 
@@ -340,6 +341,7 @@ def _replication_connection_settings(
         "charset": url.query.get("charset", "utf8mb4"),
         "connect_timeout": connect_timeout_seconds,
         "read_timeout": read_timeout_seconds,
+        "init_command": "SET time_zone = '+00:00'",
     }
     if url.database is not None:
         settings["database"] = url.database

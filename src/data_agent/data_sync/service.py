@@ -289,8 +289,7 @@ class DataSyncService:
         )
         async with MySQLDatabase.session() as session:
             repository = DataSyncRepository(session)
-            for event in captured.events:
-                await repository.append_event(task.id, event)
+            await repository.append_events(task.id, captured.events)
             if not await repository.advance_captured_coordinate(
                 task,
                 captured.tail,

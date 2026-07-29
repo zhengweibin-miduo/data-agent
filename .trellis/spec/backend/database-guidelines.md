@@ -621,3 +621,11 @@ targets.
 - Do not place application memory tables in Meta or use a second
   engine/Session; qualify them to `memory.database` on the existing
   transaction.
+- Keep source-query, replication, and DW MySQL sessions in UTC so `TIMESTAMP`
+  values retain one absolute-time interpretation across backfill and CDC.
+- Persist captured CDC rows and generation-reset deletes with bounded bulk
+  statements; the surrounding service transaction owns their coordinates,
+  task-state transitions, and ownership tombstones atomically.
+- A data-sync generation hash describes the physical table contract. Metric
+  dependency metadata and the global schema fingerprint remain durable
+  control-plane data but do not reset CDC coordinates or historical backfill.

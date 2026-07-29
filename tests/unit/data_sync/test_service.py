@@ -73,7 +73,7 @@ async def test_capture_atomically_marks_streaming_task_replaying(
 
     await sync_service._capture(task, source)
 
-    repository.append_event.assert_awaited_once_with(task.id, event)
+    repository.append_events.assert_awaited_once_with(task.id, (event,))
     repository.advance_captured_coordinate.assert_awaited_once_with(
         task,
         coordinate,

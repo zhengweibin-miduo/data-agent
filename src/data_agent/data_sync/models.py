@@ -105,7 +105,7 @@ class DesiredSyncTable(ContractModel):
         # 全局 schema 指纹还包含其他表和注释，不能作为单表重建 generation。
         payload = self.model_dump_json(
             exclude_none=False,
-            exclude={"schema_fingerprint"},
+            exclude={"schema_fingerprint", "metric_dependency_column_ids"},
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 

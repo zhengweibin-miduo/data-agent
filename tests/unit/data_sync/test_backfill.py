@@ -61,6 +61,7 @@ async def test_reset_source_rows_is_bounded_and_resumable(
     check_equal(
         "每批归属都持久化墓碑", repository.tombstone_source_key_owners.call_count, 2
     )
+    check_equal("每批 DW 删除使用一条语句", session.execute.await_count, 2)
 
 
 def test_desired_values_normalizes_mysql_set_values() -> None:

@@ -570,6 +570,30 @@ class DataSyncRepository:
         result = await self._session.execute(statement.prefix_with("IGNORE"))
         return bool(_rowcount(result))
 
+    async def append_events(
+        self,
+        task_id: int,
+        events: Sequence[SyncRowEvent],
+        *,
+        chunk_size: int = 1000,
+    ) -> None:
+        """按有界块批量暂存 Binlog 行事件，避免逐事件数据库往返。"""
+        for offset in range(0, len(events), chunk_size):
+            values = [
+                {
+                    "task_id": task_id,
+                    "source": event.source,
+                    "binlog_file": event.coordinate.file,
+                    "binlog_position": event.coordinate.position,
+                    "row_index": event.coordinate.row_index,
+                    "payload_json": event.model_dump(mode="json"),
+                }
+                for event in events[offset : offset + chunk_size]
+            ]
+            await self._session.execute(
+                insert(data_sync_event).values(values).prefix_with("IGNORE")
+            )
+
     async def read_events(
         self,
         task_id: int,

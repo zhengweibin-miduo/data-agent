@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import and_, column, delete, table, text
+from sqlalchemy import and_, column, delete, or_, table, text
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -104,12 +104,22 @@ async def reset_source_rows(
         source=task.desired.source,
         limit=limit,
     )
+    predicates = []
     for document in documents:
         encoded = json.loads(document)
         row = {
             name: decode_row_value(encoded[name]) for name in task.desired.primary_key
         }
-        await session.execute(_delete_statement(task.desired, row, dw_database))
+        predicates.append(
+            and_(*(column(name) == row[name] for name in task.desired.primary_key))
+        )
+    if predicates:
+        target = table(
+            task.desired.target_table,
+            *map(column, task.desired.primary_key),
+        )
+        target.schema = dw_database
+        await session.execute(delete(target).where(or_(*predicates)))
     await repository.tombstone_source_key_owners(
         target_table=task.desired.target_table,
         source=task.desired.source,

@@ -112,3 +112,7 @@ def test_desired_hash_is_scoped_to_one_table_contract() -> None:
     check_equal(
         "无关全局指纹不改变 generation", first.desired_hash(), second.desired_hash()
     )
+    third = first.model_copy(update={"metric_dependency_column_ids": ["id"]})
+    check_equal(
+        "指标依赖不改变数据同步 generation", first.desired_hash(), third.desired_hash()
+    )

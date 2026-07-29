@@ -87,15 +87,16 @@ class DWSchemaSynchronizer:
             # 步骤一：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
             compatible_extra_columns = await self._shared_columns(desired)
-            if current is not None:
-                await self._validate_existing_provenance(desired)
-            # 步骤二：每条自动提交 DDL 前重新确认 generation authority。
-            for statement in plan_schema_changes(
+            changes = plan_schema_changes(
                 database=self._database,
                 desired=desired,
                 current=current,
                 compatible_extra_columns=compatible_extra_columns,
-            ):
+            )
+            if current is not None:
+                await self._validate_existing_provenance(desired)
+            # 步骤二：每条自动提交 DDL 前重新确认 generation authority。
+            for statement in changes:
                 if before_ddl is not None and not await before_ddl():
                     raise RuntimeError("执行 DW DDL 前同步任务 generation 已失效")
                 await self._session.execute(text(statement))
