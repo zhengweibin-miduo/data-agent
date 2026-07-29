@@ -26,7 +26,7 @@ async def _fake_session() -> AsyncIterator[AsyncSession]:
 
 async def test_tool_schema_and_result_expose_only_safe_fields(monkeypatch) -> None:
     """工具参数与结果不包含任务状态、凭证、租约或业务行。"""
-    read_phases = AsyncMock(return_value=[SyncPhase.STREAMING])
+    read_phases = AsyncMock(return_value=[(SyncPhase.STREAMING, True)])
     monkeypatch.setattr(MySQLDatabase, "session", _fake_session)
     monkeypatch.setattr(DataSyncRepository, "read_readiness_phases", read_phases)
     tool = create_data_readiness_tool()
@@ -57,8 +57,8 @@ async def test_tool_requires_every_dependency_and_all_sources_ready(
     """任一依赖未就绪即关闭门禁，来源限定必须唯一匹配。"""
     read_phases = AsyncMock(
         side_effect=[
-            [SyncPhase.STREAMING],
-            [SyncPhase.STREAMING, SyncPhase.PAUSED],
+            [(SyncPhase.STREAMING, True)],
+            [(SyncPhase.STREAMING, True), (SyncPhase.PAUSED, True)],
         ]
     )
     monkeypatch.setattr(MySQLDatabase, "session", _fake_session)
@@ -78,7 +78,7 @@ async def test_tool_requires_every_dependency_and_all_sources_ready(
 async def test_tool_fails_closed_for_missing_or_ambiguous_source(monkeypatch) -> None:
     """无任务或来源限定后匹配多个任务均视为未就绪。"""
     read_phases = AsyncMock(
-        side_effect=[[], [SyncPhase.STREAMING, SyncPhase.STREAMING]]
+        side_effect=[[], [(SyncPhase.STREAMING, True), (SyncPhase.STREAMING, True)]]
     )
     monkeypatch.setattr(MySQLDatabase, "session", _fake_session)
     monkeypatch.setattr(DataSyncRepository, "read_readiness_phases", read_phases)
@@ -97,3 +97,16 @@ async def test_tool_fails_closed_for_missing_or_ambiguous_source(monkeypatch) ->
         actual=read_phases.await_count,
         expected=2,
     )
+
+
+async def test_tool_fails_closed_for_stale_streaming_worker(monkeypatch) -> None:
+    """任务虽为 streaming，worker 心跳过期后仍关闭门禁。"""
+    read_phases = AsyncMock(return_value=[(SyncPhase.STREAMING, False)])
+    monkeypatch.setattr(MySQLDatabase, "session", _fake_session)
+    monkeypatch.setattr(DataSyncRepository, "read_readiness_phases", read_phases)
+
+    result = await create_data_readiness_tool().ainvoke(
+        {"dependencies": [{"target_table": "orders", "source": "erp"}]}
+    )
+
+    check_equal("过期 worker 心跳关闭门禁", result, {"ready": False})

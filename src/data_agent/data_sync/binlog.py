@@ -202,6 +202,7 @@ class MySQLSourceClient:
         tail = start
         skipped_rows = start.row_index
         consumed_rows = start.row_index
+        replay_base = start.model_copy(update={"row_index": 0})
         try:
             for raw_event in stream:
                 if stream.log_file is None or stream.log_pos is None:
@@ -213,6 +214,9 @@ class MySQLSourceClient:
                 )
                 if isinstance(raw_event, XidEvent):
                     tail = end_coordinate
+                    replay_base = end_coordinate
+                    skipped_rows = 0
+                    consumed_rows = 0
                     if len(events) >= limit:
                         break
                     continue
@@ -237,9 +241,9 @@ class MySQLSourceClient:
                 if len(accepted) < len(remaining):
                     # 从本轮起点重放可保留 Table_map 和事务上下文；
                     # row_index 记录该起点后已消费的行数，避免重复返回。
-                    tail = start.model_copy(update={"row_index": consumed_rows})
+                    tail = replay_base.model_copy(update={"row_index": consumed_rows})
                     break
-                tail = start.model_copy(update={"row_index": consumed_rows})
+                tail = replay_base.model_copy(update={"row_index": consumed_rows})
                 if len(events) >= limit:
                     break
             if (

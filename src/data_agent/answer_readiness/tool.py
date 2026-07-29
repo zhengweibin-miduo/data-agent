@@ -9,6 +9,7 @@ from data_agent.answer_readiness.models import (
 from data_agent.data_sync.models import SyncPhase
 from data_agent.data_sync.repository import DataSyncRepository
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.settings import app_config
 
 DATA_READINESS_TOOL_NAME = "check_dw_data_readiness"
 
@@ -24,15 +25,22 @@ def create_data_readiness_tool() -> StructuredTool:
         async with MySQLDatabase.session() as session:
             repository = DataSyncRepository(session)
             for dependency in dependencies:
-                phases = await repository.read_readiness_phases(
+                states = await repository.read_readiness_phases(
                     target_table=dependency.target_table,
                     source=dependency.source,
+                    heartbeat_timeout_seconds=max(
+                        app_config.data_sync.claim_lease_seconds,
+                        app_config.data_sync.poll_interval_seconds * 3,
+                    ),
                 )
                 # 步骤二：缺失、来源限定后匹配不唯一或任一非 streaming 均关闭门禁。
                 if (
-                    not phases
-                    or (dependency.source is not None and len(phases) != 1)
-                    or any(phase is not SyncPhase.STREAMING for phase in phases)
+                    not states
+                    or (dependency.source is not None and len(states) != 1)
+                    or any(
+                        phase is not SyncPhase.STREAMING or not heartbeat_fresh
+                        for phase, heartbeat_fresh in states
+                    )
                 ):
                     return {"ready": False}
         return {"ready": True}

@@ -1,6 +1,6 @@
 """DW 结构同步规划的确定性单元检查。"""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from tests.helpers.checks import (
@@ -55,6 +55,24 @@ async def test_existing_table_requires_ownership_for_every_row() -> None:
 
     with pytest.raises(DataAgentError, match="未登记或多余"):
         await synchronizer._validate_existing_provenance(_desired())
+
+
+async def test_existing_table_rejects_equal_count_misaligned_ownership() -> None:
+    """DW 与 ownership 数量相等但主键集合错位时仍拒绝接管。"""
+    session = AsyncMock()
+    session.scalar = AsyncMock(side_effect=[2, 2])
+    target_result = MagicMock()
+    target_result.mappings.return_value.all.return_value = [
+        {"order_id": 1},
+        {"order_id": 2},
+    ]
+    owner_result = [("missing", "{}")]
+    session.execute = AsyncMock(side_effect=[target_result, owner_result])
+
+    with pytest.raises(DataAgentError, match="主键错位"):
+        await DWSchemaSynchronizer(
+            session, database="dw"
+        )._validate_existing_provenance(_desired())
 
 
 def test_plan_creates_missing_table_and_quotes_identifiers() -> None:

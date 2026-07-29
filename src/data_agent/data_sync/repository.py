@@ -229,16 +229,23 @@ class DataSyncRepository:
         *,
         target_table: str,
         source: str | None,
-    ) -> list[SyncPhase]:
-        """只读查询一个回答依赖匹配到的全部同步阶段。"""
+        heartbeat_timeout_seconds: float,
+    ) -> list[tuple[SyncPhase, bool]]:
+        """只读查询回答依赖的阶段及其 worker 心跳是否新鲜。"""
         # 步骤一：按稳定业务身份选择有限字段，不加锁、不领取租约也不推进状态。
-        statement = select(data_sync_task.c.phase).where(
-            data_sync_task.c.target_table == target_table
-        )
+        statement = select(
+            data_sync_task.c.phase,
+            data_sync_task.c.updated_at
+            >= func.timestampadd(
+                text("MICROSECOND"),
+                -max(1, int(heartbeat_timeout_seconds * 1_000_000)),
+                func.now(),
+            ),
+        ).where(data_sync_task.c.target_table == target_table)
         if source is not None:
             statement = statement.where(data_sync_task.c.source == source)
         result = await self._session.execute(statement.order_by(data_sync_task.c.id))
-        return [SyncPhase(str(phase)) for phase in result.scalars()]
+        return [(SyncPhase(str(phase)), bool(fresh)) for phase, fresh in result]
 
     async def renew_lease(
         self,

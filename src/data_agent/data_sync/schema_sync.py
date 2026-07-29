@@ -11,8 +11,13 @@ from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlglot import exp, parse
 
-from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
-from data_agent.data_sync.tables import data_sync_task
+from data_agent.data_sync.models import (
+    DesiredColumn,
+    DesiredSyncTable,
+    canonical_primary_key,
+    encode_row_value,
+)
+from data_agent.data_sync.tables import data_sync_key_owner, data_sync_task
 from data_agent.errors import DataAgentError
 
 _TYPE_PATTERN = re.compile(
@@ -124,8 +129,7 @@ class DWSchemaSynchronizer:
                 if column.name not in peer_names and not column.nullable:
                     _raise_conflict(
                         desired.target_table,
-                        f"当前来源字段 {column.name} 为 NOT NULL，"
-                        "其他来源无法安全省略",
+                        f"当前来源字段 {column.name} 为 NOT NULL，其他来源无法安全省略",
                     )
             for column in peer.columns:
                 if column.name not in {item.name for item in desired.columns}:
@@ -147,8 +151,6 @@ class DWSchemaSynchronizer:
         )
         if not row_count:
             return
-        from data_agent.data_sync.tables import data_sync_key_owner
-
         owner_count = await self._session.scalar(
             select(func.count())
             .select_from(data_sync_key_owner)
@@ -162,6 +164,61 @@ class DWSchemaSynchronizer:
                 desired.target_table,
                 "非空目标表存在未登记或多余的主键 ownership",
             )
+        quoted_keys = ", ".join(quote(name) for name in desired.primary_key)
+        after_clause = ""
+        parameters: dict[str, object] = {"limit": 1000}
+        while True:
+            result = await self._session.execute(
+                text(
+                    f"SELECT {quoted_keys} FROM {qualified} "
+                    f"{after_clause} ORDER BY {quoted_keys} LIMIT :limit"
+                ),
+                parameters,
+            )
+            rows = result.mappings().all()
+            if not rows:
+                return
+            documents: dict[str, str] = {}
+            for row in rows:
+                document, key_hash = canonical_primary_key(
+                    desired.primary_key,
+                    {name: encode_row_value(row[name]) for name in desired.primary_key},
+                )
+                documents[key_hash] = document
+            owner_result = await self._session.execute(
+                select(
+                    data_sync_key_owner.c.primary_key_hash,
+                    data_sync_key_owner.c.primary_key_json,
+                ).where(
+                    data_sync_key_owner.c.target_table == desired.target_table,
+                    data_sync_key_owner.c.deleted.is_(False),
+                    data_sync_key_owner.c.primary_key_hash.in_(documents),
+                )
+            )
+            actual = {
+                str(key_hash): str(document) for key_hash, document in owner_result
+            }
+            if actual != documents:
+                _raise_conflict(
+                    desired.target_table,
+                    "非空目标表存在主键错位的 ownership",
+                )
+            if len(rows) < 1000:
+                return
+            after_clause = (
+                f"WHERE ({quoted_keys}) > ("
+                + ", ".join(
+                    f":after_{index}" for index in range(len(desired.primary_key))
+                )
+                + ")"
+            )
+            parameters = {
+                "limit": 1000,
+                **{
+                    f"after_{index}": rows[-1][name]
+                    for index, name in enumerate(desired.primary_key)
+                },
+            }
 
     async def inspect(self, table_name: str) -> CurrentTable | None:
         """读取一张 DW 表的字段与主键结构。"""

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pymysqlreplication.event import XidEvent
 from pymysqlreplication.row_event import (
     DeleteRowsEvent,
     UpdateRowsEvent,
@@ -193,3 +194,70 @@ def test_capture_enforces_limit_inside_rows_event(
     check_equal("中间位点记录已消费行", first_batch.tail.row_index, 3)
     check_equal("续传仅返回剩余行", len(second_batch.events), 1)
     check_equal("续传行主键", second_batch.events[0].after, {"id": 4})
+
+
+def test_capture_advances_replay_base_after_committed_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """跨过 XID 后续传只重放当前未完成事务。"""
+    first = _event(WriteRowsEvent, [{"values": {"id": 1}}])
+    second = _event(
+        WriteRowsEvent,
+        [{"values": {"id": 2}}, {"values": {"id": 3}}],
+    )
+    setattr(first, "packet", SimpleNamespace(log_pos=120, event_size=20))
+    setattr(second, "packet", SimpleNamespace(log_pos=160, event_size=20))
+    xid = object.__new__(XidEvent)
+    starts: list[int] = []
+
+    class FakeStream:
+        """记录每轮起点并模拟两个事务。"""
+
+        def __init__(self, **kwargs: object) -> None:
+            self.log_file = "mysql-bin.000001"
+            self.log_pos = int(cast(Any, kwargs["log_pos"]))
+            starts.append(self.log_pos)
+
+        def __iter__(self) -> object:
+            for event, position in ((first, 120), (xid, 140), (second, 160)):
+                if position <= self.log_pos:
+                    continue
+                self.log_pos = position
+                yield event
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("data_agent.data_sync.binlog.BinLogStreamReader", FakeStream)
+    client = object.__new__(MySQLSourceClient)
+    dynamic_client: Any = client
+    dynamic_client.name = "source_demo"
+    dynamic_client._settings = SimpleNamespace(server_id=101)
+    dynamic_client._url = SimpleNamespace(
+        host="localhost",
+        port=3306,
+        username="root",
+        password="",
+        database="business",
+        query={},
+    )
+    dynamic_client._connect_timeout_seconds = 1
+    dynamic_client._read_timeout_seconds = 1
+
+    batch = client._capture_sync(
+        source_schema="business",
+        source_table="fact_order",
+        start=BinlogCoordinate(file="mysql-bin.000001", position=4, row_index=0),
+        limit=2,
+    )
+    resumed = client._capture_sync(
+        source_schema="business",
+        source_table="fact_order",
+        start=batch.tail,
+        limit=1,
+    )
+
+    check_equal("续传基点推进到最近 XID", batch.tail.position, 140)
+    check_equal("当前事务只记录已消费行", batch.tail.row_index, 1)
+    check_equal("下一轮从最近 XID 开始", starts, [4, 140])
+    check_equal("续传返回当前事务剩余行", resumed.events[0].after, {"id": 3})
