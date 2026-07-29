@@ -165,6 +165,94 @@ Require `/codex-fix-ci`, verify the current PR/head and failed PR runs, then
 delegate once with an expected-head guard and a non-force push back to the
 original PR branch.
 
+## Scenario: Manually Delegate Missed Codex Review Threads
+
+### 1. Scope / Trigger
+
+- Use the `Delegate Missed Codex Review Threads` workflow when a Codex
+  review exists but its `pull_request_review` event did not create an automatic
+  delegation run.
+
+### 2. Signatures
+
+- Event: `workflow_dispatch`.
+- Input: `pr_number` (required positive integer).
+- Script entry point:
+  `delegateManualReview({ github, context, core, prNumber, prAuthors, reviewBots })`.
+- Resolver entry point:
+  `resolveOutdatedReviewThreads({ github, context, core, prNumber, prAuthors, reviewBots })`.
+
+### 3. Contracts
+
+- The PR must be non-draft, use a same-repository head, and have an author in
+  `PR_AUTHORS`.
+- The job grants the ephemeral `${{ github.token }}` only `contents: read`.
+- `CODEX_TRIGGER_TOKEN` must be a user PAT with `Pull requests: Read and write`;
+  the separate `resolveOutdatedReviewThreads` step uses it to resolve outdated
+  threads, and the later delegation step uses it to read the PR and create the
+  `@codex` comment as the configured user.
+- The scanner includes every unresolved thread whose first comment author is
+  in `REVIEW_BOTS`, regardless of the originating review or its head SHA.
+- A thread ID already listed in a trusted `codex-review-loop` or
+  `codex-review-manual` comment has been processed and must not be delegated
+  again, even when the PR head changes.
+- An unresolved thread with a later reply beginning with
+  `无法安全完成：` is terminally blocked and must not be delegated again.
+- An unresolved Codex thread with `isOutdated=true` is resolved directly and
+  never enters the delegation comment.
+- Historical delegation detection uses explicit GraphQL thread IDs from
+  comments authored by `PR_AUTHORS` or the current token user; workflow-run
+  timing and review/head inference are not evidence of processing.
+
+### 4. Validation & Error Matrix
+
+- Invalid `pr_number`, draft PR, fork head, or unauthorized PR author -> fail
+  without a comment.
+- Failure to resolve an outdated thread -> retain the failed resolver step for
+  diagnosis, but continue to the delegation step so other missed threads are
+  still delegated.
+- The automatic `pull_request_review` event skips the resolver step and retains
+  its existing PAT-backed delegation behavior.
+- No missed unresolved Codex thread -> complete without a comment.
+- A changed head with only previously delegated threads -> no comment.
+- A newly discovered unresolved thread absent from all trusted delegation
+  comments -> permit a new delegation.
+
+### 5. Good/Base/Bad Cases
+
+- Good: several never-delegated unresolved Codex threads from different review
+  rounds are delegated together while outdated threads are resolved.
+- Base: every unresolved thread has a later `无法安全完成：` reply, so no
+  comment is created.
+- Bad: scanning only the first 100 replies misses a later blocked reply; thread
+  comments must be paginated before delegation.
+
+### 6. Tests Required
+
+- The standalone Node self-check covers outdated-thread resolution,
+  blocked-thread exclusion, comment pagination, reviewer filtering, stable
+  marker ordering, duplicate suppression, invalid PR rejection, and the rule
+  that the PAT-backed delegation path never calls `resolveReviewThread`.
+- Parse the workflow YAML and verify the resolver uses `CODEX_TRIGGER_TOKEN`
+  with `continue-on-error: true`; run `git diff --check` and `actionlint` when
+  it is available.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Delegate only the latest review, use the ephemeral `${{ github.token }}` for
+`resolveReviewThread`, let a resolver failure block all missed threads,
+repeatedly delegate a thread already listed in a prior delegation, or retry a
+thread with an explicit `无法安全完成：` blocker.
+
+#### Correct
+
+Use the user PAT in `CODEX_TRIGGER_TOKEN` to resolve outdated threads first,
+while allowing the later step to continue when resolution fails; then use the
+same PAT to exclude resolved, explicitly blocked, and previously delegated
+thread IDs and comment only the missed set.
+
 ## Scenario: User-triggered Codex Conflict Resolution
 
 ### 1. Scope / Trigger

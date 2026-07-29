@@ -1422,3 +1422,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 45: 修复 Codex thread 解析令牌
+
+**Date**: 2026-07-29
+**Task**: 修复 Codex thread 解析令牌
+**Branch**: `fix/codex-review-resolver-token-20260729`
+
+### Summary
+
+手动委派工作流改用用户 PAT resolve Outdated thread，并允许 resolve 失败后继续委派遗漏 thread。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aaeb0a3` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
