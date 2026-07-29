@@ -10,7 +10,11 @@ from tests.helpers.checks import (
     fail_check,
 )
 
-from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
+from data_agent.data_sync.models import (
+    DesiredColumn,
+    DesiredSyncTable,
+    primary_key_identity,
+)
 from data_agent.data_sync.schema_sync import (
     CurrentColumn,
     CurrentTable,
@@ -45,6 +49,27 @@ def _desired(*, amount_type: str = "DECIMAL(12, 2)") -> DesiredSyncTable:
         schema_fingerprint="a" * 64,
         metric_dependency_column_ids=["amount"],
     )
+
+
+async def test_existing_bit_key_uses_the_ownership_codec() -> None:
+    """DW 驱动返回的 BIT 字节主键与回填登记的整数文档保持一致。"""
+    desired = _desired()
+    desired.columns[0] = DesiredColumn(
+        id="order_id", name="order_id", data_type="BIT(8)", nullable=False
+    )
+    session = AsyncMock()
+    session.scalar = AsyncMock(side_effect=[1, 1])
+    target_result = MagicMock()
+    target_result.mappings.return_value.all.return_value = [{"order_id": b"\x05"}]
+    owner_result = MagicMock()
+    session.execute = AsyncMock(side_effect=[target_result, owner_result])
+
+    document, key_hash = primary_key_identity(desired, {"order_id": 5})
+    owner_result.__iter__.return_value = iter([(key_hash, document)])
+
+    await DWSchemaSynchronizer(
+        session, database="dw"
+    )._validate_existing_provenance(desired)
 
 
 async def test_existing_table_requires_ownership_for_every_row() -> None:
@@ -315,6 +340,8 @@ def test_enum_literals_keep_original_case() -> None:
         ("VARCHAR(32)", "VARCHAR(64)", True),
         ("VARBINARY(64)", "VARBINARY(32)", False),
         ("DECIMAL(10,2)", "DECIMAL(12,3)", True),
+        ("DECIMAL(10,2)", "DECIMAL(12,2) UNSIGNED", False),
+        ("DECIMAL(10,2) UNSIGNED", "DECIMAL(12,2)", True),
         ("DECIMAL(10,2)", "DECIMAL(10,3)", False),
     ],
 )

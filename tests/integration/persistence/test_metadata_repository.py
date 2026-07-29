@@ -1,9 +1,10 @@
 """Meta、权威记忆与 outbox 原子事务集成检查。"""
 
+import asyncio
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.exc import IntegrityError
 
 from data_agent.ddl_metadata.parsing import parse_ddl
@@ -179,6 +180,36 @@ async def test_meta_memory_outbox_atomicity() -> None:
     finally:
         await cleanup_schema(schema)
         await cleanup_schema(rollback_schema)
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
+async def test_snapshot_commit_does_not_wait_for_dw_schema_lock() -> None:
+    """DW worker 长时间持锁时 accepted snapshot 仍独立提交。"""
+    await ensure_schema()
+    source = f"lock_independent_{uuid4().hex}"
+    schema = await parse_ddl(
+        source,
+        "CREATE TABLE dim_lock_independent (id BIGINT PRIMARY KEY)",
+    )
+    service = MetadataSnapshotService({source: "source_demo"})
+    lock_name = "data_sync_schema:dw:dim_lock_independent"
+    try:
+        async with MySQLDatabase.get_client().connect() as lock_connection:
+            acquired = await lock_connection.scalar(
+                text("SELECT GET_LOCK(:lock_name, 0)"), {"lock_name": lock_name}
+            )
+            check_equal("测试连接取得 DW 结构锁", acquired, 1)
+            await asyncio.wait_for(
+                service.persist(schema, semantic_for(schema, fact=False), [], [], []),
+                timeout=5,
+            )
+            released = await lock_connection.scalar(
+                text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
+            )
+            check_equal("测试连接释放 DW 结构锁", released, 1)
+    finally:
+        await cleanup_schema(schema)
         await MySQLDatabase.close()
 
 

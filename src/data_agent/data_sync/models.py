@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -134,6 +135,24 @@ class KeyConflict(ContractModel):
     primary_key_hash: str = Field(description="规范化目标主键文档哈希。")
     owner_source: str = Field(description="首次成功写入该主键的数据源。")
     contender_source: str = Field(description="尝试覆盖该主键的数据源。")
+
+
+def primary_key_identity(
+    desired: DesiredSyncTable,
+    row: Mapping[str, object],
+) -> tuple[str, str]:
+    """按字段类型规范化目标主键并返回稳定文档及哈希。"""
+    encoded: dict[str, EncodedValue] = {}
+    columns = {column.name: column for column in desired.columns}
+    for name in desired.primary_key:
+        value = row[name]
+        if columns[name].data_type.strip().upper().startswith("BIT"):
+            if isinstance(value, bytes):
+                value = int.from_bytes(value, byteorder="big", signed=False)
+            elif not isinstance(value, int):
+                raise TypeError("MySQL BIT 主键必须解码为 bytes 或 int")
+        encoded[name] = encode_row_value(value)
+    return canonical_primary_key(desired.primary_key, encoded)
 
 
 def encode_row_value(value: object, *, json_value: bool = False) -> EncodedValue:

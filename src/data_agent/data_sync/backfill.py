@@ -14,9 +14,8 @@ from data_agent.data_sync.models import (
     DesiredSyncTable,
     EncodedValue,
     RowOperation,
-    canonical_primary_key,
     decode_row_value,
-    encode_row_value,
+    primary_key_identity,
 )
 from data_agent.data_sync.repository import (
     BufferedSyncEvent,
@@ -137,7 +136,7 @@ async def apply_buffered_event(
         before = _decoded_event_row(desired, event.before)
         await _claim_owner(repository, desired, before)
         await session.execute(_delete_statement(desired, before, dw_database))
-        key_document, key_hash = _primary_key_identity(desired, before)
+        key_document, key_hash = primary_key_identity(desired, before)
         if not await repository.tombstone_key_owner(
             target_table=desired.target_table,
             primary_key_hash=key_hash,
@@ -153,7 +152,7 @@ async def apply_buffered_event(
             ):
                 await _claim_owner(repository, desired, before)
                 await session.execute(_delete_statement(desired, before, dw_database))
-                _, old_hash = _primary_key_identity(desired, before)
+                _, old_hash = primary_key_identity(desired, before)
                 await repository.tombstone_key_owner(
                     target_table=desired.target_table,
                     primary_key_hash=old_hash,
@@ -206,7 +205,7 @@ async def _claim_owner(
     row: Mapping[str, object],
 ) -> None:
     """建立目标主键归属并把跨源碰撞收敛为确定性冲突。"""
-    document, key_hash = _primary_key_identity(desired, row)
+    document, key_hash = primary_key_identity(desired, row)
     conflict = await repository.claim_key_owner(
         target_table=desired.target_table,
         primary_key_hash=key_hash,
@@ -224,24 +223,6 @@ async def _claim_owner(
                 "contender_source": conflict.contender_source,
             },
         )
-
-
-def _primary_key_identity(
-    desired: DesiredSyncTable,
-    row: Mapping[str, object],
-) -> tuple[str, str]:
-    """编码目标主键及其稳定哈希。"""
-    encoded: dict[str, EncodedValue] = {}
-    columns = {column.name: column for column in desired.columns}
-    for name in desired.primary_key:
-        value = row[name]
-        if columns[name].data_type.strip().upper().startswith("BIT"):
-            if isinstance(value, bytes):
-                value = int.from_bytes(value, byteorder="big", signed=False)
-            elif not isinstance(value, int):
-                raise TypeError("MySQL BIT 主键必须解码为 bytes 或 int")
-        encoded[name] = encode_row_value(value)
-    return canonical_primary_key(desired.primary_key, encoded)
 
 
 def _primary_key_values(

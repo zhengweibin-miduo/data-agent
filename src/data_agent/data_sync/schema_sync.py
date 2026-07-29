@@ -14,8 +14,7 @@ from sqlglot import exp, parse
 from data_agent.data_sync.models import (
     DesiredColumn,
     DesiredSyncTable,
-    canonical_primary_key,
-    encode_row_value,
+    primary_key_identity,
 )
 from data_agent.data_sync.tables import data_sync_key_owner, data_sync_task
 from data_agent.errors import DataAgentError
@@ -180,9 +179,9 @@ class DWSchemaSynchronizer:
                 return
             documents: dict[str, str] = {}
             for row in rows:
-                document, key_hash = canonical_primary_key(
-                    desired.primary_key,
-                    {name: encode_row_value(row[name]) for name in desired.primary_key},
+                document, key_hash = primary_key_identity(
+                    desired,
+                    {name: row[name] for name in desired.primary_key},
                 )
                 documents[key_hash] = document
             owner_result = await self._session.execute(
@@ -409,7 +408,7 @@ def is_safe_widening(current_type: str, desired_type: str) -> bool:
             or desired_second is None
         ):
             return False
-        return (
+        return not (not current_unsigned and desired_unsigned) and (
             desired_second >= current_second
             and desired_first - desired_second >= current_first - current_second
         )
