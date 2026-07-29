@@ -371,6 +371,12 @@ def plan_schema_changes(
                 desired.target_table,
                 f"字段 {desired_column.name} 的类型变化不安全",
             )
+        if current_column.nullable:
+            definition = _column_definition(
+                desired_column,
+                quote=quote,
+                nullable=True,
+            )
         changes.append(f"ALTER TABLE {qualified_table} MODIFY COLUMN {definition}")
     return changes
 
@@ -419,14 +425,17 @@ def _column_definition(
     column: DesiredColumn,
     *,
     quote: object,
+    nullable: bool | None = None,
 ) -> str:
     """生成已引用标识符的单个 MySQL 字段定义。"""
     quote_identifier = quote
     if not callable(quote_identifier):
         raise TypeError("MySQL 标识符引用器不可调用")
-    nullable = " NULL" if column.nullable else " NOT NULL"
+    effective_nullable = column.nullable if nullable is None else nullable
+    nullable_sql = " NULL" if effective_nullable else " NOT NULL"
     return (
-        f"{quote_identifier(column.name)} {_canonical_type(column.data_type)}{nullable}"
+        f"{quote_identifier(column.name)} {_canonical_type(column.data_type)}"
+        f"{nullable_sql}"
     )
 
 

@@ -303,6 +303,22 @@ def test_plan_accepts_nullable_target_for_required_source_column() -> None:
     )
 
 
+def test_plan_preserves_nullable_target_when_widening_required_column() -> None:
+    """目标扩宽类型时不收紧已有的可空性。"""
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "decimal(10,2)", True),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        "扩宽类型保留目标可空性",
+        plan_schema_changes(database="dw", desired=_desired(), current=current),
+        ["ALTER TABLE dw.fact_order MODIFY COLUMN amount DECIMAL(12, 2) NULL"],
+    )
+
+
 def test_plan_rejects_non_binary_string_primary_key_collation() -> None:
     """已有字符串主键必须与字节 ownership 使用相同等价语义。"""
     desired = _desired()

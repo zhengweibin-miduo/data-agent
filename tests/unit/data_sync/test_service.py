@@ -33,6 +33,7 @@ async def test_streaming_backlog_returns_to_replaying(
 
     await sync_service._process(task)
 
+    sync_service._capture.assert_not_awaited()
     repository.settle_phase.assert_awaited_once_with(task, SyncPhase.REPLAYING)
 
 

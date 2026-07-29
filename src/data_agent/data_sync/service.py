@@ -135,9 +135,14 @@ class DataSyncService:
                 await asyncio.sleep(self._settings.backfill_interval_seconds)
             return
         if task.phase in (SyncPhase.REPLAYING, SyncPhase.STREAMING):
-            await self._with_lease_heartbeat(task, self._capture(task, source))
             async with MySQLDatabase.session() as session:
                 events = await DataSyncRepository(session).read_events(task.id, limit=1)
+            if not events:
+                await self._with_lease_heartbeat(task, self._capture(task, source))
+                async with MySQLDatabase.session() as session:
+                    events = await DataSyncRepository(session).read_events(
+                        task.id, limit=1
+                    )
             if events:
                 async with MySQLDatabase.session() as session:
                     await self._with_lease_heartbeat(
