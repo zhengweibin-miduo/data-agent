@@ -321,9 +321,14 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   Destructive or ambiguous differences pause work without altering Meta.
 - Initial load records a Binlog coordinate, persists later ROW events, reads
   source rows by bounded simple/composite-PK keyset, replays the buffer, then
-  enters streaming. Historical cursor advancement stops whenever the durable
-  event buffer is full, so every later source row remains protected by a
-  retained Binlog coordinate.
+  enters streaming. If the durable event buffer fills before the historical
+  scan completes, the worker atomically discards that incomplete baseline and
+  its buffered events, clears all cursors, and starts again from a fresh Binlog
+  coordinate; it must never leave a full buffer parked in `backfilling`.
+- Per-target DW schema locks serialize inspection and additive DDL. Lock
+  contention is normal scheduling pressure: release the task lease and delay
+  the same phase without incrementing its failure attempts or moving it toward
+  `dead`.
 - Target DML, key ownership, event acknowledgement, and applied-coordinate
   advancement share one MySQL transaction. Captured and applied coordinates are
   separate.

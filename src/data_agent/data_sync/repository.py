@@ -375,6 +375,37 @@ class DataSyncRepository:
         )
         return bool(_rowcount(result))
 
+    async def restart_backfill(self, task: ClaimedSyncTask) -> bool:
+        """缓冲饱和后原子丢弃未完成基线及其事件并重新排队。"""
+        authority = self._task_authority(task)
+        await self._session.execute(
+            delete(data_sync_event).where(
+                data_sync_event.c.task_id.in_(
+                    select(data_sync_task.c.id).where(authority)
+                )
+            )
+        )
+        result = await self._session.execute(
+            update(data_sync_task)
+            .where(authority)
+            .values(
+                phase=SyncPhase.BUFFERING.value,
+                snapshot_file=None,
+                snapshot_position=None,
+                captured_file=None,
+                captured_position=None,
+                captured_row_index=0,
+                applied_file=None,
+                applied_position=None,
+                applied_row_index=0,
+                last_backfill_key=None,
+                lease_token=None,
+                lease_expires_at=None,
+                updated_at=func.now(),
+            )
+        )
+        return bool(_rowcount(result))
+
     async def record_backfill_cursor(
         self,
         task: ClaimedSyncTask,

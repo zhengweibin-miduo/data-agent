@@ -19,7 +19,10 @@ from data_agent.data_sync.backfill import (
 from data_agent.data_sync.binlog import MySQLSourceClient
 from data_agent.data_sync.models import BinlogCoordinate, SyncPhase
 from data_agent.data_sync.repository import ClaimedSyncTask, DataSyncRepository
-from data_agent.data_sync.schema_sync import DWSchemaSynchronizer
+from data_agent.data_sync.schema_sync import (
+    DWSchemaSynchronizer,
+    SchemaLockUnavailableError,
+)
 from data_agent.errors import DataAgentError
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import DataSyncSettings
@@ -62,6 +65,10 @@ class DataSyncService:
         except LeaseLostError:
             # 另一 worker 已取得所有权；旧持有者不得再尝试结算或消耗重试预算。
             logger.warning("DW 增量同步任务租约已失效，当前步骤已安全让渡")
+        except SchemaLockUnavailableError:
+            # 同目标表的正常结构串行化不属于任务失败，不应消耗重试预算。
+            logger.info("DW 目标表结构锁正被占用，任务将在稍后重新调度")
+            await self._reschedule(task)
         except DataAgentError as error:
             if error.code == "dw_primary_key_conflict":
                 logger.warning("DW 增量同步检测到跨数据源主键冲突，任务已暂停等待处理")
@@ -117,9 +124,11 @@ class DataSyncService:
             )
             if not capture_has_capacity:
                 async with MySQLDatabase.session() as session:
-                    await DataSyncRepository(session).settle_phase(
-                        task, SyncPhase.BACKFILLING
-                    )
+                    # 有界缓冲已无法继续保护当前基线。丢弃本轮未完成基线并从
+                    # 新位点重新建立，比原地等待一个永远不会被消费的缓冲安全。
+                    restarted = await DataSyncRepository(session).restart_backfill(task)
+                    if not restarted:
+                        raise LeaseLostError("重启饱和回填时同步任务租约已失效")
                 return
             rows = await self._with_lease_heartbeat(
                 task,
@@ -327,6 +336,15 @@ class DataSyncService:
                 task,
                 phase=phase,
                 error_type=error_type,
+            )
+
+    async def _reschedule(self, task: ClaimedSyncTask) -> None:
+        """不消耗失败预算地释放租约并延后当前阶段。"""
+        async with MySQLDatabase.session() as session:
+            await DataSyncRepository(session).settle_phase(
+                task,
+                task.phase,
+                delay_seconds=self._settings.retry_base_seconds,
             )
 
 

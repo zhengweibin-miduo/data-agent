@@ -19,6 +19,7 @@ from data_agent.data_sync.schema_sync import (
     CurrentColumn,
     CurrentTable,
     DWSchemaSynchronizer,
+    SchemaLockUnavailableError,
     is_safe_widening,
     plan_schema_changes,
 )
@@ -70,6 +71,15 @@ async def test_existing_bit_key_uses_the_ownership_codec() -> None:
     await DWSchemaSynchronizer(
         session, database="dw"
     )._validate_existing_provenance(desired)
+
+
+async def test_schema_lock_contention_has_a_distinct_error() -> None:
+    """命名锁超时必须可由服务识别为不消耗预算的正常竞争。"""
+    session = AsyncMock()
+    session.scalar.return_value = 0
+
+    with pytest.raises(SchemaLockUnavailableError):
+        await DWSchemaSynchronizer(session, database="dw").synchronize(_desired())
 
 
 async def test_existing_table_requires_ownership_for_every_row() -> None:

@@ -10,6 +10,7 @@ from tests.unit.data_sync.test_repository import _streaming_task
 
 from data_agent.data_sync import service
 from data_agent.data_sync.models import SyncPhase
+from data_agent.data_sync.schema_sync import SchemaLockUnavailableError
 from data_agent.data_sync.service import DataSyncService
 
 
@@ -75,10 +76,10 @@ async def test_unexpected_error_logs_redacted_traceback(
     safe_logger.error.assert_called_once()
 
 
-async def test_backfill_stops_when_event_buffer_is_saturated(
+async def test_backfill_restarts_when_event_buffer_is_saturated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """捕获缓冲饱和后不得推进未受 CDC 保护的历史游标。"""
+    """捕获缓冲饱和后放弃旧基线并从新位点重新开始。"""
     task = replace(_streaming_task(), phase=SyncPhase.BACKFILLING)
     repository = AsyncMock()
     monkeypatch.setattr(service, "DataSyncRepository", lambda session: repository)
@@ -96,7 +97,24 @@ async def test_backfill_stops_when_event_buffer_is_saturated(
     await sync_service._process(task)
 
     read_batch.assert_not_awaited()
-    repository.settle_phase.assert_awaited_once_with(task, SyncPhase.BACKFILLING)
+    repository.restart_backfill.assert_awaited_once_with(task)
+
+
+async def test_schema_lock_contention_does_not_consume_retry_budget() -> None:
+    """正常结构锁竞争只重新调度，不进入失败退避。"""
+    task = replace(_streaming_task(), phase=SyncPhase.PENDING_SCHEMA)
+    settings = AsyncMock(retry_base_seconds=5)
+    sync_service = DataSyncService({"local": AsyncMock()}, settings)
+    sync_service._process = AsyncMock(
+        side_effect=SchemaLockUnavailableError("schema lock busy")
+    )
+    sync_service._reschedule = AsyncMock()
+    sync_service._retry = AsyncMock()
+
+    await sync_service._process_safely(task)
+
+    sync_service._reschedule.assert_awaited_once_with(task)
+    sync_service._retry.assert_not_awaited()
 
 
 class _fake_session:

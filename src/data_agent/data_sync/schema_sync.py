@@ -58,6 +58,10 @@ class CurrentTable:
     unique_indexes: tuple[str, ...] = ()
 
 
+class SchemaLockUnavailableError(RuntimeError):
+    """同一 DW 目标的结构操作仍在进行，当前任务应稍后重新调度。"""
+
+
 class DWSchemaSynchronizer:
     """检查并执行允许的 DW 加法式结构变更。"""
 
@@ -78,7 +82,7 @@ class DWSchemaSynchronizer:
             text("SELECT GET_LOCK(:lock_name, 10)"), {"lock_name": lock_name}
         )
         if acquired != 1:
-            raise RuntimeError("无法取得 DW 结构 generation 串行锁")
+            raise SchemaLockUnavailableError("无法取得 DW 结构 generation 串行锁")
         try:
             # 步骤一：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
