@@ -135,6 +135,7 @@ async def test_backfill_drains_event_and_keeps_progress_when_buffer_is_saturated
     settings = AsyncMock(event_cleanup_batch_size=3)
     sync_service = DataSyncService({"local": AsyncMock()}, settings)
     sync_service._capture = AsyncMock(return_value=False)
+    sync_service._renew_lease = AsyncMock()
 
     async def finish_operation(task: object, work: Awaitable[Any]) -> object:
         return await work
@@ -145,6 +146,7 @@ async def test_backfill_drains_event_and_keeps_progress_when_buffer_is_saturated
 
     repository.read_events.assert_awaited_once_with(task.id, limit=3)
     assert [call.args[2] for call in apply_event.await_args_list] == events
+    assert sync_service._renew_lease.await_count == len(events)
     repository.cleanup_events.assert_awaited_once_with(task.id, limit=3)
     read_batch.assert_awaited_once()
     repository.restart_backfill.assert_not_awaited()

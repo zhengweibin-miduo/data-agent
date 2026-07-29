@@ -123,27 +123,27 @@ class DataSyncService:
                 task, self._capture(task, source)
             )
             if not capture_has_capacity:
-                async with MySQLDatabase.session() as session:
-                    repository = DataSyncRepository(session)
+                async with MySQLDatabase.session() as read_session:
+                    repository = DataSyncRepository(read_session)
                     events = await repository.read_events(
                         task.id,
                         limit=self._settings.event_cleanup_batch_size,
                     )
-                    if not events:
-                        raise RuntimeError("Binlog 缓冲已饱和但没有待应用事件")
-                    # 先按有界批次腾挪已持久化事件，再读取当前源端历史批次。
-                    # 这样既保留既有回填游标，也让捕获位点以批次吞吐继续推进。
-                    for event in events:
-                        await self._with_lease_heartbeat(
+                if not events:
+                    raise RuntimeError("Binlog 缓冲已饱和但没有待应用事件")
+                # 每个事件独立提交，并在事件之间续租。这样批次总耗时可以跨越
+                # 一个租期，同时续租不会等待应用事务持有的任务行锁。
+                for event in events:
+                    await self._renew_lease(task)
+                    async with MySQLDatabase.session() as apply_session:
+                        await apply_buffered_event(
+                            apply_session,
                             task,
-                            apply_buffered_event(
-                                session,
-                                task,
-                                event,
-                                dw_database=self._settings.dw_database,
-                            ),
+                            event,
+                            dw_database=self._settings.dw_database,
                         )
-                    await repository.cleanup_events(
+                async with MySQLDatabase.session() as cleanup_session:
+                    await DataSyncRepository(cleanup_session).cleanup_events(
                         task.id,
                         limit=self._settings.event_cleanup_batch_size,
                     )
@@ -343,6 +343,17 @@ class DataSyncService:
             if not running.done():
                 running.cancel()
             raise
+
+    async def _renew_lease(self, task: ClaimedSyncTask) -> None:
+        """在短事务中续租，避免批处理事务与心跳争用任务行锁。"""
+        async with MySQLDatabase.session() as session:
+            renewed = await DataSyncRepository(session).renew_lease(
+                task.id,
+                task.lease_token,
+                lease_seconds=self._settings.claim_lease_seconds,
+            )
+        if not renewed:
+            raise LeaseLostError("同步任务租约已失效")
 
     async def _hold(
         self,

@@ -623,9 +623,16 @@ targets.
   transaction.
 - Keep source-query, replication, and DW MySQL sessions in UTC so `TIMESTAMP`
   values retain one absolute-time interpretation across backfill and CDC.
+- Require the DW MySQL server to report `@@lower_case_table_names = 0`. The
+  data-sync worker rejects case-insensitive modes at startup because tasks,
+  schema locks, and ownership use binary target-table identities.
 - Persist captured CDC rows and generation-reset deletes with bounded bulk
   statements; the surrounding service transaction owns their coordinates,
   task-state transitions, and ownership tombstones atomically.
+- When saturated CDC events are drained during backfill, commit each event in
+  its own bounded transaction and renew the task lease between transactions;
+  do not run an independent heartbeat against a task row already locked by the
+  current application transaction.
 - A data-sync generation hash describes the physical table contract. Metric
   dependency metadata and the global schema fingerprint remain durable
   control-plane data but do not reset CDC coordinates or historical backfill.

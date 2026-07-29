@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 
 from loguru import logger
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_agent.data_sync.binlog import MySQLSourceClient, close_sources
 from data_agent.data_sync.repository import DataSyncRepository
@@ -35,6 +37,7 @@ async def run_worker() -> None:
             *(source.check_capabilities() for source in sources.values())
         )
         async with MySQLDatabase.session() as session:
+            await _check_dw_table_name_case_sensitivity(session)
             desired_tables = await DataSyncRepository(session).read_desired_tables()
         await asyncio.gather(
             *(
@@ -64,6 +67,18 @@ async def run_worker() -> None:
             await MySQLDatabase.close()
             logger.info("数据同步进程已停止并释放全部数据库连接")
             await logger.complete()
+
+
+async def _check_dw_table_name_case_sensitivity(session: AsyncSession) -> None:
+    """拒绝目标表名大小写不敏感的 DW，避免控制面身份发生别名碰撞。"""
+    mode = int(
+        (await session.execute(text("SELECT @@lower_case_table_names"))).scalar_one()
+    )
+    if mode != 0:
+        raise RuntimeError(
+            "DW MySQL 必须配置 lower_case_table_names=0，"
+            "否则目标表身份无法与控制面二进制名称保持一致"
+        )
 
 
 def main() -> None:
