@@ -536,6 +536,9 @@ def _normalize_type(data_type: str) -> str:
         precision = int(decimal_match.group(1) or 10)
         scale = int(decimal_match.group(2) or 0)
         return f"DECIMAL({precision},{scale}){decimal_match.group(3) or ''}"
+    temporal_match = re.fullmatch(r"(DATETIME|TIMESTAMP|TIME)\(0\)", normalized)
+    if temporal_match:
+        return temporal_match.group(1)
     return normalized
 
 

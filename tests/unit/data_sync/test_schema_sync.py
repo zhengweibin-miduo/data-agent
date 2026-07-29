@@ -568,6 +568,24 @@ def test_safe_widening_matrix(current: str, desired: str, expected: bool) -> Non
     )
 
 
+@pytest.mark.parametrize("data_type", ["DATETIME(0)", "TIMESTAMP(0)", "TIME(0)"])
+def test_zero_temporal_precision_matches_mysql_introspection(data_type: str) -> None:
+    """显式零 FSP 与 MySQL 省略零 FSP 的结构表示等价。"""
+    desired = _desired(amount_type=data_type)
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", data_type.split("(", 1)[0].lower(), False),
+        ),
+        primary_key=("order_id",),
+    )
+    check_equal(
+        f"{data_type} 复核收敛",
+        plan_schema_changes(database="dw", desired=desired, current=current),
+        [],
+    )
+
+
 def test_plan_rejects_destructive_difference() -> None:
     """额外字段、主键变化和缩窄类型均成为非重试结构冲突。"""
     destructive = CurrentTable(

@@ -34,6 +34,9 @@ async def run_worker() -> None:
     try:
         # 步骤一：启动前验证全部源满足 ROW/FULL Binlog 契约。
         await asyncio.gather(
+            *(source.acquire_worker_lock() for source in sources.values())
+        )
+        await asyncio.gather(
             *(source.check_capabilities() for source in sources.values())
         )
         async with MySQLDatabase.session() as session:

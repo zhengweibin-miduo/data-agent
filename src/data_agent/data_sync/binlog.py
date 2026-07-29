@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from pymysqlreplication.row_event import (
 from sqlalchemy import text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.engine import URL, make_url
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from data_agent.data_sync.models import (
     BinlogCoordinate,
@@ -112,6 +113,7 @@ class MySQLSourceClient:
                 "init_command": "SET time_zone = '+00:00'",
             },
         )
+        self._worker_lock_connection: AsyncConnection | None = None
 
     @property
     def engine(self) -> AsyncEngine:
@@ -127,6 +129,7 @@ class MySQLSourceClient:
                     "SELECT @@GLOBAL.binlog_format AS binlog_format, "
                     "@@GLOBAL.binlog_row_image AS binlog_row_image, "
                     "@@GLOBAL.binlog_row_value_options AS binlog_row_value_options, "
+                    "@@lower_case_table_names AS lower_case_table_names, "
                     "@@GLOBAL.log_bin AS log_bin"
                 )
             )
@@ -139,6 +142,10 @@ class MySQLSourceClient:
         if _uses_partial_json(row["binlog_row_value_options"]):
             raise SourceCapabilityError(
                 f"数据源 {self.name} 启用了不受支持的 PARTIAL_JSON Binlog"
+            )
+        if int(row["lower_case_table_names"]) != 0:
+            raise SourceCapabilityError(
+                f"数据源 {self.name} 必须配置 lower_case_table_names=0"
             )
         if str(row["log_bin"]).upper() not in {"1", "ON"}:
             raise SourceCapabilityError(f"数据源 {self.name} 未启用 Binary Logging")
@@ -179,6 +186,19 @@ class MySQLSourceClient:
         qualified = f"{quote(source_schema)}.{quote(source_table)}"
         try:
             async with self._engine.connect() as connection:
+                engine = (
+                    await connection.execute(
+                        text(
+                            "SELECT ENGINE FROM information_schema.TABLES "
+                            "WHERE TABLE_SCHEMA=:schema AND TABLE_NAME=:table"
+                        ),
+                        {"schema": source_schema, "table": source_table},
+                    )
+                ).scalar_one_or_none()
+                if str(engine).upper() != "INNODB":
+                    raise SourceCapabilityError(
+                        f"同步源表 {source_schema}.{source_table} 必须使用 InnoDB"
+                    )
                 await connection.execute(text(f"SELECT 1 FROM {qualified} LIMIT 0"))
         except Exception as error:
             raise SourceCapabilityError(
@@ -192,6 +212,7 @@ class MySQLSourceClient:
         source_table: str,
         start: BinlogCoordinate,
         limit: int,
+        byte_limit: int = 1024 * 1024,
     ) -> BinlogCaptureResult:
         """从给定位点读取到当前尾部，最多返回 ``limit`` 条规范事件。"""
         if limit <= 0:
@@ -202,10 +223,33 @@ class MySQLSourceClient:
             source_table=source_table,
             start=start,
             limit=limit,
+            byte_limit=byte_limit,
         )
+
+    async def acquire_worker_lock(self) -> None:
+        """在源库持有进程级锁，禁止相同复制 server_id 并发运行。"""
+        if self._worker_lock_connection is not None:
+            return
+        connection = await self._engine.connect()
+        # GET_LOCK 的命名空间已由源 MySQL server 隔离；锁名只需绑定复制身份，
+        # 这样同一服务器的不同 DNS 别名也不能绕过 server_id 唯一性。
+        digest = hashlib.sha256(str(self._settings.server_id).encode()).hexdigest()[:32]
+        lock_name = f"data-agent:replica:{digest}"
+        acquired = await connection.scalar(
+            text("SELECT GET_LOCK(:name, 0)"), {"name": lock_name}
+        )
+        if acquired != 1:
+            await connection.close()
+            raise SourceCapabilityError(
+                f"数据源 {self.name} 的复制 server_id 已被其他 worker 使用"
+            )
+        self._worker_lock_connection = connection
 
     async def close(self) -> None:
         """释放该命名源库的查询连接池。"""
+        if self._worker_lock_connection is not None:
+            await self._worker_lock_connection.close()
+            self._worker_lock_connection = None
         await self._engine.dispose()
 
     def _capture_sync(
@@ -215,6 +259,7 @@ class MySQLSourceClient:
         source_table: str,
         start: BinlogCoordinate,
         limit: int,
+        byte_limit: int = 1024 * 1024,
     ) -> BinlogCaptureResult:
         """在线程中运行同步 Binlog 客户端的一次有限读取。"""
         stream = BinLogStreamReader(
@@ -239,6 +284,7 @@ class MySQLSourceClient:
         tail = start
         skipped_rows = start.row_index
         consumed_rows = start.row_index
+        captured_bytes = 0
         replay_base = start.model_copy(update={"row_index": 0})
         try:
             for raw_event in stream:
@@ -272,7 +318,16 @@ class MySQLSourceClient:
                 skipped_here = min(skipped_rows, len(decoded))
                 skipped_rows -= skipped_here
                 remaining = decoded[skipped_here:]
-                accepted = remaining[: limit - len(events)]
+                accepted: list[SyncRowEvent] = []
+                for candidate in remaining[: limit - len(events)]:
+                    candidate_bytes = len(candidate.model_dump_json().encode("utf-8"))
+                    if candidate_bytes > byte_limit:
+                        raise ValueError("单个 Binlog 事件超过捕获批次字节上限")
+                    if accepted or events:
+                        if captured_bytes + candidate_bytes > byte_limit:
+                            break
+                    accepted.append(candidate)
+                    captured_bytes += candidate_bytes
                 events.extend(accepted)
                 consumed_rows += len(accepted)
                 if len(accepted) < len(remaining):

@@ -83,11 +83,42 @@ async def apply_backfill_batch(
     )
     if conflict is not None:
         raise _key_conflict_error(conflict)
-    await session.execute(_upsert_statement(task.desired, values, dw_database))
+    for chunk in _chunk_rows_by_payload(values):
+        await session.execute(_upsert_statement(task.desired, chunk, dw_database))
     last_key = tuple(values[-1][name] for name in task.desired.primary_key)
     if not await repository.record_backfill_cursor(task, last_key):
         raise RuntimeError("回填批次完成后同步任务租约已失效")
     return last_key
+
+
+def _chunk_rows_by_payload(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    byte_limit: int = 1024 * 1024,
+) -> list[list[Mapping[str, object]]]:
+    """按编码后的参数预算切分 DW upsert，同时拒绝单行超限。"""
+    chunks: list[list[Mapping[str, object]]] = []
+    current: list[Mapping[str, object]] = []
+    current_bytes = 0
+    for row in rows:
+        row_bytes = len(
+            json.dumps(
+                {name: encode_row_value(value) for name, value in row.items()},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if row_bytes > byte_limit:
+            raise ValueError("单行回填数据超过 DW 写入批次字节上限")
+        if current and current_bytes + row_bytes > byte_limit:
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(row)
+        current_bytes += row_bytes
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def reset_source_rows(

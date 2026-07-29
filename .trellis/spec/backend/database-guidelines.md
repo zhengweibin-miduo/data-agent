@@ -727,6 +727,17 @@ targets.
 - Reject sources whose global `binlog_row_value_options` contains
   `PARTIAL_JSON` until partial-update row events are explicitly decoded and
   replayed; do not advance a coordinate across filtered JSON updates.
+- Require synchronized source tables to use InnoDB and source servers to use
+  `lower_case_table_names=0`. Non-transaction statement boundaries and
+  case-folded table identities are outside the current replay contract.
+- Hold a source-side advisory lock for each configured replication `server_id`
+  for the worker lifetime. A second worker with the same source replication
+  identity must fail closed instead of interrupting an active dump client.
+- Keep the durable event-buffer limit separate from the in-memory capture
+  budget. Each capture is bounded by both 1,000 events and 1 MiB of serialized
+  payload, and historical DW upserts use the same 1 MiB payload budget.
+- Normalize explicit zero fractional-second precision for `DATETIME`,
+  `TIMESTAMP`, and `TIME` to MySQL's introspected default form.
 - A data-sync generation hash describes the physical table contract. Metric
   dependency metadata and the global schema fingerprint remain durable
   control-plane data but do not reset CDC coordinates or historical backfill.

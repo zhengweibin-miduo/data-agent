@@ -316,7 +316,8 @@ class DataSyncService:
             source_schema=task.desired.source_schema,
             source_table=task.desired.source_table,
             start=start,
-            limit=remaining,
+            limit=min(remaining, 1000),
+            byte_limit=1024 * 1024,
         )
         async with MySQLDatabase.session() as session:
             repository = DataSyncRepository(session)
@@ -327,7 +328,7 @@ class DataSyncService:
                 has_new_events=bool(captured.events),
             ):
                 raise RuntimeError("持久化 Binlog 捕获位点时任务租约已失效")
-        return len(captured.events) < remaining
+        return pending + len(captured.events) < self._settings.event_buffer_limit
 
     async def _retry(self, task: ClaimedSyncTask, error_type: str) -> None:
         """持久化一次有界指数退避。"""

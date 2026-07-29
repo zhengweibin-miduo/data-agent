@@ -144,6 +144,28 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
     repository.claim_key_owner.assert_not_awaited()
 
 
+def test_backfill_rows_are_chunked_by_encoded_payload_bytes() -> None:
+    """大型回填批次按参数字节预算拆分，且保持全部行顺序。"""
+    rows = [{"id": 1, "payload": "a" * 30}, {"id": 2, "payload": "b" * 30}]
+
+    chunks = backfill._chunk_rows_by_payload(rows, byte_limit=60)
+
+    check_equal("回填载荷拆成两块", [len(chunk) for chunk in chunks], [1, 1])
+    check_equal(
+        "拆分不改变行顺序",
+        [row["id"] for chunk in chunks for row in chunk],
+        [1, 2],
+    )
+
+
+def test_backfill_rejects_one_row_over_payload_budget() -> None:
+    """单行超过写入预算时给出明确失败，而不是构造超包语句。"""
+    with pytest.raises(ValueError, match="单行回填数据"):
+        backfill._chunk_rows_by_payload(
+            [{"id": 1, "payload": "x" * 100}], byte_limit=20
+        )
+
+
 @pytest.mark.parametrize("operation", [RowOperation.DELETE, RowOperation.UPDATE])
 async def test_missing_old_key_does_not_claim_ownership(
     monkeypatch: pytest.MonkeyPatch,
