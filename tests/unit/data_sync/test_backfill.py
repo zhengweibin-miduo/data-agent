@@ -86,3 +86,26 @@ def test_desired_values_normalizes_mysql_set_values() -> None:
 
     check_equal("多成员 SET 稳定排序", populated["labels"], "alpha,beta")
     check_equal("空 SET 绑定为空字符串", empty["labels"], "")
+
+
+def test_set_primary_key_has_one_identity_before_and_after_binding() -> None:
+    """SET 主键的驱动集合和 DW 文本表示必须得到相同归属。"""
+    desired = _task().desired.model_copy(
+        update={
+            "columns": [
+                DesiredColumn(
+                    id="id",
+                    name="id",
+                    data_type="SET('alpha','beta')",
+                    nullable=False,
+                )
+            ]
+        }
+    )
+
+    source_identity = backfill.primary_key_identity(
+        desired, {"id": {"beta", "alpha"}}
+    )
+    target_identity = backfill.primary_key_identity(desired, {"id": "alpha,beta"})
+
+    check_equal("SET 主键归属编码一致", source_identity, target_identity)

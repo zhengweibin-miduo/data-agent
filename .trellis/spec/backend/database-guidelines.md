@@ -321,13 +321,17 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   Destructive or ambiguous differences pause work without altering Meta.
 - Initial load records a Binlog coordinate, persists later ROW events, reads
   source rows by bounded simple/composite-PK keyset, replays the buffer, then
-  enters streaming.
+  enters streaming. Historical cursor advancement stops whenever the durable
+  event buffer is full, so every later source row remains protected by a
+  retained Binlog coordinate.
 - Target DML, key ownership, event acknowledgement, and applied-coordinate
   advancement share one MySQL transaction. Captured and applied coordinates are
   separate.
 - The first source to write a target primary key owns it permanently, including
   after DELETE. Another source conflicts before DW DML and cannot advance the
-  event.
+  event. Type-aware primary-key identity normalization is shared by source
+  backfill values, CDC values, and DW provenance scans; container-backed MySQL
+  types such as `BIT` and `SET` must encode identically in every path.
 - Answer readiness uses `DataSyncRepository.read_readiness_phases()` as a
   separate read-only boundary. It selects only `phase`, takes no lock, and does
   not claim, renew, settle, retry, or update a task. A source-scoped dependency

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from contextlib import suppress
+from types import TracebackType
 from typing import Awaitable, TypeVar
 
 from loguru import logger
@@ -75,7 +76,7 @@ class DataSyncService:
             logger.warning("DW 增量同步连接失败，任务将在退避后重试")
             await self._retry(task, "source_transport_error")
         except Exception as error:
-            logger.error(
+            logger.opt(exception=_redacted_exception(error)).error(
                 f"DW 增量同步任务 {task.id} 在 {task.phase.value} 阶段发生"
                 "未分类系统错误，"
                 f"来源 {task.desired.source}、目标表 {task.desired.target_table} "
@@ -111,7 +112,15 @@ class DataSyncService:
             )
             return
         if task.phase == SyncPhase.BACKFILLING:
-            await self._with_lease_heartbeat(task, self._capture(task, source))
+            capture_has_capacity = await self._with_lease_heartbeat(
+                task, self._capture(task, source)
+            )
+            if not capture_has_capacity:
+                async with MySQLDatabase.session() as session:
+                    await DataSyncRepository(session).settle_phase(
+                        task, SyncPhase.BACKFILLING
+                    )
+                return
             rows = await self._with_lease_heartbeat(
                 task,
                 read_backfill_batch(
@@ -239,8 +248,8 @@ class DataSyncService:
         self,
         task: ClaimedSyncTask,
         source: MySQLSourceClient,
-    ) -> None:
-        """从已捕获位点追加有限事件并推进独立捕获游标。"""
+    ) -> bool:
+        """追加有限事件并返回缓冲区是否仍可保护后续回填。"""
         start = task.captured or task.snapshot
         if start is None:
             raise RuntimeError("同步任务缺少 Binlog 起始位点")
@@ -249,7 +258,7 @@ class DataSyncService:
             pending = await repository.count_pending_events(task.id)
         remaining = self._settings.event_buffer_limit - pending
         if remaining <= 0:
-            return
+            return False
         captured = await source.capture(
             source_schema=task.desired.source_schema,
             source_table=task.desired.source_table,
@@ -262,6 +271,7 @@ class DataSyncService:
                 await repository.append_event(task.id, event)
             if not await repository.advance_captured_coordinate(task, captured.tail):
                 raise RuntimeError("持久化 Binlog 捕获位点时任务租约已失效")
+        return len(captured.events) < remaining
 
     async def _retry(self, task: ClaimedSyncTask, error_type: str) -> None:
         """持久化一次有界指数退避。"""
@@ -318,3 +328,11 @@ class DataSyncService:
                 phase=phase,
                 error_type=error_type,
             )
+
+
+def _redacted_exception(
+    error: Exception,
+) -> tuple[type[RuntimeError], RuntimeError, TracebackType | None]:
+    """保留调用栈和原异常类型，同时从日志中移除异常消息。"""
+    safe_error = RuntimeError(f"{type(error).__name__}: 异常详情已脱敏")
+    return RuntimeError, safe_error, error.__traceback__

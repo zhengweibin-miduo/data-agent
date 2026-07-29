@@ -146,11 +146,19 @@ def primary_key_identity(
     columns = {column.name: column for column in desired.columns}
     for name in desired.primary_key:
         value = row[name]
-        if columns[name].data_type.strip().upper().startswith("BIT"):
+        data_type = columns[name].data_type.strip().upper()
+        if data_type.startswith("BIT"):
             if isinstance(value, bytes):
                 value = int.from_bytes(value, byteorder="big", signed=False)
             elif not isinstance(value, int):
                 raise TypeError("MySQL BIT 主键必须解码为 bytes 或 int")
+        elif data_type.startswith("SET"):
+            if isinstance(value, set):
+                value = ",".join(sorted(value))
+            elif isinstance(value, str):
+                value = ",".join(sorted(filter(None, value.split(","))))
+            else:
+                raise TypeError("MySQL SET 主键必须解码为 set[str] 或 str")
         encoded[name] = encode_row_value(value)
     return canonical_primary_key(desired.primary_key, encoded)
 
