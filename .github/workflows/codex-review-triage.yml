@@ -34,7 +34,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: write
     steps:
       # 只检出默认分支上的受信任脚本，绝不执行 PR head 中的代码。
       - uses: actions/checkout@v6
@@ -50,13 +49,14 @@ jobs:
 
       - name: Resolve outdated Codex review threads
         if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
         uses: actions/github-script@v8
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           PR_AUTHORS: ${{ vars.PR_AUTHORS }}
           REVIEW_BOTS: ${{ vars.REVIEW_BOTS }}
         with:
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.CODEX_TRIGGER_TOKEN }}
           script: |
             const {
               resolveOutdatedReviewThreads,
