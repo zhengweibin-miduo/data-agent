@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MethodType
 from typing import Any, Protocol, cast
 
 from pymysql.constants import FIELD_TYPE
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import XidEvent
 from pymysqlreplication.row_event import (
+    BitGet,
     DeleteRowsEvent,
+    RowsEvent,
     UpdateRowsEvent,
     WriteRowsEvent,
 )
@@ -30,6 +34,33 @@ from data_agent.data_sync.models import (
 from data_agent.settings import DataSyncSourceSettings
 
 _ROW_EVENTS = (WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent)
+_ROWS_VALUE_DECODER_NAME = "_RowsEvent__read_values_name"
+_ROWS_VALUE_DECODER_PARAMETERS = (
+    "self",
+    "column",
+    "null_bitmap",
+    "null_bitmap_index",
+    "is_partial",
+    "cols_bitmap",
+    "unsigned",
+    "i",
+)
+_SQL_NULL = object()
+
+
+def _resolve_rows_value_decoder() -> Any:
+    """确认锁定 mysql-replication 版本仍提供预期私有解码边界。"""
+    decoder = getattr(RowsEvent, _ROWS_VALUE_DECODER_NAME, None)
+    if decoder is None or tuple(inspect.signature(decoder).parameters) != (
+        _ROWS_VALUE_DECODER_PARAMETERS
+    ):
+        raise RuntimeError(
+            "mysql-replication ROW 值解码签名不兼容，无法保留 JSON SQL NULL"
+        )
+    return decoder
+
+
+_ROWS_VALUE_DECODER = _resolve_rows_value_decoder()
 
 
 class RawRowsEvent(Protocol):
@@ -285,6 +316,8 @@ def decode_rows_event(
     else:
         raise TypeError(f"不支持的 Binlog 事件类型：{type(raw_event).__name__}")
 
+    # 步骤一：在第三方事件首次惰性读取 rows 前安装实例级适配器，保留 JSON SQL NULL。
+    _install_json_sql_null_adapter(event)
     decoded: list[SyncRowEvent] = []
     for row_index, row in enumerate(event.rows):
         decoded.append(
@@ -319,9 +352,51 @@ def _encode_row(
         if getattr(column, "type", None) == FIELD_TYPE.JSON
     }
     return {
-        name: encode_row_value(value, json_value=name in json_columns)
+        name: encode_row_value(
+            None if value is _SQL_NULL else value,
+            json_value=name in json_columns and value is not _SQL_NULL,
+        )
         for name, value in row.items()
     }
+
+
+def _install_json_sql_null_adapter(event: RawRowsEvent) -> None:
+    """为单个 ROW 事件安装 JSON SQL NULL 来源保留适配器。"""
+
+    def read_value(
+        self: RowsEvent,
+        column: Any,
+        null_bitmap: Any,
+        null_bitmap_index: int,
+        is_partial: bool,
+        cols_bitmap: Any,
+        unsigned: bool,
+        i: int,
+    ) -> object:
+        # 步骤一：只有行镜像包含的 JSON 列且 null bitmap 置位时返回私有哨兵。
+        if (
+            BitGet(cols_bitmap, i) != 0
+            and getattr(column, "type", None) == FIELD_TYPE.JSON
+            and self._is_null(null_bitmap, null_bitmap_index)
+        ):
+            return _SQL_NULL
+        # 步骤二：其余类型、JSON literal null 与 partial update 原样委托锁定依赖。
+        return _ROWS_VALUE_DECODER(
+            self,
+            column,
+            null_bitmap,
+            null_bitmap_index,
+            is_partial,
+            cols_bitmap,
+            unsigned,
+            i,
+        )
+
+    setattr(
+        event,
+        _ROWS_VALUE_DECODER_NAME,
+        MethodType(read_value, event),
+    )
 
 
 def _replication_connection_settings(

@@ -291,6 +291,169 @@ async def test_backfill_then_binlog_converges() -> None:
 
 
 @pytest.mark.integration
+async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> None:
+    """JSON SQL NULL 与 literal null 经真实 FULL ROW CDC 后保持不同语义。"""
+    table_name = f"sync_json_null_{uuid4().hex}"
+    source_settings = app_config.data_sync.sources["source_demo"]
+    source = MySQLSourceClient(
+        "source_demo",
+        source_settings,
+        connect_timeout_seconds=5,
+        read_timeout_seconds=5,
+    )
+    source_writer = create_async_engine(
+        make_url(app_config.mysql.url).set(database="source_demo")
+    )
+    desired = DesiredSyncTable(
+        source="source_demo",
+        source_schema="source_demo",
+        source_table=table_name,
+        target_table=table_name,
+        columns=[
+            DesiredColumn(
+                id="id",
+                name="id",
+                data_type="BIGINT",
+                nullable=False,
+            ),
+            DesiredColumn(
+                id="payload",
+                name="payload",
+                data_type="JSON",
+                nullable=True,
+            ),
+        ],
+        primary_key=["id"],
+        schema_fingerprint="c" * 64,
+    )
+    MySQLDatabase.initialize()
+    task_id: int | None = None
+    try:
+        # 步骤一：创建 UUID 独占 JSON 源表，并确认源库满足 ROW/FULL 捕获契约。
+        async with source_writer.begin() as connection:
+            await connection.execute(
+                text(
+                    f"CREATE TABLE source_demo.{table_name} "
+                    "(id BIGINT PRIMARY KEY, payload JSON NULL) ENGINE=InnoDB"
+                )
+            )
+        await source.check_capabilities()
+        baseline = await source.current_coordinate()
+
+        # 步骤二：持久化并领取本测试任务，在写源数据前创建对应 DW 结构和基线。
+        async with MySQLDatabase.session() as session:
+            repository = DataSyncRepository(session)
+            await repository.upsert_desired([desired])
+            tasks = await repository.claim_tasks(
+                limit=1,
+                lease_seconds=120,
+                max_attempts=3,
+            )
+        check_equal("领取 JSON 空值同步任务", len(tasks), 1)
+        task = tasks[0]
+        check_equal("领取 UUID 目标任务", task.desired.target_table, table_name)
+        task_id = task.id
+        async with MySQLDatabase.session() as session:
+            await DWSchemaSynchronizer(
+                session,
+                database=app_config.data_sync.dw_database,
+            ).synchronize(desired)
+            repository = DataSyncRepository(session)
+            await repository.record_snapshot(task, baseline)
+            await repository.advance_captured_coordinate(task, baseline)
+
+        # 步骤三：分别写入 SQL NULL 与 JSON literal null，再从基线捕获 FULL ROW。
+        async with source_writer.begin() as connection:
+            await connection.execute(
+                text(
+                    f"INSERT INTO source_demo.{table_name} (id, payload) VALUES "
+                    "(1, NULL), (2, CAST('null' AS JSON))"
+                )
+            )
+        captured = await source.capture(
+            source_schema="source_demo",
+            source_table=table_name,
+            start=baseline,
+            limit=10,
+        )
+        check_equal("捕获两条 JSON 空值 ROW 事件", len(captured.events), 2)
+        check_equal(
+            "捕获层区分两种 JSON 空值",
+            [event.after for event in captured.events],
+            [
+                {"id": 1, "payload": None},
+                {"id": 2, "payload": {"$json": "null"}},
+            ],
+        )
+
+        # 步骤四：先写入 durable event，再仅从持久化事件读取并逐条应用到 DW。
+        async with MySQLDatabase.session() as session:
+            repository = DataSyncRepository(session)
+            for event in captured.events:
+                await repository.append_event(task.id, event)
+            await repository.advance_captured_coordinate(task, captured.tail)
+        while True:
+            async with MySQLDatabase.session() as session:
+                pending = await DataSyncRepository(session).read_events(
+                    task.id,
+                    limit=1,
+                )
+            if not pending:
+                break
+            async with MySQLDatabase.session() as session:
+                await apply_buffered_event(
+                    session,
+                    task,
+                    pending[0],
+                    dw_database=app_config.data_sync.dw_database,
+                )
+
+        # 步骤五：IS NULL 只匹配 SQL NULL，JSON_TYPE 则识别 literal null。
+        async with MySQLDatabase.session() as session:
+            result = await session.execute(
+                text(
+                    f"SELECT id, payload IS NULL AS is_sql_null, "
+                    f"JSON_TYPE(payload) AS json_type FROM dw.{table_name} ORDER BY id"
+                )
+            )
+            check_equal(
+                "DW 区分 SQL NULL 与 JSON literal null",
+                [tuple(row) for row in result],
+                [(1, 1, None), (2, 0, "NULL")],
+            )
+    finally:
+        # 步骤六：严格按本测试 UUID 表名和任务 ID 清理源、DW 与控制状态。
+        async with source_writer.begin() as connection:
+            await connection.execute(
+                text(f"DROP TABLE IF EXISTS source_demo.{table_name}")
+            )
+        async with MySQLDatabase.session() as session:
+            if task_id is not None:
+                await session.execute(
+                    text(
+                        "DELETE FROM data_sync.data_sync_event "
+                        "WHERE task_id=:task_id"
+                    ),
+                    {"task_id": task_id},
+                )
+                await session.execute(
+                    text("DELETE FROM data_sync.data_sync_task WHERE id=:task_id"),
+                    {"task_id": task_id},
+                )
+            await session.execute(
+                text(
+                    "DELETE FROM data_sync.data_sync_key_owner "
+                    "WHERE target_table=:target_table"
+                ),
+                {"target_table": table_name},
+            )
+            await session.execute(text(f"DROP TABLE IF EXISTS dw.{table_name}"))
+        await source.close()
+        await source_writer.dispose()
+        await MySQLDatabase.close()
+
+
+@pytest.mark.integration
 async def test_composite_primary_key_backfill_uses_lexicographic_cursor() -> None:
     """复合主键回填从最后完成的键之后继续，且不漏跨前缀行。"""
     table_name = f"sync_composite_{uuid4().hex[:12]}"

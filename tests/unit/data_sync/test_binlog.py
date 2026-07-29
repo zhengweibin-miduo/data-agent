@@ -1,20 +1,30 @@
 """MySQL ROW Binlog 事件解码检查。"""
 
+import inspect
 from decimal import Decimal
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
+from pymysql.constants import FIELD_TYPE
 from pymysqlreplication.event import XidEvent
 from pymysqlreplication.row_event import (
     DeleteRowsEvent,
+    RowsEvent,
     UpdateRowsEvent,
     WriteRowsEvent,
 )
 from sqlalchemy.engine import make_url
-from tests.helpers.checks import check_equal, check_exception, fail_check
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
 
 from data_agent.data_sync.binlog import (
+    _ROWS_VALUE_DECODER_NAME,
     MySQLSourceClient,
     _replication_connection_settings,
     decode_rows_event,
@@ -34,8 +44,6 @@ def _event(event_type: type[Any], rows: list[dict[str, object]]) -> object:
 
 def test_decode_json_scalar_uses_column_metadata() -> None:
     """Binlog JSON 列的顶层标量不会退化为普通 SQL 标量。"""
-    from pymysql.constants import FIELD_TYPE
-
     event = _event(WriteRowsEvent, [{"values": {"id": 1, "payload": None}}])
     setattr(event, "columns", [SimpleNamespace(name="payload", type=FIELD_TYPE.JSON)])
     decoded = decode_rows_event(
@@ -48,6 +56,115 @@ def test_decode_json_scalar_uses_column_metadata() -> None:
         decoded[0].after,
         {"id": 1, "payload": {"$json": "null"}},
     )
+
+
+def test_locked_dependency_decoder_signature_is_compatible() -> None:
+    """锁定依赖必须保留实例适配器依赖的完整私有解码签名。"""
+    decoder = getattr(RowsEvent, _ROWS_VALUE_DECODER_NAME)
+    check_equal(
+        "mysql-replication 私有解码参数",
+        tuple(inspect.signature(decoder).parameters),
+        (
+            "self",
+            "column",
+            "null_bitmap",
+            "null_bitmap_index",
+            "is_partial",
+            "cols_bitmap",
+            "unsigned",
+            "i",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("event_type", "sql_null_images", "before", "after"),
+    [
+        (WriteRowsEvent, (True,), None, {"payload": None}),
+        (
+            WriteRowsEvent,
+            (False,),
+            None,
+            {"payload": {"$json": "null"}},
+        ),
+        (
+            UpdateRowsEvent,
+            (True, False),
+            {"payload": None},
+            {"payload": {"$json": "null"}},
+        ),
+        (DeleteRowsEvent, (True,), {"payload": None}, None),
+    ],
+)
+def test_lazy_rows_adapter_preserves_json_sql_null_source(
+    event_type: type[Any],
+    sql_null_images: tuple[bool, ...],
+    before: object,
+    after: object,
+) -> None:
+    """三种 FULL ROW 事件首次惰性解码时区分 SQL NULL 与 JSON null。"""
+    fetched: list[bool] = []
+    event = object.__new__(event_type)
+    setattr(event, "schema", "business")
+    setattr(event, "table", "fact_order")
+    setattr(event, "_RowsEvent__rows", None)
+    column = SimpleNamespace(name="payload", type=FIELD_TYPE.JSON, length_size=1)
+    setattr(event, "columns", [column])
+    setattr(event, "table_id", 1)
+    setattr(
+        event,
+        "table_map",
+        {
+            1: SimpleNamespace(
+                columns=[SimpleNamespace(name="payload", unsigned=False)]
+            )
+        },
+    )
+    setattr(event, "packet", SimpleNamespace(read_binary_json=Mock(return_value=None)))
+
+    def fetch_rows(self: RowsEvent) -> None:
+        fetched.append(_ROWS_VALUE_DECODER_NAME in vars(self))
+        decoder = getattr(self, _ROWS_VALUE_DECODER_NAME)
+        images = [
+            decoder(
+                column,
+                b"\x01" if sql_null else b"\x00",
+                0,
+                False,
+                b"\x01",
+                False,
+                0,
+            )
+            for sql_null in sql_null_images
+        ]
+        if isinstance(self, UpdateRowsEvent):
+            rows = [
+                {
+                    "before_values": {"payload": images[0]},
+                    "after_values": {"payload": images[1]},
+                }
+            ]
+        else:
+            rows = [{"values": {"payload": images[0]}}]
+        setattr(self, "_RowsEvent__rows", rows)
+
+    setattr(event, "_fetch_rows", MethodType(fetch_rows, event))
+    untouched = object.__new__(event_type)
+
+    decoded = decode_rows_event(
+        event,
+        source="source_demo",
+        coordinate=BinlogCoordinate(file="mysql-bin.000001", position=120, row_index=0),
+    )
+
+    check_equal("适配器在首次 rows 读取前安装", fetched, [True])
+    check_condition(
+        "适配器仅安装在目标事件实例",
+        _ROWS_VALUE_DECODER_NAME in vars(event)
+        and _ROWS_VALUE_DECODER_NAME not in vars(untouched),
+    )
+    check_equal("JSON 空值事件前镜像", decoded[0].before, before)
+    check_equal("JSON 空值事件后镜像", decoded[0].after, after)
 
 
 @pytest.mark.parametrize(

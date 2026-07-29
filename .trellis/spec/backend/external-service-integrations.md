@@ -443,6 +443,7 @@ await MySQLSourceClient.current_coordinate() -> BinlogCoordinate
 await MySQLSourceClient.capture(
     source_schema, source_table, start, limit
 ) -> BinlogCaptureResult
+decode_rows_event(raw_event, source, coordinate) -> list[SyncRowEvent]
 await MySQLSourceClient.close() -> None
 data-agent-cdc
 ```
@@ -462,6 +463,15 @@ data-agent-cdc
   from schema metadata when the Binlog omits them.
 - One ROW change becomes one typed `SyncRowEvent`; supported values use the
   reversible JSON encoding in `data_sync.models`. Never log row images.
+- The project pins `mysql-replication==1.0.16`. Its ROW decoder maps both a JSON
+  column's SQL `NULL` and binary JSON literal `null` to Python `None`, so the
+  distinction must be captured before lazy `event.rows` decoding loses the null
+  bitmap. `decode_rows_event()` installs an instance-local adapter on the exact
+  `_RowsEvent__read_values_name(self, column, null_bitmap,
+  null_bitmap_index, is_partial, cols_bitmap, unsigned, i)` boundary before the
+  first rows access. Only a present JSON column with its null bit set receives
+  the private SQL-null sentinel; every other value delegates to the dependency's
+  original decoder. The sentinel never crosses the canonical event boundary.
 - `data-agent-cdc` is a separate process, not an arq job. Startup checks every
   source; shutdown closes all source engines and then `MySQLDatabase`.
 
@@ -473,6 +483,9 @@ data-agent-cdc
 | Source name is invalid/duplicate or `server_id` repeats | Configuration validation fails |
 | ROW/FULL capability is absent | CDC startup fails before claiming tasks |
 | Unknown ROW event type/value encoding | Reject; do not silently coerce |
+| Locked private ROW decoder is missing or its signature changes | Fail fast before capture; do not silently collapse JSON null provenance |
+| JSON column null bitmap is set | Encode the durable field as ordinary `None`, producing SQL `NULL` on DW replay |
+| JSON binary payload is literal `null` | Encode the durable field as `{"$json": "null"}`, preserving JSON literal null on DW replay |
 | Connection/read timeout | Classify for bounded task retry |
 | Event belongs to another schema/table/source | Reject before DW DML |
 | Capture contains multiple rows in one event | Persist the complete event; do not truncate its rows |
@@ -480,10 +493,12 @@ data-agent-cdc
 ### 5. Good / Base / Bad Cases
 
 - Good: a read-only replication account supplies named columns and bounded
-  INSERT/UPDATE/DELETE events from the persisted coordinate.
+  INSERT/UPDATE/DELETE events from the persisted coordinate while preserving
+  JSON SQL `NULL` provenance.
 - Base: an empty capture advances only to the stream's safe tail.
 - Bad: run the stream in arq, grant writes to the replication user, capture all
-  tables, log row payloads, or rely on dependency timeout defaults.
+  tables, infer JSON null provenance after rows are decoded, log row payloads,
+  or rely on dependency timeout defaults.
 
 ### 6. Tests Required
 
@@ -493,9 +508,12 @@ uv run pytest tests/integration/data_sync/test_cdc_pipeline.py
 docker compose -f docs/docker/docker-compose.yml config
 ```
 
-The live test asserts ROW/FULL capability, named-column decoding, hard DELETE,
-offset convergence, and read-only replica use; fixture writes use a separate
-local application connection.
+The unit test pins the complete private decoder signature and asserts INSERT,
+UPDATE before/after, and DELETE null behavior before and after canonical
+encoding. The live test asserts ROW/FULL capability, named-column decoding,
+hard DELETE, offset convergence, read-only replica use, and distinct SQL `NULL`
+versus JSON literal `null` after durable replay into DW; fixture writes use a
+separate local application connection.
 
 ### 7. Wrong vs Correct
 
@@ -510,6 +528,16 @@ captured = await source.capture(
     start=task.captured,
     limit=remaining,
 )
+```
+
+```python
+# Wrong: both sources are already Python None after ordinary dependency decode.
+encoded = encode_row_value(value, json_value=True)
+
+# Correct: inspect the JSON column null bitmap inside the locked decoder
+# boundary, then encode only the private SQL-null sentinel as SQL NULL.
+_install_json_sql_null_adapter(event)
+rows = event.rows
 ```
 
 ## Scenario: Redis Job State and LangGraph Checkpoints
