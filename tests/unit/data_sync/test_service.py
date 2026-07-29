@@ -130,8 +130,10 @@ async def test_backfill_drains_event_and_keeps_progress_when_buffer_is_saturated
     monkeypatch.setattr(service, "read_backfill_batch", read_batch)
     apply_event = AsyncMock()
     monkeypatch.setattr(service, "apply_buffered_event", apply_event)
-    repository.read_events.return_value = [object()]
-    sync_service = DataSyncService({"local": AsyncMock()}, AsyncMock())
+    events = [object(), object(), object()]
+    repository.read_events.return_value = events
+    settings = AsyncMock(event_cleanup_batch_size=3)
+    sync_service = DataSyncService({"local": AsyncMock()}, settings)
     sync_service._capture = AsyncMock(return_value=False)
 
     async def finish_operation(task: object, work: Awaitable[Any]) -> object:
@@ -141,7 +143,9 @@ async def test_backfill_drains_event_and_keeps_progress_when_buffer_is_saturated
 
     await sync_service._process(task)
 
-    apply_event.assert_awaited_once()
+    repository.read_events.assert_awaited_once_with(task.id, limit=3)
+    assert [call.args[2] for call in apply_event.await_args_list] == events
+    repository.cleanup_events.assert_awaited_once_with(task.id, limit=3)
     read_batch.assert_awaited_once()
     repository.restart_backfill.assert_not_awaited()
     repository.settle_phase.assert_awaited_once_with(task, SyncPhase.REPLAYING)

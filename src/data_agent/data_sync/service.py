@@ -125,20 +125,24 @@ class DataSyncService:
             if not capture_has_capacity:
                 async with MySQLDatabase.session() as session:
                     repository = DataSyncRepository(session)
-                    events = await repository.read_events(task.id, limit=1)
+                    events = await repository.read_events(
+                        task.id,
+                        limit=self._settings.event_cleanup_batch_size,
+                    )
                     if not events:
                         raise RuntimeError("Binlog 缓冲已饱和但没有待应用事件")
-                    # 先腾挪一个已持久化事件，再读取当前源端历史批次。这样既
-                    # 保留既有回填游标，也不会用旧快照覆盖刚应用的增量。
-                    await self._with_lease_heartbeat(
-                        task,
-                        apply_buffered_event(
-                            session,
+                    # 先按有界批次腾挪已持久化事件，再读取当前源端历史批次。
+                    # 这样既保留既有回填游标，也让捕获位点以批次吞吐继续推进。
+                    for event in events:
+                        await self._with_lease_heartbeat(
                             task,
-                            events[0],
-                            dw_database=self._settings.dw_database,
-                        ),
-                    )
+                            apply_buffered_event(
+                                session,
+                                task,
+                                event,
+                                dw_database=self._settings.dw_database,
+                            ),
+                        )
                     await repository.cleanup_events(
                         task.id,
                         limit=self._settings.event_cleanup_batch_size,
