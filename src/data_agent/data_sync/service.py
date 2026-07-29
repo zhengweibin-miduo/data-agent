@@ -154,7 +154,9 @@ class DataSyncService:
                         task.id,
                         limit=self._settings.event_cleanup_batch_size,
                     )
-                    await repository.settle_phase(task, task.phase)
+                    # 捕获后只要仍有事件待应用，就必须保持非就绪阶段；只有下一轮
+                    # 确认缓冲已清空并再次追到源尾部时才能恢复 streaming。
+                    await repository.settle_phase(task, SyncPhase.REPLAYING)
                 return
             next_phase = (
                 SyncPhase.STREAMING if task.phase == SyncPhase.REPLAYING else task.phase

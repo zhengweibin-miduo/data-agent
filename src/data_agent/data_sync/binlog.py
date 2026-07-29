@@ -343,7 +343,32 @@ def _replication_connection_settings(
     }
     if url.database is not None:
         settings["database"] = url.database
+    for key in ("ssl_ca", "ssl_cert", "ssl_key"):
+        if value := url.query.get(key):
+            settings[key] = _single_url_value(key, value)
+    for key in ("ssl_verify_cert", "ssl_verify_identity"):
+        if value := url.query.get(key):
+            settings[key] = _parse_url_boolean(key, _single_url_value(key, value))
     return settings
+
+
+def _parse_url_boolean(name: str, value: str) -> bool:
+    """解析复制客户端 TLS URL 布尔参数，拒绝含糊拼写。"""
+    normalized = value.casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} 必须是布尔值")
+
+
+def _single_url_value(name: str, value: str | tuple[str, ...]) -> str:
+    """拒绝会让复制连接 TLS 语义含糊的重复 URL 参数。"""
+    if isinstance(value, tuple):
+        if len(value) != 1:
+            raise ValueError(f"{name} 只能配置一次")
+        return value[0]
+    return value
 
 
 async def close_sources(sources: Iterable[MySQLSourceClient]) -> None:

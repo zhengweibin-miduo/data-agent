@@ -11,9 +11,14 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     WriteRowsEvent,
 )
+from sqlalchemy.engine import make_url
 from tests.helpers.checks import check_equal, check_exception, fail_check
 
-from data_agent.data_sync.binlog import MySQLSourceClient, decode_rows_event
+from data_agent.data_sync.binlog import (
+    MySQLSourceClient,
+    _replication_connection_settings,
+    decode_rows_event,
+)
 from data_agent.data_sync.models import BinlogCoordinate, RowOperation
 
 
@@ -127,6 +132,26 @@ def test_decode_rows_event_rejects_unknown_event() -> None:
             actual="未抛出异常",
             expected="TypeError",
         )
+
+
+def test_replication_connection_projects_tls_settings() -> None:
+    """源 URL 的 CA、客户端证书和校验开关会传给复制连接。"""
+    url = make_url(
+        "mysql+asyncmy://user:secret@mysql/business"
+        "?ssl_ca=%2Fcerts%2Fca.pem&ssl_cert=%2Fcerts%2Fclient.pem"
+        "&ssl_key=%2Fcerts%2Fclient.key&ssl_verify_cert=true"
+        "&ssl_verify_identity=1"
+    )
+
+    settings = _replication_connection_settings(
+        url, connect_timeout_seconds=3, read_timeout_seconds=5
+    )
+
+    check_equal("复制连接使用 CA", settings["ssl_ca"], "/certs/ca.pem")
+    check_equal("复制连接使用客户端证书", settings["ssl_cert"], "/certs/client.pem")
+    check_equal("复制连接使用客户端私钥", settings["ssl_key"], "/certs/client.key")
+    check_equal("复制连接校验证书", settings["ssl_verify_cert"], True)
+    check_equal("复制连接校验主机名", settings["ssl_verify_identity"], True)
 
 
 def test_capture_enforces_limit_inside_rows_event(
