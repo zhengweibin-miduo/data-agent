@@ -3,7 +3,7 @@
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from data_agent.answer_readiness.tool import create_data_readiness_tool
 from data_agent.data_sync.models import SyncPhase
@@ -34,6 +34,7 @@ async def test_tool_reads_real_state_without_modifying_tasks() -> None:
                         "desired_json": {},
                         "desired_hash": "a" * 64,
                         "phase": SyncPhase.STREAMING.value,
+                        "worker_heartbeat_at": func.now(),
                         "attempts": 2,
                         "lease_token": f"{suffix:0<32}"[:32],
                         "last_error_type": "safe_error",
