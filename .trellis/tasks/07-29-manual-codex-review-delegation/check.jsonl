@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "检查自动路径兼容性、手动输入边界和现有逻辑复用"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验手动 Codex thread 委派的验证矩阵、分页和幂等行为"}

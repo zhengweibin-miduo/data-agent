@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "遵循修改前检索和复用现有逻辑的项目指南"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "遵循 GitHub Codex 委派工作流的安全、验证和幂等契约"}
