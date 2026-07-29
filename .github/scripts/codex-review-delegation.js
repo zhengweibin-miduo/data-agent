@@ -231,22 +231,6 @@ async function issueComments(github, owner, repo, pullNumber) {
   });
 }
 
-function delegatedThreadIds(comments, trustedAuthors) {
-  const ids = new Set();
-  for (const comment of comments) {
-    if (
-      !trustedAuthors.has(comment.user?.login) ||
-      !/<!-- codex-review-(?:loop|manual):/.test(comment.body || "")
-    ) {
-      continue;
-    }
-    for (const match of comment.body.matchAll(/\bPRRT_[A-Za-z0-9_-]+\b/g)) {
-      ids.add(match[0]);
-    }
-  }
-  return ids;
-}
-
 async function hasOwnMarker(github, owner, repo, pullNumber, markerText) {
   const comments = await issueComments(github, owner, repo, pullNumber);
   const {
@@ -332,20 +316,11 @@ async function resolveOutdatedReviewThreads(options) {
 }
 
 async function delegateManualReview(options) {
-  const { github, context, core } = options;
+  const { github, core } = options;
   const { active, allowedAuthors, owner, pull, pullNumber, repo } =
     await inspectManualReview(options);
-  const comments = await issueComments(github, owner, repo, pullNumber);
-  const {
-    data: { login: triggerUser },
-  } = await github.rest.users.getAuthenticated();
-  const previouslyDelegated = delegatedThreadIds(
-    comments,
-    new Set([...allowedAuthors, triggerUser]),
-  );
-  const missedThreads = active.filter((thread) => !previouslyDelegated.has(thread.id));
-  if (missedThreads.length === 0) {
-    core.info("This pull request has no missed unresolved Codex threads.");
+  if (active.length === 0) {
+    core.info("This pull request has no active unresolved Codex threads.");
     return;
   }
 
@@ -363,7 +338,7 @@ async function delegateManualReview(options) {
     owner,
     repo,
     issue_number: pullNumber,
-    body: manualDelegationBody(pull.head.sha, pull.head.ref, missedThreads),
+    body: manualDelegationBody(pull.head.sha, pull.head.ref, active),
   });
 }
 
@@ -615,6 +590,20 @@ async function selfTest() {
                 },
               },
               {
+                id: "PRRT_RESOLVED",
+                isResolved: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_resolved",
+                      author: { login: "codex-reviewer" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
                 id: "PRRT_OUTDATED",
                 isResolved: resolvedThreadIds.includes("PRRT_OUTDATED"),
                 isOutdated: true,
@@ -724,7 +713,8 @@ async function selfTest() {
     "the resolver step must resolve outdated Codex threads",
   );
   assert.match(manualBodies[0], /PRRT_MANUAL/);
-  assert.doesNotMatch(manualBodies[0], /PRRT_ALREADY_DELEGATED/);
+  assert.match(manualBodies[0], /PRRT_ALREADY_DELEGATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_RESOLVED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OTHER_REVIEWER/);
@@ -740,9 +730,10 @@ async function selfTest() {
   });
   assert.equal(
     manualBodies.length,
-    1,
-    "previously delegated unresolved threads must not be delegated again",
+    2,
+    "previously delegated active unresolved threads must be delegated again",
   );
+  assert.match(manualBodies[1], /PRRT_ALREADY_DELEGATED/);
 
   manualComments.length = 0;
   let pullReadCount = 0;
@@ -768,7 +759,7 @@ async function selfTest() {
     }),
     /Pull request head changed while preparing manual delegation/,
   );
-  assert.equal(manualBodies.length, 1, "a stale manual delegation must not be created");
+  assert.equal(manualBodies.length, 2, "a stale manual delegation must not be created");
 
   manualGithub.rest.pulls.get = async () => ({
     data: {

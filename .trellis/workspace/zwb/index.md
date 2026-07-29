@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 44
+- **Total Sessions**: 45
 - **Last Active**: 2026-07-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1423 | Active |
+| `journal-1.md` | ~1456 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-07-29 | 修复 Codex 未完成审查线程重新委派 | `52775c6` | `fix/codex-review-redelegation-20260729` |
 | 44 | 2026-07-29 | 修复 Codex thread 解析令牌 | `aaeb0a3` | `fix/codex-review-resolver-token-20260729` |
 | 43 | 2026-07-28 | 修复冲突委派 base SHA 来源 | `fbdd1a5` | `fix/codex-conflict-live-base-20260728` |
 | 42 | 2026-07-28 | 规范 Codex 审查处理回复 | `dc38627` | `fix/codex-review-hide-decision-label-20260728` |
