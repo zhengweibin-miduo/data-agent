@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from data_agent.data_sync.models import (
     DesiredSyncTable,
     EncodedValue,
+    KeyConflict,
     RowOperation,
     decode_row_value,
     encode_row_value,
@@ -74,8 +75,14 @@ async def apply_backfill_batch(
         return None
     repository = DataSyncRepository(session)
     values = [_desired_values(task.desired, row) for row in rows]
-    for row in values:
-        await _claim_owner(repository, task.desired, row)
+    identities = [primary_key_identity(task.desired, row) for row in values]
+    conflict = await repository.claim_key_owners(
+        target_table=task.desired.target_table,
+        identities=identities,
+        source=task.desired.source,
+    )
+    if conflict is not None:
+        raise _key_conflict_error(conflict)
     await session.execute(_upsert_statement(task.desired, values, dw_database))
     last_key = tuple(values[-1][name] for name in task.desired.primary_key)
     if not await repository.record_backfill_cursor(task, last_key):
@@ -224,16 +231,21 @@ async def _claim_owner(
         source=desired.source,
     )
     if conflict is not None:
-        raise DataAgentError(
-            "dw_primary_key_conflict",
-            "data_sync",
-            "DW 目标主键已由其他数据源占用",
-            details={
-                "table": conflict.target_table,
-                "owner_source": conflict.owner_source,
-                "contender_source": conflict.contender_source,
-            },
-        )
+        raise _key_conflict_error(conflict)
+
+
+def _key_conflict_error(conflict: KeyConflict) -> DataAgentError:
+    """把仓储归属冲突转换为稳定的同步领域错误。"""
+    return DataAgentError(
+        "dw_primary_key_conflict",
+        "data_sync",
+        "DW 目标主键已由其他数据源占用",
+        details={
+            "table": conflict.target_table,
+            "owner_source": conflict.owner_source,
+            "contender_source": conflict.contender_source,
+        },
+    )
 
 
 def _primary_key_values(

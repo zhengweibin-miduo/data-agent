@@ -103,9 +103,34 @@ def test_set_primary_key_has_one_identity_before_and_after_binding() -> None:
         }
     )
 
-    source_identity = backfill.primary_key_identity(
-        desired, {"id": {"beta", "alpha"}}
-    )
+    source_identity = backfill.primary_key_identity(desired, {"id": {"beta", "alpha"}})
     target_identity = backfill.primary_key_identity(desired, {"id": "alpha,beta"})
 
     check_equal("SET 主键归属编码一致", source_identity, target_identity)
+
+
+async def test_apply_backfill_batch_claims_ownership_in_one_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """历史回填按块领取 ownership，而不是逐行执行数据库往返。"""
+    repository = AsyncMock()
+    repository.claim_key_owners.return_value = None
+    repository.record_backfill_cursor.return_value = True
+    monkeypatch.setattr(backfill, "DataSyncRepository", lambda session: repository)
+    session = AsyncMock()
+    task = _task()
+
+    await backfill.apply_backfill_batch(
+        session,
+        task,
+        [{"id": 1}, {"id": 2}, {"id": 3}],
+        dw_database="dw",
+    )
+
+    repository.claim_key_owners.assert_awaited_once()
+    check_equal(
+        "批量归属数量",
+        len(repository.claim_key_owners.call_args.kwargs["identities"]),
+        3,
+    )
+    repository.claim_key_owner.assert_not_awaited()

@@ -332,12 +332,17 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   `dead`.
 - Target DML, key ownership, event acknowledgement, and applied-coordinate
   advancement share one MySQL transaction. Captured and applied coordinates are
-  separate.
+  separate. When a streaming capture persists new events, the same transaction
+  advances the captured coordinate and changes the task to `replaying`, so
+  readiness can never observe a committed backlog with a streaming phase.
 - The first source to write a target primary key owns it permanently, including
   after DELETE. Another source conflicts before DW DML and cannot advance the
-  event. Type-aware primary-key identity normalization is shared by source
-  backfill values, CDC values, and DW provenance scans; container-backed MySQL
-  types such as `BIT` and `SET` must encode identically in every path.
+  event. Historical backfill claims and verifies a whole bounded batch of key
+  owners with a constant number of database statements before its bulk upsert;
+  it must not perform ownership I/O once per row. Type-aware primary-key
+  identity normalization is shared by source backfill values, CDC values, and
+  DW provenance scans; container-backed MySQL types such as `BIT` and `SET`
+  must encode identically in every path.
 - Answer readiness uses `DataSyncRepository.read_readiness_phases()` as a
   separate read-only boundary. It selects only `phase` and the dedicated
   `worker_heartbeat_at`, takes no lock, and does not claim, renew, settle,

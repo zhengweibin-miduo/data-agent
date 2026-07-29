@@ -9,7 +9,13 @@ import pytest
 from tests.unit.data_sync.test_repository import _streaming_task
 
 from data_agent.data_sync import service
-from data_agent.data_sync.models import SyncPhase
+from data_agent.data_sync.binlog import BinlogCaptureResult
+from data_agent.data_sync.models import (
+    BinlogCoordinate,
+    RowOperation,
+    SyncPhase,
+    SyncRowEvent,
+)
 from data_agent.data_sync.schema_sync import SchemaLockUnavailableError
 from data_agent.data_sync.service import DataSyncService
 
@@ -27,6 +33,7 @@ async def test_streaming_backlog_returns_to_replaying(
     source = AsyncMock()
     sync_service = DataSyncService({"local": source}, AsyncMock())
     sync_service._capture = AsyncMock()
+
     async def finish_operation(task: object, work: Awaitable[Any]) -> object:
         return await work
 
@@ -37,6 +44,41 @@ async def test_streaming_backlog_returns_to_replaying(
 
     sync_service._capture.assert_not_awaited()
     repository.settle_phase.assert_awaited_once_with(task, SyncPhase.REPLAYING)
+
+
+async def test_capture_atomically_marks_streaming_task_replaying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新事件及位点提交时必须在同一事务中撤销实时就绪状态。"""
+    coordinate = BinlogCoordinate(file="mysql-bin.000001", position=120, row_index=0)
+    task = replace(_streaming_task(), captured=coordinate)
+    repository = AsyncMock()
+    repository.count_pending_events.return_value = 0
+    monkeypatch.setattr(service, "DataSyncRepository", lambda session: repository)
+    monkeypatch.setattr(service.MySQLDatabase, "session", _fake_session)
+    event = SyncRowEvent(
+        source="local",
+        source_schema=task.desired.source_schema,
+        source_table=task.desired.source_table,
+        coordinate=coordinate,
+        operation=RowOperation.INSERT,
+        after={"id": 1},
+    )
+    source = AsyncMock()
+    source.capture.return_value = BinlogCaptureResult(events=(event,), tail=coordinate)
+    sync_service = DataSyncService(
+        {"local": source},
+        AsyncMock(event_buffer_limit=100),
+    )
+
+    await sync_service._capture(task, source)
+
+    repository.append_event.assert_awaited_once_with(task.id, event)
+    repository.advance_captured_coordinate.assert_awaited_once_with(
+        task,
+        coordinate,
+        has_new_events=True,
+    )
 
 
 async def test_unexpected_error_persists_phase_and_exception_type() -> None:

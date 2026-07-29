@@ -431,17 +431,20 @@ class DataSyncRepository:
         self,
         task: ClaimedSyncTask,
         coordinate: BinlogCoordinate,
+        *,
+        has_new_events: bool = False,
     ) -> bool:
-        """仅向前推进已持久化到事件缓冲区的 Binlog 位点。"""
+        """推进捕获位点，并原子撤销存在新积压的实时就绪状态。"""
+        values: dict[str, object] = {
+            "captured_file": coordinate.file,
+            "captured_position": coordinate.position,
+            "captured_row_index": coordinate.row_index,
+            "updated_at": func.now(),
+        }
+        if has_new_events and task.phase is SyncPhase.STREAMING:
+            values["phase"] = SyncPhase.REPLAYING.value
         result = await self._session.execute(
-            update(data_sync_task)
-            .where(self._task_authority(task))
-            .values(
-                captured_file=coordinate.file,
-                captured_position=coordinate.position,
-                captured_row_index=coordinate.row_index,
-                updated_at=func.now(),
-            )
+            update(data_sync_task).where(self._task_authority(task)).values(**values)
         )
         return bool(_rowcount(result))
 
@@ -689,6 +692,73 @@ class DataSyncRepository:
             owner_source=row["source"],
             contender_source=source,
         )
+
+    async def claim_key_owners(
+        self,
+        *,
+        target_table: str,
+        identities: Sequence[tuple[str, str]],
+        source: str,
+    ) -> KeyConflict | None:
+        """批量领取回填主键归属，并在同一事务内核验整批冲突。"""
+        if not identities:
+            return None
+        documents: dict[str, str] = {}
+        for document, key_hash in identities:
+            previous = documents.setdefault(key_hash, document)
+            if previous != document:
+                return KeyConflict(
+                    target_table=target_table,
+                    primary_key_hash=key_hash,
+                    owner_source=source,
+                    contender_source=source,
+                )
+        await self._session.execute(
+            insert(data_sync_key_owner)
+            .values(
+                [
+                    {
+                        "target_table": target_table,
+                        "primary_key_hash": key_hash,
+                        "primary_key_json": document,
+                        "source": source,
+                        "deleted": False,
+                    }
+                    for key_hash, document in documents.items()
+                ]
+            )
+            .prefix_with("IGNORE")
+        )
+        result = await self._session.execute(
+            select(data_sync_key_owner)
+            .where(
+                data_sync_key_owner.c.target_table == target_table,
+                data_sync_key_owner.c.primary_key_hash.in_(documents),
+            )
+            .with_for_update()
+        )
+        owners = {str(row["primary_key_hash"]): row for row in result.mappings()}
+        for key_hash, document in documents.items():
+            row = owners.get(key_hash)
+            if row is None:
+                raise RuntimeError("目标主键归属批量写入后无法读取")
+            if row["primary_key_json"] != document or row["source"] != source:
+                return KeyConflict(
+                    target_table=target_table,
+                    primary_key_hash=key_hash,
+                    owner_source=str(row["source"]),
+                    contender_source=source,
+                )
+        await self._session.execute(
+            update(data_sync_key_owner)
+            .where(
+                data_sync_key_owner.c.target_table == target_table,
+                data_sync_key_owner.c.primary_key_hash.in_(documents),
+                data_sync_key_owner.c.source == source,
+            )
+            .values(deleted=False, updated_at=func.now())
+        )
+        return None
 
     async def tombstone_key_owner(
         self,

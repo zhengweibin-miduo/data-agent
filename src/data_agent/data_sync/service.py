@@ -291,7 +291,11 @@ class DataSyncService:
             repository = DataSyncRepository(session)
             for event in captured.events:
                 await repository.append_event(task.id, event)
-            if not await repository.advance_captured_coordinate(task, captured.tail):
+            if not await repository.advance_captured_coordinate(
+                task,
+                captured.tail,
+                has_new_events=bool(captured.events),
+            ):
                 raise RuntimeError("持久化 Binlog 捕获位点时任务租约已失效")
         return len(captured.events) < remaining
 
