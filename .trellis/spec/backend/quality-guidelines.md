@@ -165,6 +165,81 @@ Require `/codex-fix-ci`, verify the current PR/head and failed PR runs, then
 delegate once with an expected-head guard and a non-force push back to the
 original PR branch.
 
+## Scenario: Manually Delegate Missed Codex Review Threads
+
+### 1. Scope / Trigger
+
+- Use the `Delegate Missed Codex Review Threads` workflow when a Codex
+  review exists but its `pull_request_review` event did not create an automatic
+  delegation run.
+
+### 2. Signatures
+
+- Event: `workflow_dispatch`.
+- Input: `pr_number` (required positive integer).
+- Script entry point:
+  `delegateManualReview({ github, context, core, prNumber, prAuthors, reviewBots })`.
+
+### 3. Contracts
+
+- The PR must be non-draft, use a same-repository head, and have an author in
+  `PR_AUTHORS`.
+- `CODEX_TRIGGER_TOKEN` is required to read the PR and create the `@codex`
+  delegation comment.
+- The scanner includes every unresolved thread whose first comment author is
+  in `REVIEW_BOTS`, regardless of the originating review or its head SHA.
+- A thread ID already listed in a trusted `codex-review-loop` or
+  `codex-review-manual` comment has been processed and must not be delegated
+  again, even when the PR head changes.
+- An unresolved thread with a later reply beginning with
+  `无法安全完成：` is terminally blocked and must not be delegated again.
+- An unresolved Codex thread with `isOutdated=true` is resolved directly and
+  never enters the delegation comment.
+- Historical delegation detection uses explicit GraphQL thread IDs from
+  comments authored by `PR_AUTHORS` or the current token user; workflow-run
+  timing and review/head inference are not evidence of processing.
+
+### 4. Validation & Error Matrix
+
+- Invalid `pr_number`, draft PR, fork head, or unauthorized PR author -> fail
+  without a comment.
+- Failure to resolve an outdated thread -> fail before creating a delegation
+  comment.
+- No missed unresolved Codex thread -> complete without a comment.
+- A changed head with only previously delegated threads -> no comment.
+- A newly discovered unresolved thread absent from all trusted delegation
+  comments -> permit a new delegation.
+
+### 5. Good/Base/Bad Cases
+
+- Good: several never-delegated unresolved Codex threads from different review
+  rounds are delegated together while outdated threads are resolved.
+- Base: every unresolved thread has a later `无法安全完成：` reply, so no
+  comment is created.
+- Bad: scanning only the first 100 replies misses a later blocked reply; thread
+  comments must be paginated before delegation.
+
+### 6. Tests Required
+
+- The standalone Node self-check covers outdated-thread resolution,
+  blocked-thread exclusion, comment pagination, reviewer filtering, stable
+  marker ordering, duplicate suppression, and invalid PR rejection.
+- Parse the workflow YAML and run `git diff --check`; run `actionlint` when it
+  is available.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Delegate only the latest review, repeatedly delegate a thread already listed in
+a prior delegation, or retry a thread with an explicit `无法安全完成：` blocker.
+
+#### Correct
+
+Scan all review rounds, resolve outdated Codex threads, exclude resolved,
+explicitly blocked, and previously delegated thread IDs, then delegate only the
+missed thread set.
+
 ## Scenario: User-triggered Codex Conflict Resolution
 
 ### 1. Scope / Trigger

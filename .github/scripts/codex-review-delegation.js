@@ -1,14 +1,23 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 
 function marker(reviewId, headSha) {
   return `<!-- codex-review-loop:${reviewId}:${headSha} -->`;
 }
 
-function delegationBody(reviewId, headSha, headRef, threads) {
+function manualMarker(headSha, threads) {
+  const threadHash = createHash("sha256")
+    .update(threads.map((thread) => thread.id).sort().join("\n"))
+    .digest("hex")
+    .slice(0, 16);
+  return `<!-- codex-review-manual:${headSha}:${threadHash} -->`;
+}
+
+function delegationBodyWithMarker(markerText, headSha, headRef, threads) {
   const threadList = threads
     .map((thread) => `- ${thread.url || thread.id} (${thread.id})`)
     .join("\n");
-  return `${marker(reviewId, headSha)}
+  return `${markerText}
 @codex 修复下方列出的所有有效且尚未解决的审查问题。
 
 PR branch: \`${headRef}\`
@@ -37,7 +46,20 @@ ${threadList}
 无需修改：<一句话说明判断依据>。
 该 thread 已 resolve。
 
-修复、验证或推送任一步骤未安全完成时，说明阻塞原因并保持 unresolved，不得回复已修复或 resolve。禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出；只保留测试命令、通过数量及与本次修改直接相关的异常。最终任务总结中的代码链接必须指向推送后的实际提交 SHA，不得使用任务开始时的 Expected head。`;
+无法安全完成时使用以下结构：
+
+无法安全完成：<阻塞原因>。
+该 thread 保持 unresolved。
+
+修复、验证或推送任一步骤未安全完成时，不得回复已修复或 resolve。禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出；只保留测试命令、通过数量及与本次修改直接相关的异常。最终任务总结中的代码链接必须指向推送后的实际提交 SHA，不得使用任务开始时的 Expected head。`;
+}
+
+function delegationBody(reviewId, headSha, headRef, threads) {
+  return delegationBodyWithMarker(marker(reviewId, headSha), headSha, headRef, threads);
+}
+
+function manualDelegationBody(headSha, headRef, threads) {
+  return delegationBodyWithMarker(manualMarker(headSha, threads), headSha, headRef, threads);
 }
 
 async function unresolvedThreads(github, owner, repo, pullNumber, reviewId, reviewer) {
@@ -83,6 +105,158 @@ async function unresolvedThreads(github, owner, repo, pullNumber, reviewId, revi
   return matches;
 }
 
+function allowedLogins(value, fallback) {
+  return new Set((value || fallback).split(",").map((login) => login.trim()));
+}
+
+function assertManualPullEligible(pull, owner, repo, allowedAuthors) {
+  if (pull.draft) {
+    throw new Error("Draft pull requests cannot be delegated.");
+  }
+  if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+    throw new Error("Fork pull requests cannot be delegated.");
+  }
+  if (!allowedAuthors.has(pull.user.login)) {
+    throw new Error(`Pull request author ${pull.user.login} is not allowed.`);
+  }
+}
+
+function normalizedLogin(login) {
+  return login?.replace(/\[bot\]$/, "");
+}
+
+function isBlockedReply(comment) {
+  return comment.body?.trimStart().startsWith("无法安全完成：");
+}
+
+async function hasBlockedReply(github, thread) {
+  if (thread.comments.nodes.slice(1).some(isBlockedReply)) {
+    return true;
+  }
+  let pageInfo = thread.comments.pageInfo;
+  while (pageInfo.hasNextPage) {
+    const result = await github.graphql(
+      `query($threadId:ID!,$cursor:String) {
+        node(id:$threadId) {
+          ... on PullRequestReviewThread {
+            comments(first:100,after:$cursor) {
+              nodes { body }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { threadId: thread.id, cursor: pageInfo.endCursor },
+    );
+    if (result.node.comments.nodes.some(isBlockedReply)) {
+      return true;
+    }
+    pageInfo = result.node.comments.pageInfo;
+  }
+  return false;
+}
+
+async function scanUnresolvedCodexThreads(github, owner, repo, pullNumber, reviewBots) {
+  const active = [];
+  const outdated = [];
+  const allowedReviewers = new Set(
+    [...reviewBots].map((login) => normalizedLogin(login)),
+  );
+  let cursor = null;
+  do {
+    const result = await github.graphql(
+      `query($owner:String!,$repo:String!,$pullNumber:Int!,$cursor:String) {
+        repository(owner:$owner,name:$repo) {
+          pullRequest(number:$pullNumber) {
+            reviewThreads(first:100,after:$cursor) {
+              nodes {
+                id
+                isResolved
+                isOutdated
+                comments(first:100) {
+                  nodes {
+                    body
+                    url
+                    author { login }
+                  }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { owner, repo, pullNumber, cursor },
+    );
+    const threads = result.repository.pullRequest.reviewThreads;
+    for (const thread of threads.nodes) {
+      const [firstComment] = thread.comments.nodes;
+      const isCodexReview = allowedReviewers.has(normalizedLogin(firstComment?.author?.login));
+      if (thread.isResolved || !isCodexReview) {
+        continue;
+      }
+      const summary = { id: thread.id, url: firstComment.url };
+      if (thread.isOutdated) {
+        outdated.push(summary);
+      } else if (!(await hasBlockedReply(github, thread))) {
+        active.push(summary);
+      }
+    }
+    cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
+  } while (cursor);
+  return { active, outdated };
+}
+
+async function resolveReviewThreads(github, core, threads) {
+  for (const thread of threads) {
+    await github.graphql(
+      `mutation($threadId:ID!) {
+        resolveReviewThread(input:{threadId:$threadId}) {
+          thread { isResolved }
+        }
+      }`,
+      { threadId: thread.id },
+    );
+    core.info(`Resolved outdated review thread ${thread.id}.`);
+  }
+}
+
+async function issueComments(github, owner, repo, pullNumber) {
+  return github.paginate(github.rest.issues.listComments, {
+    owner,
+    repo,
+    issue_number: pullNumber,
+    per_page: 100,
+  });
+}
+
+function delegatedThreadIds(comments, trustedAuthors) {
+  const ids = new Set();
+  for (const comment of comments) {
+    if (
+      !trustedAuthors.has(comment.user?.login) ||
+      !/<!-- codex-review-(?:loop|manual):/.test(comment.body || "")
+    ) {
+      continue;
+    }
+    for (const match of comment.body.matchAll(/\bPRRT_[A-Za-z0-9_-]+\b/g)) {
+      ids.add(match[0]);
+    }
+  }
+  return ids;
+}
+
+async function hasOwnMarker(github, owner, repo, pullNumber, markerText) {
+  const comments = await issueComments(github, owner, repo, pullNumber);
+  const {
+    data: { login: triggerUser },
+  } = await github.rest.users.getAuthenticated();
+  return comments.some(
+    (comment) => comment.user?.login === triggerUser && comment.body?.includes(markerText),
+  );
+}
+
 async function delegateReview({ github, context, core }) {
   const pull = context.payload.pull_request;
   const review = context.payload.review;
@@ -100,21 +274,7 @@ async function delegateReview({ github, context, core }) {
     return;
   }
 
-  const comments = await github.paginate(github.rest.issues.listComments, {
-    owner,
-    repo,
-    issue_number: pull.number,
-    per_page: 100,
-  });
-  const {
-    data: { login: triggerUser },
-  } = await github.rest.users.getAuthenticated();
-  const ownComments = comments.filter((comment) => comment.user?.login === triggerUser);
-  if (
-    ownComments.some((comment) =>
-      comment.body?.includes(marker(review.id, pull.head.sha)),
-    )
-  ) {
+  if (await hasOwnMarker(github, owner, repo, pull.number, marker(review.id, pull.head.sha))) {
     core.info("This review and head commit were already delegated.");
     return;
   }
@@ -124,6 +284,75 @@ async function delegateReview({ github, context, core }) {
     repo,
     issue_number: pull.number,
     body: delegationBody(review.id, pull.head.sha, pull.head.ref, threads),
+  });
+}
+
+async function delegateManualReview({
+  github,
+  context,
+  core,
+  prNumber,
+  prAuthors,
+  reviewBots,
+}) {
+  const pullNumber = Number(prNumber);
+  if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+    throw new Error("pr_number must be a positive integer.");
+  }
+
+  const { owner, repo } = context.repo;
+  const { data: pull } = await github.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  });
+  const allowedAuthors = allowedLogins(
+    prAuthors,
+    "zhengweibin-miduo,iuiiui,chatgpt-codex-connector[bot]",
+  );
+  assertManualPullEligible(pull, owner, repo, allowedAuthors);
+
+  const allowedReviewers = allowedLogins(
+    reviewBots,
+    "chatgpt-codex-connector[bot]",
+  );
+  const { active, outdated } = await scanUnresolvedCodexThreads(
+    github,
+    owner,
+    repo,
+    pullNumber,
+    allowedReviewers,
+  );
+  await resolveReviewThreads(github, core, outdated);
+  const comments = await issueComments(github, owner, repo, pullNumber);
+  const {
+    data: { login: triggerUser },
+  } = await github.rest.users.getAuthenticated();
+  const previouslyDelegated = delegatedThreadIds(
+    comments,
+    new Set([...allowedAuthors, triggerUser]),
+  );
+  const missedThreads = active.filter((thread) => !previouslyDelegated.has(thread.id));
+  if (missedThreads.length === 0) {
+    core.info("This pull request has no missed unresolved Codex threads.");
+    return;
+  }
+
+  const { data: currentPull } = await github.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  });
+  assertManualPullEligible(currentPull, owner, repo, allowedAuthors);
+  if (currentPull.head.sha !== pull.head.sha || currentPull.head.ref !== pull.head.ref) {
+    throw new Error("Pull request head changed while preparing manual delegation.");
+  }
+
+  await github.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: pullNumber,
+    body: manualDelegationBody(pull.head.sha, pull.head.ref, missedThreads),
   });
 }
 
@@ -139,6 +368,8 @@ async function selfTest() {
   assert.match(body, /提交 `<实际提交 SHA>` 已修复/);
   assert.match(body, /确认不需要修改代码的 thread[\s\S]*无需修改：<一句话说明判断依据>/);
   assert.match(body, /不得声称已有提交修复或附加测试结果/);
+  assert.match(body, /无法安全完成：<阻塞原因>/);
+  assert.match(body, /该 thread 保持 unresolved/);
   assert.match(body, /修复、验证或推送任一步骤未安全完成时[\s\S]*不得回复已修复或 resolve/);
   assert.match(body, /禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出/);
   assert.match(body, /代码链接必须指向推送后的实际提交 SHA/);
@@ -291,6 +522,244 @@ async function selfTest() {
   ];
   await delegateReview({ github, context, core });
   assert.equal(createdBodies.length, 1, "the same review and head must remain idempotent");
+
+  const manualThreads = [
+    { id: "THREAD_B", url: "https://github.com/owner/repo/pull/7#discussion_b" },
+    { id: "THREAD_A", url: "https://github.com/owner/repo/pull/7#discussion_a" },
+  ];
+  assert.equal(
+    manualMarker("manual-sha", manualThreads),
+    manualMarker("manual-sha", [...manualThreads].reverse()),
+    "manual idempotency marker must not depend on GraphQL thread order",
+  );
+  assert.equal(
+    await hasBlockedReply(
+      {
+        graphql: async () => ({
+          node: {
+            comments: {
+              nodes: [{ body: "无法安全完成：第 101 条回复中的阻塞原因。" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        }),
+      },
+      {
+        id: "THREAD_PAGED",
+        comments: {
+          nodes: [{ body: "review finding" }],
+          pageInfo: { hasNextPage: true, endCursor: "page-2" },
+        },
+      },
+    ),
+    true,
+    "blocked replies after the first 100 comments must be excluded",
+  );
+
+  const manualBodies = [];
+  const resolvedThreadIds = [];
+  const manualComments = [
+    {
+      body: `${marker(41, "older-sha")}\n- https://example.test/old (PRRT_ALREADY_DELEGATED)`,
+      user: { login: "allowed-author" },
+    },
+  ];
+  const manualGithub = {
+    graphql: async (query, variables) => {
+      if (query.includes("resolveReviewThread")) {
+        resolvedThreadIds.push(variables.threadId);
+        return { resolveReviewThread: { thread: { isResolved: true } } };
+      }
+      return {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [
+              {
+                id: "PRRT_MANUAL",
+                isResolved: false,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_manual",
+                      author: { login: "codex-reviewer" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_ALREADY_DELEGATED",
+                isResolved: false,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_delegated",
+                      author: { login: "codex-reviewer" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_OUTDATED",
+                isResolved: resolvedThreadIds.includes("PRRT_OUTDATED"),
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_outdated",
+                      author: { login: "codex-reviewer" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_BLOCKED",
+                isResolved: false,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked",
+                      author: { login: "codex-reviewer" },
+                    },
+                    {
+                      body: "无法安全完成：缺少外部权限。",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_reply",
+                      author: { login: "codex" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_OTHER_REVIEWER",
+                isResolved: false,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_other",
+                      author: { login: "someone-else" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      };
+    },
+    paginate: async () => manualComments,
+    rest: {
+      issues: {
+        listComments() {},
+        createComment: async ({ body: commentBody }) => manualBodies.push(commentBody),
+      },
+      pulls: {
+        get: async () => ({
+          data: {
+            draft: false,
+            head: {
+              ref: "feature/manual",
+              sha: "manual-sha",
+              repo: { full_name: "owner/repo" },
+            },
+            user: { login: "allowed-author" },
+          },
+        }),
+      },
+      users: { getAuthenticated: async () => ({ data: { login: "trusted-user" } }) },
+    },
+  };
+  const manualContext = { repo: { owner: "owner", repo: "repo" } };
+  await delegateManualReview({
+    github: manualGithub,
+    context: manualContext,
+    core,
+    prNumber: "7",
+    prAuthors: "allowed-author",
+    reviewBots: "codex-reviewer[bot]",
+  });
+  assert.equal(manualBodies.length, 1, "manual dispatch must create one delegation");
+  assert.deepEqual(
+    resolvedThreadIds,
+    ["PRRT_OUTDATED"],
+    "manual dispatch must resolve outdated Codex threads",
+  );
+  assert.match(manualBodies[0], /PRRT_MANUAL/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_ALREADY_DELEGATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_OTHER_REVIEWER/);
+
+  manualComments.push({ body: manualBodies[0], user: { login: "trusted-user" } });
+  await delegateManualReview({
+    github: manualGithub,
+    context: manualContext,
+    core,
+    prNumber: 7,
+    prAuthors: "allowed-author",
+    reviewBots: "codex-reviewer[bot]",
+  });
+  assert.equal(
+    manualBodies.length,
+    1,
+    "previously delegated unresolved threads must not be delegated again",
+  );
+
+  manualComments.length = 0;
+  let pullReadCount = 0;
+  manualGithub.rest.pulls.get = async () => ({
+    data: {
+      draft: false,
+      head: {
+        ref: "feature/manual",
+        sha: pullReadCount++ === 0 ? "manual-sha" : "new-sha",
+        repo: { full_name: "owner/repo" },
+      },
+      user: { login: "allowed-author" },
+    },
+  });
+  await assert.rejects(
+    delegateManualReview({
+      github: manualGithub,
+      context: manualContext,
+      core,
+      prNumber: 7,
+      prAuthors: "allowed-author",
+      reviewBots: "codex-reviewer[bot]",
+    }),
+    /Pull request head changed while preparing manual delegation/,
+  );
+  assert.equal(manualBodies.length, 1, "a stale manual delegation must not be created");
+
+  manualGithub.rest.pulls.get = async () => ({
+    data: {
+      draft: true,
+      head: { ref: "feature/manual", sha: "manual-sha", repo: { full_name: "owner/repo" } },
+      user: { login: "allowed-author" },
+    },
+  });
+  await assert.rejects(
+    delegateManualReview({
+      github: manualGithub,
+      context: manualContext,
+      core,
+      prNumber: 7,
+      prAuthors: "allowed-author",
+      reviewBots: "codex-reviewer[bot]",
+    }),
+    /Draft pull requests cannot be delegated/,
+  );
 }
 
 if (require.main === module) {
@@ -302,7 +771,12 @@ if (require.main === module) {
 
 module.exports = {
   delegateReview,
+  delegateManualReview,
   delegationBody,
+  manualDelegationBody,
+  manualMarker,
   marker,
+  resolveReviewThreads,
+  scanUnresolvedCodexThreads,
   unresolvedThreads,
 };
