@@ -17,6 +17,7 @@ from data_agent.data_sync.backfill import (
     reset_source_rows,
 )
 from data_agent.data_sync.binlog import MySQLSourceClient
+from data_agent.data_sync.locks import generation_lock_name
 from data_agent.data_sync.models import BinlogCoordinate, SyncPhase
 from data_agent.data_sync.repository import ClaimedSyncTask, DataSyncRepository
 from data_agent.data_sync.schema_sync import (
@@ -24,7 +25,10 @@ from data_agent.data_sync.schema_sync import (
     SchemaLockUnavailableError,
 )
 from data_agent.errors import DataAgentError
-from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.infrastructure.mysql import (
+    AdvisoryLockUnavailableError,
+    MySQLDatabase,
+)
 from data_agent.settings import DataSyncSettings
 
 _T = TypeVar("_T")
@@ -68,6 +72,10 @@ class DataSyncService:
         except SchemaLockUnavailableError:
             # 同目标表的正常结构串行化不属于任务失败，不应消耗重试预算。
             logger.info("DW 目标表结构锁正被占用，任务将在稍后重新调度")
+            await self._reschedule(task)
+        except AdvisoryLockUnavailableError:
+            # generation 发布或旧 DDL 正在持锁时只释放租约，不消耗失败预算。
+            logger.info("DW generation 锁正被占用，任务将在稍后重新调度")
             await self._reschedule(task)
         except DataAgentError as error:
             if error.code == "dw_primary_key_conflict":
@@ -252,23 +260,36 @@ class DataSyncService:
 
     async def _synchronize_schema(self, task: ClaimedSyncTask) -> None:
         """应用 DW 安全结构演进并切换到位点捕获阶段。"""
-        async with MySQLDatabase.session() as session:
-            await self._with_lease_heartbeat(
-                task,
-                DWSchemaSynchronizer(
-                    session,
-                    database=self._settings.dw_database,
-                ).synchronize(
-                    task.desired,
-                    before_ddl=lambda: self._has_authority(task),
-                ),
-            )
-            await DataSyncRepository(session).settle_phase(task, SyncPhase.BUFFERING)
-
-    async def _has_authority(self, task: ClaimedSyncTask) -> bool:
-        """在不可逆 DDL 之前重新读取 generation 与租约权威。"""
-        async with MySQLDatabase.session() as session:
-            return await DataSyncRepository(session).has_authority(task)
+        lock_name = generation_lock_name(
+            self._settings.dw_database,
+            task.desired.target_table,
+        )
+        # 步骤一：先取得跨发布者共享的 generation lock，再进入 DDL Session。
+        async with MySQLDatabase.advisory_locks(
+            [lock_name],
+            timeout_seconds=self._settings.generation_lock_timeout_seconds,
+        ):
+            async with MySQLDatabase.session() as session:
+                # 步骤二：READ COMMITTED 让同一 DDL Session 看见独立心跳续租结果。
+                await session.connection(
+                    execution_options={"isolation_level": "READ COMMITTED"}
+                )
+                repository = DataSyncRepository(session)
+                # 步骤三：schema lock 内以同一 repository/Session
+                # 首查并逐条复查 authority。
+                await self._with_lease_heartbeat(
+                    task,
+                    DWSchemaSynchronizer(
+                        session,
+                        database=self._settings.dw_database,
+                    ).synchronize(
+                        task.desired,
+                        check_authority=lambda: repository.has_authority(task),
+                    ),
+                )
+                # 步骤四：结构锁释放与 phase settlement 提交后才释放 generation lock。
+                if not await repository.settle_phase(task, SyncPhase.BUFFERING):
+                    raise LeaseLostError("完成 DW 结构同步后任务租约已失效")
 
     async def _capture(
         self,
@@ -342,6 +363,8 @@ class DataSyncService:
         except BaseException:
             if not running.done():
                 running.cancel()
+                with suppress(asyncio.CancelledError):
+                    await running
             raise
 
     async def _renew_lease(self, task: ClaimedSyncTask) -> None:

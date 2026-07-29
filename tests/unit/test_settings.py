@@ -101,6 +101,11 @@ def test_default_app_config_loads_expected_values() -> None:
         "dw",
     )
     check_equal(
+        "test_default_app_config_loads_expected_values generation 锁等待秒数",
+        app_config.data_sync.generation_lock_timeout_seconds,
+        10,
+    )
+    check_equal(
         "test_default_app_config_loads_expected_values API 监听地址",
         app_config.api.host,
         "127.0.0.1",

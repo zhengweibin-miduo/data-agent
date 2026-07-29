@@ -4,12 +4,16 @@ from collections.abc import Mapping
 
 from sqlalchemy.engine import make_url
 
+from data_agent.data_sync.locks import generation_lock_name
 from data_agent.data_sync.models import build_desired_tables
 from data_agent.data_sync.repository import DataSyncRepository
 from data_agent.ddl_metadata.persistence.metadata_repository import MetadataRepository
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import scope_fingerprint
-from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.infrastructure.mysql import (
+    AdvisoryLockUnavailableError,
+    MySQLDatabase,
+)
 from data_agent.memory.domain.candidates import MemoryVersions, build_accepted_memories
 from data_agent.memory.mysql.repository import MemoryRepository
 from data_agent.models.memory import MemoryCandidate
@@ -89,29 +93,47 @@ class MetadataSnapshotService:
             metrics,
             default_source_schema=source_schema,
         )
-        # 步骤四：进入唯一 managed Session，使 Meta、记忆、索引 outbox 与同步
-        # 期望状态共享同一提交或回滚边界。
-        async with MySQLDatabase.session() as session:
-            metadata_repository = MetadataRepository(session)
-            # 步骤五：先计算本次提交范围内可能受结构变化影响的记忆键。
-            expiration_memory_keys = (
-                await metadata_repository.fingerprint_expiration_memory_keys(
-                    schema,
-                    metrics,
-                )
-            )
-            memory_repository = MemoryRepository(session)
-            # 步骤六：在写入新快照前过期指纹不再兼容的权威记忆版本。
-            await memory_repository.expire_fingerprint_bound(
-                schema.source,
-                valid_fingerprints,
-                memory_keys=expiration_memory_keys,
-            )
-            # 步骤七：同步严格受本次提交表约束的 Meta 快照及其关联清理。
-            await metadata_repository.synchronize(schema, metadata, metrics)
-            # 步骤八：写入同事务 durable handoff；异步 worker 通过 desired_hash
-            # 在每条 DDL 前拦截已过期 generation，不让 Meta 提交等待 DW 命名锁。
-            sync_repository = DataSyncRepository(session)
-            await sync_repository.upsert_desired(desired_tables)
-            # 步骤九：最后写入权威记忆、审计事件、关系和双索引 outbox。
-            await memory_repository.upsert_candidates(accepted)
+        generation_locks = {
+            generation_lock_name(app_config.data_sync.dw_database, item.target_table)
+            for item in desired_tables
+        }
+        try:
+            # 步骤四：先持有本次全部 target generation locks，再开启唯一发布事务。
+            async with MySQLDatabase.advisory_locks(
+                generation_locks,
+                timeout_seconds=(
+                    app_config.data_sync.generation_lock_timeout_seconds
+                ),
+            ):
+                # 步骤五：事务提交或回滚完成后，外层上下文才会释放 generation locks。
+                async with MySQLDatabase.session() as session:
+                    metadata_repository = MetadataRepository(session)
+                    # 步骤六：计算本次提交范围内可能受结构变化影响的记忆键。
+                    expiration_memory_keys = (
+                        await metadata_repository.fingerprint_expiration_memory_keys(
+                            schema,
+                            metrics,
+                        )
+                    )
+                    memory_repository = MemoryRepository(session)
+                    # 步骤七：在写入新快照前过期指纹不再兼容的权威记忆版本。
+                    await memory_repository.expire_fingerprint_bound(
+                        schema.source,
+                        valid_fingerprints,
+                        memory_keys=expiration_memory_keys,
+                    )
+                    # 步骤八：同步严格受本次提交表约束的 Meta 快照及其关联清理。
+                    await metadata_repository.synchronize(schema, metadata, metrics)
+                    # 步骤九：在同一事务发布 durable generation handoff。
+                    sync_repository = DataSyncRepository(session)
+                    await sync_repository.upsert_desired(desired_tables)
+                    # 步骤十：最后写入权威记忆、审计事件、关系和双索引 outbox。
+                    await memory_repository.upsert_candidates(accepted)
+        except AdvisoryLockUnavailableError as error:
+            raise DataAgentError(
+                "generation_lock_unavailable",
+                "persist_snapshot",
+                "DW generation 正在变更，accepted snapshot 稍后可安全重试",
+                retryable=True,
+                http_status=503,
+            ) from error

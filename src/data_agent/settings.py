@@ -180,6 +180,11 @@ class DataSyncSettings(SettingsModel):
         gt=0,
         description="同步任务单次领取在数据库中保持有效的秒数。",
     )
+    generation_lock_timeout_seconds: int = Field(
+        gt=0,
+        le=300,
+        description="发布或执行同一 DW generation 前等待共享命名锁的最大秒数。",
+    )
     retry_base_seconds: int = Field(
         gt=0,
         description="同步任务首次失败后的退避秒数。",

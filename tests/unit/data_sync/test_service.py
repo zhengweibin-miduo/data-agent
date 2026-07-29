@@ -1,15 +1,19 @@
 """数据同步服务阶段门禁检查。"""
 
-from collections.abc import Awaitable
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from tests.helpers.checks import check_condition, check_equal
 from tests.unit.data_sync.test_repository import _streaming_task
 
 from data_agent.data_sync import service
 from data_agent.data_sync.binlog import BinlogCaptureResult
+from data_agent.data_sync.locks import generation_lock_name
 from data_agent.data_sync.models import (
     BinlogCoordinate,
     RowOperation,
@@ -18,6 +22,7 @@ from data_agent.data_sync.models import (
 )
 from data_agent.data_sync.schema_sync import SchemaLockUnavailableError
 from data_agent.data_sync.service import DataSyncService
+from data_agent.infrastructure.mysql import AdvisoryLockUnavailableError
 
 
 async def test_dispatch_claims_only_the_task_it_can_start_immediately(
@@ -183,6 +188,140 @@ async def test_schema_lock_contention_does_not_consume_retry_budget() -> None:
 
     sync_service._reschedule.assert_awaited_once_with(task)
     sync_service._retry.assert_not_awaited()
+
+
+async def test_generation_lock_contention_does_not_consume_retry_budget() -> None:
+    """Generation 锁竞争只重新调度，不得增加任务失败次数。"""
+    task = replace(_streaming_task(), phase=SyncPhase.PENDING_SCHEMA)
+    sync_service = DataSyncService({"local": AsyncMock()}, AsyncMock())
+    sync_service._process = AsyncMock(
+        side_effect=AdvisoryLockUnavailableError("generation lock busy")
+    )
+    sync_service._reschedule = AsyncMock()
+    sync_service._retry = AsyncMock()
+
+    await sync_service._process_safely(task)
+
+    check_equal("generation 竞争重新调度次数", sync_service._reschedule.await_count, 1)
+    check_equal("generation 竞争失败退避次数", sync_service._retry.await_count, 0)
+
+
+async def test_schema_sync_holds_generation_lock_through_session_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一 DDL Session 必须承担 authority 回调和 phase settlement。"""
+    task = replace(_streaming_task(), phase=SyncPhase.PENDING_SCHEMA)
+    events: list[str] = []
+    ddl_session = AsyncMock()
+    repository = AsyncMock()
+    repository.has_authority.return_value = True
+    repository.settle_phase.return_value = True
+
+    @asynccontextmanager
+    async def generation_locks(
+        names: Iterable[str],
+        *,
+        timeout_seconds: float,
+    ) -> AsyncIterator[None]:
+        check_equal(
+            "worker 使用目标共享 generation 锁",
+            list(names),
+            [generation_lock_name("dw", task.desired.target_table)],
+        )
+        check_equal("worker 使用配置的锁等待预算", timeout_seconds, 2)
+        events.append("generation_enter")
+        yield
+        events.append("generation_exit")
+
+    @asynccontextmanager
+    async def ddl_session_context() -> AsyncIterator[AsyncMock]:
+        events.append("session_enter")
+        yield ddl_session
+        events.append("session_commit")
+
+    class FakeSynchronizer:
+        """记录 schema 层回调所用 repository authority。"""
+
+        def __init__(self, session: object, *, database: str) -> None:
+            check_condition(
+                "schema synchronizer 复用 DDL Session",
+                session is ddl_session,
+            )
+
+        async def synchronize(
+            self,
+            desired: object,
+            *,
+            check_authority: Callable[[], Awaitable[bool]] | None = None,
+        ) -> None:
+            events.append("schema_enter")
+            if check_authority is not None:
+                check_condition("DDL Session authority 有效", await check_authority())
+            events.append("schema_exit")
+
+    async def finish_operation(task_value: object, operation: Awaitable[Any]) -> Any:
+        return await operation
+
+    monkeypatch.setattr(service.MySQLDatabase, "advisory_locks", generation_locks)
+    monkeypatch.setattr(service.MySQLDatabase, "session", ddl_session_context)
+    monkeypatch.setattr(service, "DataSyncRepository", lambda session: repository)
+    monkeypatch.setattr(service, "DWSchemaSynchronizer", FakeSynchronizer)
+    sync_service = DataSyncService(
+        {"local": AsyncMock()},
+        AsyncMock(
+            dw_database="dw",
+            generation_lock_timeout_seconds=2,
+        ),
+    )
+    sync_service._with_lease_heartbeat = AsyncMock(side_effect=finish_operation)
+
+    await sync_service._synchronize_schema(task)
+
+    check_condition(
+        "authority 与 settlement 使用同一 repository",
+        repository.has_authority.await_count == 1
+        and repository.settle_phase.await_count == 1,
+    )
+    check_equal(
+        "generation 锁跨越 DDL Session 提交",
+        events,
+        [
+            "generation_enter",
+            "session_enter",
+            "schema_enter",
+            "schema_exit",
+            "session_commit",
+            "generation_exit",
+        ],
+    )
+
+
+async def test_lease_heartbeat_waits_for_cancelled_operation_cleanup() -> None:
+    """取消长步骤时必须等待其 finally 清理完毕后再退出 Session 上层。"""
+    started = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def operation() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            cleaned.set()
+
+    sync_service = DataSyncService(
+        {"local": AsyncMock()},
+        AsyncMock(claim_lease_seconds=60),
+    )
+    running = asyncio.create_task(
+        sync_service._with_lease_heartbeat(_streaming_task(), operation())
+    )
+    await started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    check_condition("取消返回前已完成长步骤清理", cleaned.is_set())
 
 
 class _fake_session:

@@ -45,6 +45,7 @@ data_sync:
       url: mysql+asyncmy://data_agent_replica:data_agent_replica@localhost:3306/source_demo?charset=utf8mb4
       server_id: 2001
   claim_lease_seconds: 60
+  generation_lock_timeout_seconds: 10
   retry_base_seconds: 5
   retry_max_seconds: 300
   max_attempts: 10

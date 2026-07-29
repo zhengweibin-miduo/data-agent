@@ -74,17 +74,22 @@ class DWSchemaSynchronizer:
         self,
         desired: DesiredSyncTable,
         *,
-        before_ddl: Callable[[], Awaitable[bool]] | None = None,
+        check_authority: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
-        """重查当前结构并执行创建、加列或安全扩宽。"""
+        """取得结构锁后重查 authority，并执行创建、加列或安全扩宽。"""
         lock_name = _schema_lock_name(self._database, desired.target_table)
+        owner_connection = await self._session.connection()
         acquired = await self._session.scalar(
             text("SELECT GET_LOCK(:lock_name, 10)"), {"lock_name": lock_name}
         )
         if acquired != 1:
             raise SchemaLockUnavailableError("无法取得 DW 结构 generation 串行锁")
         try:
-            # 步骤一：从 information_schema 读取当前权威结构。
+            # 步骤一：结构锁内先确认任务 authority，固定
+            # generation -> schema -> task 顺序。
+            if check_authority is not None and not await check_authority():
+                raise RuntimeError("取得 DW 结构锁后同步任务 generation 已失效")
+            # 步骤二：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
             compatible_extra_columns, shared_nullable_columns = (
                 await self._shared_columns(desired)
@@ -98,9 +103,9 @@ class DWSchemaSynchronizer:
             )
             if current is not None:
                 await self._validate_existing_provenance(desired)
-            # 步骤二：每条自动提交 DDL 前重新确认 generation authority。
+            # 步骤三：每条自动提交 DDL 前在同一 Session 重新确认 generation authority。
             for statement in changes:
-                if before_ddl is not None and not await before_ddl():
+                if check_authority is not None and not await check_authority():
                     raise RuntimeError("执行 DW DDL 前同步任务 generation 已失效")
                 await self._session.execute(text(statement))
             remaining = plan_schema_changes(
@@ -113,9 +118,17 @@ class DWSchemaSynchronizer:
             if remaining:
                 _raise_conflict(desired.target_table, "DDL 执行后目标结构仍未收敛")
         finally:
-            await self._session.execute(
-                text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
-            )
+            try:
+                released = await self._session.scalar(
+                    text("SELECT RELEASE_LOCK(:lock_name)"),
+                    {"lock_name": lock_name},
+                )
+                if released != 1:
+                    raise RuntimeError("DW 结构锁未由 owner Session 释放")
+            except BaseException as error:
+                # 步骤四：释放失败立即使 owner 连接失效，禁止带锁物理连接返回池中。
+                await owner_connection.invalidate(error)
+                raise
 
     async def _shared_columns(
         self, desired: DesiredSyncTable

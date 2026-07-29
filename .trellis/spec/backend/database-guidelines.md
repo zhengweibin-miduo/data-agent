@@ -301,7 +301,12 @@ backfill, Binlog replay, source collision handling, or `data_sync` persistence.
 
 ```python
 await DataSyncRepository(session).upsert_desired(desired_tables) -> None
-await DWSchemaSynchronizer(session, database="dw").synchronize(desired) -> None
+MySQLDatabase.advisory_locks(names, timeout_seconds=10) -> AsyncIterator[None]
+generation_lock_name(dw_database, target_table) -> str
+await DWSchemaSynchronizer(session, database="dw").synchronize(
+    desired,
+    check_authority=authority_callback,
+) -> None
 await apply_backfill_batch(session, task, rows, dw_database="dw")
 await apply_buffered_event(session, task, event, dw_database="dw") -> None
 ```
@@ -330,6 +335,33 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   contention is normal scheduling pressure: release the task lease and delay
   the same phase without incrementing its failure attempts or moving it toward
   `dead`.
+- Accepted-snapshot publishers and DDL workers share one generation advisory
+  lock derived from the binary `(dw_database, target_table)` identity. A
+  publisher acquires every target lock in deterministic UTF-8 byte order before
+  opening its managed transaction and releases them only after commit or
+  rollback. A worker holds the same lock across its DDL Session, schema-lock
+  acquisition, same-Session authority checks, auto-commit DDL, phase settlement,
+  and managed Session commit. The global order is `generation -> schema ->
+  task`; no path may acquire those resources in reverse.
+- `MySQLDatabase.advisory_locks()` owns locks on one dedicated engine
+  connection, independent of the protected business Session. It releases
+  acquired locks in reverse order. A partial acquisition releases the earlier
+  locks; a release failure invalidates the owner connection so a connection
+  carrying an advisory lock cannot return to the pool. The YAML key
+  `data_sync.generation_lock_timeout_seconds` is an integer in `1..300`.
+- The DDL Session uses `READ COMMITTED` and one `DataSyncRepository` for every
+  authority check and final phase settlement. The schema synchronizer checks
+  authority once after acquiring the schema lock and again immediately before
+  every DDL statement. A zero-row settlement is lease loss, not success.
+- `mysql-replication==1.0.16` lazily decodes ROW values through the private
+  `_RowsEvent__read_values_name(self, column, null_bitmap,
+  null_bitmap_index, is_partial, cols_bitmap, unsigned, i)` boundary. Before
+  first access to `event.rows`, the capture adapter must preserve JSON-column
+  SQL `NULL` with a private in-process sentinel while delegating all other
+  values to the locked dependency. Durable encoding maps that sentinel to
+  ordinary `None` and maps binary JSON literal `null` to
+  `{"$json": "null"}`. Never infer the distinction from the decoded Python
+  value alone because both sources otherwise decode to `None`.
 - Target DML, key ownership, event acknowledgement, and applied-coordinate
   advancement share one MySQL transaction. Captured and applied coordinates are
   separate. When a streaming capture persists new events, the same transaction
@@ -368,14 +400,22 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 | Binlog event fails | Roll back DW DML, acknowledgement, and applied coordinate |
 | Cross-source primary-key collision | Preserve existing DW row and enter `conflict` |
 | Lease expires or desired hash changes | Stale settlement updates zero rows |
+| Publisher or worker cannot acquire a generation lock in time | Retry/reschedule without publishing partial state or consuming the worker failure budget |
+| Generation-lock acquisition stops after some targets | Release every previously acquired lock in reverse order |
+| Advisory- or schema-lock release fails | Invalidate the owner connection before it can return to the pool |
+| DDL worker loses authority after acquiring the schema lock | Release locks and execute no later DDL or phase settlement |
+| Locked `mysql-replication` private decoder signature changes | Fail fast at import/startup; do not silently collapse JSON SQL `NULL` |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: Meta plus desired state commits, the worker creates DW structure,
-  keyset-backfills, replays buffered ROW events, and reaches streaming.
-- Base: replaying identical desired state or a duplicate event is idempotent.
+  keyset-backfills, preserves JSON null provenance, replays buffered ROW events,
+  and reaches streaming while publisher/worker generation changes serialize.
+- Base: replaying identical desired state or a duplicate event is idempotent;
+  generation-lock contention only delays the same phase.
 - Bad: put cursors in `dw`, business rows in `data_sync`, hold a transaction
-  while reading the source, or advance the applied coordinate before DW commit.
+  while reading the source, check authority in a second Session before
+  auto-commit DDL, or advance the applied coordinate before DW commit.
 
 ### 6. Tests Required
 
@@ -388,7 +428,13 @@ uv run pytest tests/integration/answer_readiness
 Tests assert DDL idempotency and widening rules, composite-PK continuation,
 INSERT/UPDATE/DELETE convergence, captured/applied offset separation,
 cross-source collision without overwrite, retry/dead-letter state, and scoped
-cleanup.
+cleanup. Advisory-lock tests assert deterministic acquisition, reverse release,
+partial-acquisition cleanup, active-exception preservation, and owner-connection
+invalidation. ROW-decoder tests pin the private dependency signature and cover
+SQL `NULL` versus JSON literal `null` for INSERT, UPDATE before/after images, and
+DELETE. A live MySQL ROW/FULL integration test must carry both null forms through
+capture, durable event storage, replay, and DW assertions using `IS NULL` and
+`JSON_TYPE`.
 
 ### 7. Wrong vs Correct
 
@@ -401,6 +447,27 @@ await data_sync_repository.upsert_desired(desired)
 async with MySQLDatabase.session() as session:
     await MetadataRepository(session).synchronize(...)
     await DataSyncRepository(session).upsert_desired(desired)
+```
+
+```python
+# Wrong: the publisher can commit a newer generation after this check and
+# before the worker's auto-commit DDL.
+if await authority_repository.has_authority(task):
+    await ddl_session.execute(ddl)
+
+# Correct: publisher and worker share the same outer generation lock; the
+# worker rechecks authority inside the schema lock with its DDL Session.
+async with MySQLDatabase.advisory_locks(
+    [generation_lock_name(dw_database, target_table)],
+    timeout_seconds=settings.generation_lock_timeout_seconds,
+):
+    async with MySQLDatabase.session() as ddl_session:
+        repository = DataSyncRepository(ddl_session)
+        await DWSchemaSynchronizer(ddl_session, database=dw_database).synchronize(
+            desired,
+            check_authority=lambda: repository.has_authority(task),
+        )
+        await repository.settle_phase(task, SyncPhase.BUFFERING)
 ```
 
 ## Schema and Migrations

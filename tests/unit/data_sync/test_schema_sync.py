@@ -82,6 +82,90 @@ async def test_schema_lock_contention_has_a_distinct_error() -> None:
         await DWSchemaSynchronizer(session, database="dw").synchronize(_desired())
 
 
+async def test_authority_check_runs_inside_schema_lock_and_before_each_ddl() -> None:
+    """Authority 首查必须晚于结构锁，并在每条不可逆 DDL 前复查。"""
+    desired = _desired()
+    events: list[str] = []
+    session = AsyncMock()
+    owner_connection = AsyncMock()
+    session.connection.return_value = owner_connection
+
+    async def scalar(statement: object, parameters: dict[str, object]) -> int:
+        sql = str(statement)
+        if "GET_LOCK" in sql:
+            events.append("schema_lock_acquired")
+            return 1
+        events.append("schema_lock_released")
+        return 1
+
+    async def execute(statement: object) -> None:
+        events.append(f"ddl:{str(statement).split(' ', 1)[0]}")
+
+    async def check_authority() -> bool:
+        events.append("authority")
+        return True
+
+    session.scalar.side_effect = scalar
+    session.execute.side_effect = execute
+    synchronizer = DWSchemaSynchronizer(session, database="dw")
+    synchronizer.inspect = AsyncMock(
+        side_effect=[
+            None,
+            CurrentTable(
+                columns=tuple(
+                    CurrentColumn(
+                        name=column.name,
+                        data_type=column.data_type,
+                        nullable=column.nullable,
+                    )
+                    for column in desired.columns
+                ),
+                primary_key=tuple(desired.primary_key),
+            ),
+        ]
+    )
+    synchronizer._shared_columns = AsyncMock(return_value=(set(), set()))
+
+    await synchronizer.synchronize(desired, check_authority=check_authority)
+
+    check_equal(
+        "结构锁、authority、DDL 与释放顺序",
+        events,
+        [
+            "schema_lock_acquired",
+            "authority",
+            "authority",
+            "ddl:CREATE",
+            "schema_lock_released",
+        ],
+    )
+
+
+async def test_initial_authority_loss_releases_schema_lock_without_inspection() -> None:
+    """结构锁内首查失效时必须释放锁且不得继续读取或执行 DDL。"""
+    events: list[str] = []
+    session = AsyncMock()
+    session.connection.return_value = AsyncMock()
+
+    async def scalar(statement: object, parameters: dict[str, object]) -> int:
+        events.append("get" if "GET_LOCK" in str(statement) else "release")
+        return 1
+
+    session.scalar.side_effect = scalar
+    synchronizer = DWSchemaSynchronizer(session, database="dw")
+    synchronizer.inspect = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="generation 已失效"):
+        await synchronizer.synchronize(
+            _desired(),
+            check_authority=AsyncMock(return_value=False),
+        )
+
+    check_equal("失效 authority 的锁清理顺序", events, ["get", "release"])
+    check_equal("失效 authority 不读取结构", synchronizer.inspect.await_count, 0)
+    check_equal("失效 authority 不执行 DDL", session.execute.await_count, 0)
+
+
 async def test_existing_table_requires_ownership_for_every_row() -> None:
     """非空目标表中只要存在未登记行就拒绝开始同步。"""
     session = AsyncMock()
