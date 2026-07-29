@@ -81,14 +81,16 @@ class DataSyncRepository:
     async def _reject_conflicting_target(self, desired: DesiredSyncTable) -> None:
         """拒绝同一命名来源跨快照复用同一 DW 目标。"""
         conflict = await self._session.scalar(
-            select(data_sync_task.c.id).where(
+            select(data_sync_task.c.id)
+            .where(
                 data_sync_task.c.source == desired.source,
                 data_sync_task.c.target_table == desired.target_table,
                 or_(
                     data_sync_task.c.source_schema != desired.source_schema,
                     data_sync_task.c.source_table != desired.source_table,
                 ),
-            ).limit(1)
+            )
+            .limit(1)
         )
         if conflict is not None:
             raise DataAgentError(
@@ -272,16 +274,36 @@ class DataSyncRepository:
         return result.scalar_one_or_none() is not None
 
     async def source_key_documents(
-        self, *, target_table: str, source: str
+        self, *, target_table: str, source: str, limit: int
     ) -> list[str]:
-        """读取一个来源曾拥有的全部目标主键文档。"""
+        """读取一个来源的有界活跃目标主键文档。"""
         result = await self._session.execute(
-            select(data_sync_key_owner.c.primary_key_json).where(
+            select(data_sync_key_owner.c.primary_key_json)
+            .where(
                 data_sync_key_owner.c.target_table == target_table,
                 data_sync_key_owner.c.source == source,
+                data_sync_key_owner.c.deleted.is_(False),
             )
+            .order_by(data_sync_key_owner.c.primary_key_hash)
+            .limit(limit)
         )
         return [str(value) for value in result.scalars()]
+
+    async def tombstone_source_key_owners(
+        self, *, target_table: str, source: str, primary_key_documents: list[str]
+    ) -> None:
+        """将本批已清理的来源归属标记为墓碑。"""
+        if not primary_key_documents:
+            return
+        await self._session.execute(
+            update(data_sync_key_owner)
+            .where(
+                data_sync_key_owner.c.target_table == target_table,
+                data_sync_key_owner.c.source == source,
+                data_sync_key_owner.c.primary_key_json.in_(primary_key_documents),
+            )
+            .values(deleted=True, updated_at=func.now())
+        )
 
     async def delete_source_key_owners(self, *, target_table: str, source: str) -> None:
         """在新基线建立前删除一个来源的旧主键归属。"""
@@ -433,9 +455,7 @@ class DataSyncRepository:
             SyncPhase.DEAD
             if next_attempt >= max_attempts
             else (
-                SyncPhase.REPLAYING
-                if task.phase is SyncPhase.STREAMING
-                else task.phase
+                SyncPhase.REPLAYING if task.phase is SyncPhase.STREAMING else task.phase
             )
         )
         delay = min(

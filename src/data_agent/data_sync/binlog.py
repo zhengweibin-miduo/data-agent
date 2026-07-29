@@ -200,32 +200,48 @@ class MySQLSourceClient:
         )
         events: list[SyncRowEvent] = []
         tail = start
+        skipped_rows = start.row_index
+        consumed_rows = start.row_index
         try:
             for raw_event in stream:
                 if stream.log_file is None or stream.log_pos is None:
                     raise RuntimeError("Binlog 事件缺少可恢复文件位点")
-                coordinate = BinlogCoordinate(
+                end_coordinate = BinlogCoordinate(
                     file=str(stream.log_file),
                     position=int(stream.log_pos),
                     row_index=0,
                 )
                 if isinstance(raw_event, XidEvent):
-                    tail = coordinate
+                    tail = end_coordinate
                     if len(events) >= limit:
                         break
                     continue
+                packet = cast(RawRowsEvent, raw_event).packet
+                event_start = int(packet.log_pos) - int(packet.event_size)
+                coordinate = BinlogCoordinate(
+                    file=str(stream.log_file),
+                    position=max(4, event_start),
+                    row_index=0,
+                )
                 decoded = decode_rows_event(
                     raw_event,
                     source=self.name,
                     coordinate=coordinate,
                 )
-                events.extend(decoded)
-                if decoded:
-                    tail = decoded[-1].coordinate
-                else:
-                    tail = coordinate
-                # RowsEvent 可能共享前置 Table_map；达到软上限后继续到事务 XID
-                # 边界，确保下一轮可从具备独立解码上下文的位置恢复。
+                skipped_here = min(skipped_rows, len(decoded))
+                skipped_rows -= skipped_here
+                remaining = decoded[skipped_here:]
+                accepted = remaining[: limit - len(events)]
+                events.extend(accepted)
+                consumed_rows += len(accepted)
+                if len(accepted) < len(remaining):
+                    # 从本轮起点重放可保留 Table_map 和事务上下文；
+                    # row_index 记录该起点后已消费的行数，避免重复返回。
+                    tail = start.model_copy(update={"row_index": consumed_rows})
+                    break
+                tail = start.model_copy(update={"row_index": consumed_rows})
+                if len(events) >= limit:
+                    break
             if (
                 not events
                 and stream.log_file is not None

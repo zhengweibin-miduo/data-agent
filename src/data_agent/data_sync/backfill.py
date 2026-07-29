@@ -88,12 +88,14 @@ async def reset_source_rows(
     task: ClaimedSyncTask,
     *,
     dw_database: str,
-) -> None:
-    """新 generation 建立基线前删除该来源旧行并保留永久归属。"""
+    limit: int,
+) -> bool:
+    """有界清理一批旧行，返回是否已完成。"""
     repository = DataSyncRepository(session)
     documents = await repository.source_key_documents(
         target_table=task.desired.target_table,
         source=task.desired.source,
+        limit=limit,
     )
     for document in documents:
         encoded = json.loads(document)
@@ -101,6 +103,12 @@ async def reset_source_rows(
             name: decode_row_value(encoded[name]) for name in task.desired.primary_key
         }
         await session.execute(_delete_statement(task.desired, row, dw_database))
+    await repository.tombstone_source_key_owners(
+        target_table=task.desired.target_table,
+        source=task.desired.source,
+        primary_key_documents=documents,
+    )
+    return len(documents) < limit
 
 
 async def apply_buffered_event(

@@ -183,9 +183,16 @@ class DataSyncService:
             repository = DataSyncRepository(session)
             if not await repository.has_authority(task):
                 raise LeaseLostError("建立新基线前同步任务租约已失效")
-            await reset_source_rows(
-                session, task, dw_database=self._settings.dw_database
+            reset_complete = await reset_source_rows(
+                session,
+                task,
+                dw_database=self._settings.dw_database,
+                limit=self._settings.backfill_batch_size,
             )
+            if not reset_complete:
+                if not await repository.settle_phase(task, SyncPhase.BUFFERING):
+                    raise LeaseLostError("分批清理旧行后同步任务租约已失效")
+                return
             if not await repository.record_snapshot(task, coordinate):
                 raise LeaseLostError("清理旧物化行后同步任务租约已失效")
             if not await repository.advance_captured_coordinate(task, coordinate):
