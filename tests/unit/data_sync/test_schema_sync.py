@@ -135,6 +135,42 @@ def test_plan_creates_missing_table_and_quotes_identifiers() -> None:
     )
 
 
+def test_plan_creates_shared_column_with_merged_nullable_contract() -> None:
+    """任一共享来源允许 NULL 时首次建表使用可空安全超集。"""
+    statements = plan_schema_changes(
+        database="dw",
+        desired=_desired(),
+        current=None,
+        shared_nullable_columns={"amount"},
+    )
+
+    check_condition(
+        "共享列合并为 nullable",
+        "amount DECIMAL(12, 2) NULL" in statements[0],
+        actual=statements[0],
+    )
+
+
+async def test_shared_columns_merge_peer_nullable_contract() -> None:
+    """共享来源的同名 nullable 列会进入目标安全超集。"""
+    peer = _desired()
+    peer.source = "peer"
+    peer.columns[1] = DesiredColumn(
+        id="amount", name="amount", data_type="DECIMAL(12, 2)", nullable=True
+    )
+    result = MagicMock()
+    result.scalars.return_value = [peer.model_dump()]
+    session = AsyncMock()
+    session.execute.return_value = result
+
+    extra, nullable = await DWSchemaSynchronizer(
+        session, database="dw"
+    )._shared_columns(_desired())
+
+    check_equal("没有额外共享列", extra, set())
+    check_equal("同名列可空性取安全超集", nullable, {"amount"})
+
+
 def test_boolean_alias_matches_mysql_introspection() -> None:
     """MySQL 将 BOOLEAN introspect 为 tinyint(1) 后仍保持幂等。"""
     desired = _desired(amount_type="BOOLEAN")

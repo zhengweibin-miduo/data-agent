@@ -86,12 +86,15 @@ class DWSchemaSynchronizer:
         try:
             # 步骤一：从 information_schema 读取当前权威结构。
             current = await self.inspect(desired.target_table)
-            compatible_extra_columns = await self._shared_columns(desired)
+            compatible_extra_columns, shared_nullable_columns = (
+                await self._shared_columns(desired)
+            )
             changes = plan_schema_changes(
                 database=self._database,
                 desired=desired,
                 current=current,
                 compatible_extra_columns=compatible_extra_columns,
+                shared_nullable_columns=shared_nullable_columns,
             )
             if current is not None:
                 await self._validate_existing_provenance(desired)
@@ -105,6 +108,7 @@ class DWSchemaSynchronizer:
                 desired=desired,
                 current=await self.inspect(desired.target_table),
                 compatible_extra_columns=compatible_extra_columns,
+                shared_nullable_columns=shared_nullable_columns,
             )
             if remaining:
                 _raise_conflict(desired.target_table, "DDL 执行后目标结构仍未收敛")
@@ -113,8 +117,10 @@ class DWSchemaSynchronizer:
                 text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
             )
 
-    async def _shared_columns(self, desired: DesiredSyncTable) -> set[str]:
-        """读取共享目标其他有效来源贡献的字段集合。"""
+    async def _shared_columns(
+        self, desired: DesiredSyncTable
+    ) -> tuple[set[str], set[str]]:
+        """读取共享目标其他有效来源贡献的字段及可空性超集。"""
         result = await self._session.execute(
             select(data_sync_task.c.desired_json).where(
                 data_sync_task.c.target_table == desired.target_table,
@@ -126,9 +132,15 @@ class DWSchemaSynchronizer:
             )
         )
         columns: set[str] = set()
+        nullable_columns = {
+            column.name for column in desired.columns if column.nullable
+        }
         for payload in result.scalars():
             peer = DesiredSyncTable.model_validate(payload)
             peer_names = {column.name for column in peer.columns}
+            nullable_columns.update(
+                column.name for column in peer.columns if column.nullable
+            )
             for column in desired.columns:
                 if column.name not in peer_names and not column.nullable:
                     _raise_conflict(
@@ -144,7 +156,10 @@ class DWSchemaSynchronizer:
                             "当前来源无法安全省略",
                         )
                     columns.add(column.name)
-        return columns - {column.name for column in desired.columns}
+        return (
+            columns - {column.name for column in desired.columns},
+            nullable_columns,
+        )
 
     async def _validate_existing_provenance(self, desired: DesiredSyncTable) -> None:
         """拒绝无法证明来源归属的非空既有目标。"""
@@ -304,14 +319,21 @@ def plan_schema_changes(
     desired: DesiredSyncTable,
     current: CurrentTable | None,
     compatible_extra_columns: set[str] | None = None,
+    shared_nullable_columns: set[str] | None = None,
 ) -> list[str]:
     """返回使当前 DW 结构收敛到期望状态的最小 DDL 列表。"""
     _validate_metric_dependencies(desired)
     quote = mysql_dialect().identifier_preparer.quote
     qualified_table = f"{quote(database)}.{quote(desired.target_table)}"
     if current is None:
+        nullable_names = (shared_nullable_columns or set()) - set(desired.primary_key)
         columns = ", ".join(
-            _column_definition(column, quote=quote) for column in desired.columns
+            _column_definition(
+                column,
+                quote=quote,
+                nullable=True if column.name in nullable_names else None,
+            )
+            for column in desired.columns
         )
         primary_key = ", ".join(quote(name) for name in desired.primary_key)
         return [
