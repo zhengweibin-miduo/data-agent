@@ -23,6 +23,7 @@ async def test_tool_reads_real_state_without_modifying_tasks() -> None:
     try:
         # 步骤一：写入本测试独占的一条就绪任务和一条未就绪任务。
         async with MySQLDatabase.session() as session:
+            worker_heartbeat_at = await session.scalar(select(func.now()))
             await session.execute(
                 insert(data_sync_task),
                 [
@@ -34,7 +35,7 @@ async def test_tool_reads_real_state_without_modifying_tasks() -> None:
                         "desired_json": {},
                         "desired_hash": "a" * 64,
                         "phase": SyncPhase.STREAMING.value,
-                        "worker_heartbeat_at": func.now(),
+                        "worker_heartbeat_at": worker_heartbeat_at,
                         "attempts": 2,
                         "lease_token": f"{suffix:0<32}"[:32],
                         "last_error_type": "safe_error",
