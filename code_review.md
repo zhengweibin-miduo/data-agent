@@ -47,34 +47,15 @@
 未发现需要阻止合并的 P0/P1 问题。
 ```
 
-## 审查意见裁决标准
+## 审查意见处理
 
-裁决任务由 `.github/workflows/codex-review-triage.yml` 以配置的用户身份委派给 Codex。它不重新评审代码，只判定既有审查意见是否需要修复。裁决前必须实际打开对应文件读取上下文，并检查 PR diff 确认问题是否由本 PR 引入；不得仅凭意见描述下结论。
+`.github/workflows/codex-review-triage.yml` 将既有审查意见委派给 Codex。
+Codex 必须读取对应代码、PR diff 和 thread 上下文，自行判断是否需要修复：
 
-| 裁决 | 选择条件 |
-| --- | --- |
-| `MUST_FIX` | 确有缺陷，会导致错误、安全问题或数据损坏，且由本 PR 引入。 |
-| `SHOULD_FIX` | 问题真实但非阻塞（可读性、边界情况、缺测试），可后续处理。 |
-| `OUT_OF_SCOPE` | 问题真实但属于既有代码，不应在本 PR 解决。 |
-| `FALSE_POSITIVE` | 判断错误（误读逻辑、忽略上游校验、框架已保证等），必须说明错在哪里。 |
-
-裁决附加规则：
-
-- 命中「项目既定事实」任一条且未给出反例证据的意见，判为 `FALSE_POSITIVE`，并引用对应事实条目。
-- 性能类建议上限为 `SHOULD_FIX`。
-- 不确定时判为 `SHOULD_FIX` 并写明不确定的原因，不得硬判 `FALSE_POSITIVE`。
+- 需要修复时，完成最小修复和验证，推送到原 PR 分支，在原 thread 回复依据后 resolve。
+- 不需要修复时，在原 thread 说明依据后 resolve。
+- 无法安全完成修复或验证时，说明阻塞原因并保持 unresolved。
 - 回复正文禁止出现 `@codex` 字样，避免触发重新评审造成循环。
-
-裁决回复使用以下格式，逐条回到原 review thread：
-
-```markdown
-**[裁决] MUST_FIX** — <一句话依据，引用具体 `文件路径:行号` 或测试>
-```
-
-## 审查意见处理闭环
-
-- `MUST_FIX`：完成最小修复和验证，推送到原 PR 分支，在原 thread 回复依据后 resolve。
-- `SHOULD_FIX`：本 PR 内修复时按 `MUST_FIX` 处理；明确延期时说明理由并保持 unresolved，交由人工决定。
-- `OUT_OF_SCOPE` / `FALSE_POSITIVE`：在原 thread 写明证据和裁决后 resolve。
-- 无法安全完成修复或验证时，说明阻塞原因并保持 unresolved；不得把未完成事项标记为已解决。
+- 内部判断过程可以保留在执行上下文中，但 GitHub thread 回复和最终任务总结禁止出现 `[裁决]`、`SHOULD_FIX` 或同类内部分类标签。
+- 自动委派不设轮数上限；同一 review 与 head 只委派一次，新的 review 或 head 必须继续委派。
 - 修复推送后依赖仓库的自动 Codex Review 发起下一轮审查；仅当自动审查未触发时，才由人工评论 `@codex review`。

@@ -1258,7 +1258,139 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 40: 多数据源 CDC 与问答就绪门禁
+## Session 40: 用户触发 Codex 修复 CI
+
+**Date**: 2026-07-28
+**Task**: 用户触发 Codex 修复 CI
+**Branch**: `feature/codex-fix-ci-trigger-20260728`
+
+### Summary
+
+新增 /codex-fix-ci 用户触发 workflow，校验双白名单、当前 PR/head 的失败 Actions run、幂等与轮次上限，并要求 Codex 单提交推送回原 PR 分支。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `abdcdab` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 41: 用户触发 Codex 解决 PR 冲突
+
+**Date**: 2026-07-28
+**Task**: 用户触发 Codex 解决 PR 冲突
+**Branch**: `feature/codex-resolve-conflicts-20260728`
+
+### Summary
+
+新增 /codex-resolve-conflicts workflow，严格校验 mergeability、双白名单、base/head 竞态与幂等，并要求 Codex 仅创建一个 merge commit 普通推送回原 PR 分支。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b59f216` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 42: 规范 Codex 审查处理回复
+
+**Date**: 2026-07-28
+**Task**: 规范 Codex 审查处理回复
+**Branch**: `fix/codex-review-hide-decision-label-20260728`
+
+### Summary
+
+禁止 GitHub 审查处理回复暴露内部裁决标签，并移除 Delegate Codex Review Resolution 的自动委派轮数上限，同时保留同一 review/head 幂等去重。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dc38627` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 43: 修复冲突委派 base SHA 来源
+
+**Date**: 2026-07-28
+**Task**: 修复冲突委派 base SHA 来源
+**Branch**: `fix/codex-conflict-live-base-20260728`
+
+### Summary
+
+冲突委派改用 Git refs API 获取实时 base tip，允许同 base ref 正常前进，同时继续严格保护 PR head；未操作 PR #58。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fbdd1a5` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 44: 多数据源 CDC 与问答就绪门禁
 
 **Date**: 2026-07-28
 **Task**: 多数据源 CDC 与问答就绪门禁
