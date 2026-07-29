@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 42
+- **Total Sessions**: 43
 - **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1357 | Active |
+| `journal-1.md` | ~1390 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 43 | 2026-07-28 | 修复冲突委派 base SHA 来源 | `fbdd1a5` | `fix/codex-conflict-live-base-20260728` |
 | 42 | 2026-07-28 | 规范 Codex 审查处理回复 | `dc38627` | `fix/codex-review-hide-decision-label-20260728` |
 | 41 | 2026-07-28 | 用户触发 Codex 解决 PR 冲突 | `b59f216` | `feature/codex-resolve-conflicts-20260728` |
 | 40 | 2026-07-28 | 用户触发 Codex 修复 CI | `abdcdab` | `feature/codex-fix-ci-trigger-20260728` |
