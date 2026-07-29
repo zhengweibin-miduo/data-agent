@@ -74,3 +74,17 @@ async def test_readiness_uses_dedicated_worker_heartbeat() -> None:
     selected = list(session.execute.await_args.args[0].selected_columns)
     check_equal("查询使用 worker 心跳", "worker_heartbeat_at" in str(selected[1]), True)
     check_equal("查询不复用控制面时间", "updated_at" in str(selected[1]), False)
+
+
+async def test_peer_generation_change_requeues_paused_task() -> None:
+    """共享目标的 peer 契约变化后应重新校验已暂停任务。"""
+    session = AsyncMock()
+    session.scalar.side_effect = [None, None, 1]
+    repository = DataSyncRepository(session)
+
+    await repository.upsert_desired([_streaming_task().desired])
+
+    statements = [str(call.args[0]) for call in session.execute.await_args_list]
+    assert any(
+        "phase" in statement and "target_table" in statement for statement in statements
+    )

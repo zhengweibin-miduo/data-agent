@@ -305,6 +305,22 @@ def build_desired_tables(
                 "同步表必须声明主键",
                 details={"table": table.qualified_name},
             )
+        columns_by_name = {column.name: column for column in table.columns}
+        unsupported_cursor_columns = [
+            name
+            for name in primary_key
+            if columns_by_name[name]
+            .data_type.strip()
+            .upper()
+            .startswith(("ENUM", "SET"))
+        ]
+        if unsupported_cursor_columns:
+            raise DataAgentError(
+                "unsupported_backfill_primary_key",
+                "persist_snapshot",
+                "同步表主键不能使用 ENUM 或 SET 类型",
+                details={"columns": ",".join(unsupported_cursor_columns)},
+            )
         column_ids = {column.id for column in table.columns}
         identity = (schema.source, table.name)
         if identity in task_identities:

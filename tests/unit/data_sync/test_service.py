@@ -20,6 +20,21 @@ from data_agent.data_sync.schema_sync import SchemaLockUnavailableError
 from data_agent.data_sync.service import DataSyncService
 
 
+async def test_dispatch_claims_only_the_task_it_can_start_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """串行 dispatcher 不得提前领取尚未开始续租的后续任务。"""
+    repository = AsyncMock()
+    repository.claim_tasks.return_value = []
+    monkeypatch.setattr(service, "DataSyncRepository", lambda session: repository)
+    monkeypatch.setattr(service.MySQLDatabase, "session", _fake_session)
+    sync_service = DataSyncService({"a": AsyncMock(), "b": AsyncMock()}, AsyncMock())
+
+    await sync_service.dispatch_once()
+
+    assert repository.claim_tasks.await_args.kwargs["limit"] == 1
+
+
 async def test_streaming_backlog_returns_to_replaying(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

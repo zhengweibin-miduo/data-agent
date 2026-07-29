@@ -50,7 +50,7 @@ class DataSyncService:
         """领取并各执行一个有界任务步骤。"""
         async with MySQLDatabase.session() as session:
             tasks = await DataSyncRepository(session).claim_tasks(
-                limit=max(1, len(self._sources)),
+                limit=1,
                 lease_seconds=self._settings.claim_lease_seconds,
                 max_attempts=self._settings.max_attempts,
             )

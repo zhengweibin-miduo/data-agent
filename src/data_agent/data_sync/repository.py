@@ -76,7 +76,34 @@ class DataSyncRepository:
         """幂等写入 Meta 快照派生的当前同步期望状态。"""
         for desired in desired_tables:
             await self._reject_conflicting_target(desired)
+            previous_hash = await self._session.scalar(
+                select(data_sync_task.c.desired_hash)
+                .where(self._identity_predicate(desired))
+                .limit(1)
+            )
             await self._upsert_one_desired(desired)
+            if previous_hash != desired.desired_hash():
+                await self._requeue_paused_peers(desired)
+
+    async def _requeue_paused_peers(self, desired: DesiredSyncTable) -> None:
+        """Peer 契约变化后重新排队同目标上曾因结构不兼容暂停的任务。"""
+        await self._session.execute(
+            update(data_sync_task)
+            .where(
+                data_sync_task.c.target_table == desired.target_table,
+                data_sync_task.c.phase == SyncPhase.PAUSED.value,
+                ~self._identity_predicate(desired),
+            )
+            .values(
+                phase=SyncPhase.PENDING_SCHEMA.value,
+                attempts=0,
+                available_at=func.now(),
+                last_error_type=None,
+                lease_token=None,
+                lease_expires_at=None,
+                updated_at=func.now(),
+            )
+        )
 
     async def _reject_conflicting_target(self, desired: DesiredSyncTable) -> None:
         """拒绝同一命名来源跨快照复用同一 DW 目标。"""

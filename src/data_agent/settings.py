@@ -23,7 +23,7 @@ from data_agent.errors import DataAgentError
 class SettingsModel(BaseModel):
     """配置模型基类，禁止传入未定义的配置字段。"""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class FileLoggingSettings(SettingsModel):

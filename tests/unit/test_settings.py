@@ -2,9 +2,15 @@
 
 from pathlib import Path
 
+import pytest
 from pydantic import ValidationError
 
-from data_agent.settings import AppSettings, SettingsModel, app_config
+from data_agent.settings import (
+    AppSettings,
+    DataSyncSourceSettings,
+    SettingsModel,
+    app_config,
+)
 from tests.helpers.checks import (
     check_condition,
     check_equal,
@@ -37,6 +43,18 @@ def _collect_settings_descriptions(
             missing.extend(nested_missing)
             descriptions.extend(nested_descriptions)
     return missing, descriptions
+
+
+def test_invalid_source_url_does_not_expose_credentials() -> None:
+    """无效源 URL 的校验错误不得回显复制凭证。"""
+    secret_url = "postgresql://replica:super-secret@db.example/source"
+
+    with pytest.raises(ValidationError) as error:
+        DataSyncSourceSettings(url=secret_url, server_id=1)
+
+    message = str(error.value)
+    assert "replica" not in message
+    assert "super-secret" not in message
 
 
 def test_default_app_config_loads_expected_values() -> None:
