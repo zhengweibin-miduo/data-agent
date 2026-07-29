@@ -313,7 +313,9 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   `(target_table, primary_key) -> source` ownership.
 - Accepted Meta rows and `data_sync` desired state commit in the same managed
   MySQL Session. DDL Job success does not wait for DW work.
-- A task is unique by source, source schema/table, and target table. Claims use
+- A task identity is unique by source, source schema/table, and target table;
+  `(source, target_table)` is also unique so concurrent snapshots cannot map two
+  physical tables from one named source onto the same DW table. Claims use
   database-clock leases and compare desired hash plus lease token when settling.
 - DW evolution permits create table, add column, and safe type widening only.
   Destructive or ambiguous differences pause work without altering Meta.

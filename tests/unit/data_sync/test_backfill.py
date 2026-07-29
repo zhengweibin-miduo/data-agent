@@ -61,3 +61,28 @@ async def test_reset_source_rows_is_bounded_and_resumable(
     check_equal(
         "每批归属都持久化墓碑", repository.tombstone_source_key_owners.call_count, 2
     )
+
+
+def test_desired_values_normalizes_mysql_set_values() -> None:
+    """历史回填将多成员和空 MySQL SET 转为稳定的可绑定文本。"""
+    desired = _task().desired.model_copy(
+        update={
+            "columns": [
+                *_task().desired.columns,
+                DesiredColumn(
+                    id="labels",
+                    name="labels",
+                    data_type="SET('alpha','beta')",
+                    nullable=False,
+                ),
+            ]
+        }
+    )
+
+    populated = backfill._desired_values(
+        desired, {"id": 1, "labels": {"beta", "alpha"}}
+    )
+    empty = backfill._desired_values(desired, {"id": 2, "labels": set()})
+
+    check_equal("多成员 SET 稳定排序", populated["labels"], "alpha,beta")
+    check_equal("空 SET 绑定为空字符串", empty["labels"], "")

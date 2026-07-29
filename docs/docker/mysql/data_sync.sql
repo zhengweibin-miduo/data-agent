@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS data_sync_task
                                           ON UPDATE CURRENT_TIMESTAMP COMMENT '同步任务最近更新时间',
     UNIQUE KEY uq_data_sync_task_identity
         (source, source_schema, source_table, target_table),
+    UNIQUE KEY uq_data_sync_task_source_target (source, target_table),
     INDEX idx_data_sync_task_claim (phase, available_at, lease_expires_at)
 ) ENGINE = InnoDB COMMENT = '保存每张源表到统一 DW 表的当前同步期望与恢复进度';
 

@@ -58,6 +58,11 @@ data_sync_task = Table(
         "target_table",
         name="uq_data_sync_task_identity",
     ),
+    UniqueConstraint(
+        "source",
+        "target_table",
+        name="uq_data_sync_task_source_target",
+    ),
     Index("idx_data_sync_task_claim", "phase", "available_at", "lease_expires_at"),
     schema=app_config.data_sync.database,
 )

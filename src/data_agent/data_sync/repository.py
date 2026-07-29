@@ -158,6 +158,16 @@ class DataSyncRepository:
                 )
             )
         )
+        persisted_identity = await self._session.scalar(
+            select(data_sync_task.c.id).where(identity).limit(1)
+        )
+        if persisted_identity is None:
+            raise DataAgentError(
+                "duplicate_data_sync_target",
+                "persist_snapshot",
+                "同一数据源的多个物理表不能映射到同一 DW 目标",
+                details={"target_table": desired.target_table},
+            )
 
     async def claim_tasks(
         self,

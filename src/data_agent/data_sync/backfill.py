@@ -15,6 +15,7 @@ from data_agent.data_sync.models import (
     EncodedValue,
     RowOperation,
     decode_row_value,
+    encode_row_value,
     primary_key_identity,
 )
 from data_agent.data_sync.repository import (
@@ -179,7 +180,17 @@ def _desired_values(
             "源数据缺少已接受字段",
             details={"columns": ",".join(missing[:20])},
         )
-    return {column.name: row[column.name] for column in desired.columns}
+    return {
+        column.name: _normalize_backfill_value(row[column.name])
+        for column in desired.columns
+    }
+
+
+def _normalize_backfill_value(value: object) -> object:
+    """把源驱动的特殊容器值转换为目标驱动可绑定值。"""
+    if isinstance(value, set):
+        return decode_row_value(encode_row_value(value))
+    return value
 
 
 def _decoded_event_row(

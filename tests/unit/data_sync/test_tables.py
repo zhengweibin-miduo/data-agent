@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from sqlalchemy import UniqueConstraint
 from sqlglot import exp, parse
 from tests.helpers.checks import check_equal
 
@@ -45,3 +46,18 @@ def test_data_sync_core_columns_match_bootstrap_script() -> None:
             table.schema,
             app_config.data_sync.database,
         )
+
+
+def test_sync_task_serializes_named_source_target_mapping() -> None:
+    """数据库唯一约束封闭同一命名来源并发映射同一 DW 表的竞态。"""
+    constraints = {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in data_sync_task.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name is not None
+    }
+
+    check_equal(
+        "命名来源到目标表映射唯一",
+        constraints["uq_data_sync_task_source_target"],
+        ("source", "target_table"),
+    )
