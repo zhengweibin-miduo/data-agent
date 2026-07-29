@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 
+from loguru import logger
 from sqlalchemy.engine import make_url
 
 from data_agent.data_sync.locks import generation_lock_name
@@ -11,6 +12,7 @@ from data_agent.ddl_metadata.persistence.metadata_repository import MetadataRepo
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import scope_fingerprint
 from data_agent.infrastructure.mysql import (
+    AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
     MySQLDatabase,
 )
@@ -137,3 +139,10 @@ class MetadataSnapshotService:
                 retryable=True,
                 http_status=503,
             ) from error
+        except AdvisoryLockReleaseError:
+            # 业务 Session 已在 advisory lock 上下文退出前提交；owner 连接也已
+            # 失效。此时锁清理故障只能降级为运维告警，不能反转权威快照结果。
+            logger.warning(
+                "accepted snapshot 已提交，但 generation lock owner 连接"
+                "释放失败且已失效"
+            )

@@ -347,7 +347,10 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   connection, independent of the protected business Session. It releases
   acquired locks in reverse order. A partial acquisition releases the earlier
   locks; a release failure invalidates the owner connection so a connection
-  carrying an advisory lock cannot return to the pool. The YAML key
+  carrying an advisory lock cannot return to the pool. If an accepted-snapshot
+  transaction has already committed, a subsequent release failure is an
+  operational warning and must not reverse the authoritative snapshot or mark
+  its DDL Job failed. The YAML key
   `data_sync.generation_lock_timeout_seconds` is an integer in `1..300`.
 - The DDL Session uses `READ COMMITTED` and one `DataSyncRepository` for every
   authority check and final phase settlement. The schema synchronizer checks

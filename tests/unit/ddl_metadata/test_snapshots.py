@@ -234,6 +234,56 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
     )
 
 
+async def test_snapshot_release_failure_after_commit_does_not_reverse_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """发布提交后的 generation lock 清理故障不得反转快照成功结果。"""
+    events: list[str] = []
+    warnings: list[str] = []
+
+    @asynccontextmanager
+    async def generation_locks(
+        names: Iterable[str],
+        *,
+        timeout_seconds: float,
+    ) -> AsyncIterator[None]:
+        del names, timeout_seconds
+        yield
+        raise snapshots.AdvisoryLockReleaseError("owner connection invalidated")
+
+    @asynccontextmanager
+    async def session() -> AsyncIterator[object]:
+        events.append("session_enter")
+        yield object()
+        events.append("session_commit")
+
+    _install_repository_fakes(monkeypatch, events)
+    monkeypatch.setattr(
+        snapshots,
+        "build_accepted_memories",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        snapshots,
+        "build_desired_tables",
+        lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
+    )
+    monkeypatch.setattr(snapshots.MySQLDatabase, "advisory_locks", generation_locks)
+    monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
+    monkeypatch.setattr(snapshots.logger, "warning", warnings.append)
+
+    await MetadataSnapshotService({"local": "source_demo"}).persist(
+        _snapshot(),
+        _metadata(),
+        [],
+        [],
+        [],
+    )
+
+    check_equal("锁清理失败发生前发布事务已提交", events[-1], "session_commit")
+    check_equal("提交后锁清理失败只记录一次告警", len(warnings), 1)
+
+
 async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
