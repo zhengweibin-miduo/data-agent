@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -603,20 +604,44 @@ class DataSyncRepository:
         events: Sequence[SyncRowEvent],
         *,
         chunk_size: int = 1000,
+        chunk_bytes: int = 1024 * 1024,
     ) -> None:
-        """按有界块批量暂存 Binlog 行事件，避免逐事件数据库往返。"""
-        for offset in range(0, len(events), chunk_size):
-            values = [
+        """按行数和序列化字节预算批量暂存 Binlog 行事件。"""
+        values: list[dict[str, object]] = []
+        serialized_bytes = 0
+        for event in events:
+            payload = event.model_dump(mode="json")
+            payload_bytes = len(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
+            if payload_bytes > chunk_bytes:
+                raise ValueError("单个 Binlog 事件超过持久化批次字节上限")
+            if values and (
+                len(values) >= chunk_size
+                or serialized_bytes + payload_bytes > chunk_bytes
+            ):
+                await self._append_event_values(values)
+                values = []
+                serialized_bytes = 0
+            values.append(
                 {
                     "task_id": task_id,
                     "source": event.source,
                     "binlog_file": event.coordinate.file,
                     "binlog_position": event.coordinate.position,
                     "row_index": event.coordinate.row_index,
-                    "payload_json": event.model_dump(mode="json"),
+                    "payload_json": payload,
                 }
-                for event in events[offset : offset + chunk_size]
-            ]
+            )
+            serialized_bytes += payload_bytes
+        if values:
+            await self._append_event_values(values)
+
+    async def _append_event_values(self, values: list[dict[str, object]]) -> None:
+        """以单条 INSERT IGNORE 写入一个已受预算约束的事件块。"""
+        if values:
             await self._session.execute(
                 insert(data_sync_event).values(values).prefix_with("IGNORE")
             )

@@ -275,18 +275,24 @@ class DataSyncService:
                     execution_options={"isolation_level": "READ COMMITTED"}
                 )
                 repository = DataSyncRepository(session)
-                # 步骤三：schema lock 内以同一 repository/Session
-                # 首查并逐条复查 authority。
-                await self._with_lease_heartbeat(
-                    task,
-                    DWSchemaSynchronizer(
-                        session,
-                        database=self._settings.dw_database,
-                    ).synchronize(
-                        task.desired,
-                        check_authority=lambda: repository.has_authority(task),
-                    ),
-                )
+                # 步骤三：provenance 使用独立 REPEATABLE READ 快照；DDL Session
+                # 保持 READ COMMITTED，以看见独立心跳续租结果。
+                async with MySQLDatabase.session() as provenance_session:
+                    await provenance_session.connection(
+                        execution_options={"isolation_level": "REPEATABLE READ"}
+                    )
+                    await self._with_lease_heartbeat(
+                        task,
+                        DWSchemaSynchronizer(
+                            session,
+                            database=self._settings.dw_database,
+                        )
+                        .with_provenance_session(provenance_session)
+                        .synchronize(
+                            task.desired,
+                            check_authority=lambda: repository.has_authority(task),
+                        ),
+                    )
                 # 步骤四：结构锁释放与 phase settlement 提交后才释放 generation lock。
                 if not await repository.settle_phase(task, SyncPhase.BUFFERING):
                     raise LeaseLostError("完成 DW 结构同步后任务租约已失效")

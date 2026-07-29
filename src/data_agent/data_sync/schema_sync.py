@@ -69,6 +69,12 @@ class DWSchemaSynchronizer:
         """保存调用方 Session 和已验证的 DW 数据库名。"""
         self._session = session
         self._database = database
+        self._provenance_session = session
+
+    def with_provenance_session(self, session: AsyncSession) -> DWSchemaSynchronizer:
+        """指定用于一致性 ownership 核验的独立 Session。"""
+        self._provenance_session = session
+        return self
 
     async def synchronize(
         self,
@@ -178,12 +184,12 @@ class DWSchemaSynchronizer:
         """拒绝无法证明来源归属的非空既有目标。"""
         quote = mysql_dialect().identifier_preparer.quote
         qualified = f"{quote(self._database)}.{quote(desired.target_table)}"
-        row_count = await self._session.scalar(
+        row_count = await self._provenance_session.scalar(
             text(f"SELECT COUNT(*) FROM {qualified}")
         )
         if not row_count:
             return
-        owner_count = await self._session.scalar(
+        owner_count = await self._provenance_session.scalar(
             select(func.count())
             .select_from(data_sync_key_owner)
             .where(
@@ -200,7 +206,7 @@ class DWSchemaSynchronizer:
         after_clause = ""
         parameters: dict[str, object] = {"limit": 1000}
         while True:
-            result = await self._session.execute(
+            result = await self._provenance_session.execute(
                 text(
                     f"SELECT {quoted_keys} FROM {qualified} "
                     f"{after_clause} ORDER BY {quoted_keys} LIMIT :limit"
@@ -217,7 +223,7 @@ class DWSchemaSynchronizer:
                     {name: row[name] for name in desired.primary_key},
                 )
                 documents[key_hash] = document
-            owner_result = await self._session.execute(
+            owner_result = await self._provenance_session.execute(
                 select(
                     data_sync_key_owner.c.primary_key_hash,
                     data_sync_key_owner.c.primary_key_json,
@@ -395,16 +401,27 @@ def plan_schema_changes(
         if current_column is None:
             changes.append(f"ALTER TABLE {qualified_table} ADD COLUMN {definition}")
             continue
-        if not current_column.nullable and desired_column.nullable:
-            _raise_conflict(
-                desired.target_table,
-                f"字段 {desired_column.name} 的可空性变化不允许自动执行",
-            )
         desired_type = _canonical_type(desired_column.data_type)
         current_type = _normalize_type(current_column.data_type)
+        relax_nullable = not current_column.nullable and desired_column.nullable
         if current_type == desired_type:
+            if relax_nullable:
+                changes.append(
+                    f"ALTER TABLE {qualified_table} MODIFY COLUMN {definition}"
+                )
             continue
         if is_safe_widening(desired_type, current_type):
+            if relax_nullable:
+                wider_definition = _column_definition(
+                    desired_column.model_copy(
+                        update={"data_type": current_column.data_type}
+                    ),
+                    quote=quote,
+                    nullable=True,
+                )
+                changes.append(
+                    f"ALTER TABLE {qualified_table} MODIFY COLUMN {wider_definition}"
+                )
             continue
         if not is_safe_widening(current_type, desired_type):
             _raise_conflict(

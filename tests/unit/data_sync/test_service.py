@@ -233,11 +233,17 @@ async def test_schema_sync_holds_generation_lock_through_session_settlement(
         yield
         events.append("generation_exit")
 
+    provenance_session = AsyncMock()
+    sessions = iter((ddl_session, provenance_session))
+
     @asynccontextmanager
     async def ddl_session_context() -> AsyncIterator[AsyncMock]:
-        events.append("session_enter")
-        yield ddl_session
-        events.append("session_commit")
+        selected = next(sessions)
+        events.append("session_enter" if selected is ddl_session else "snapshot_enter")
+        yield selected
+        events.append(
+            "session_commit" if selected is ddl_session else "snapshot_commit"
+        )
 
     class FakeSynchronizer:
         """记录 schema 层回调所用 repository authority。"""
@@ -247,6 +253,12 @@ async def test_schema_sync_holds_generation_lock_through_session_settlement(
                 "schema synchronizer 复用 DDL Session",
                 session is ddl_session,
             )
+
+        def with_provenance_session(self, session: object) -> "FakeSynchronizer":
+            check_condition(
+                "provenance 使用独立 Session", session is provenance_session
+            )
+            return self
 
         async def synchronize(
             self,
@@ -288,8 +300,10 @@ async def test_schema_sync_holds_generation_lock_through_session_settlement(
         [
             "generation_enter",
             "session_enter",
+            "snapshot_enter",
             "schema_enter",
             "schema_exit",
+            "snapshot_commit",
             "session_commit",
             "generation_exit",
         ],

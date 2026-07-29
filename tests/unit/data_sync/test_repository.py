@@ -4,7 +4,14 @@ from unittest.mock import AsyncMock, Mock
 
 from tests.helpers.checks import check_equal
 
-from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable, SyncPhase
+from data_agent.data_sync.models import (
+    BinlogCoordinate,
+    DesiredColumn,
+    DesiredSyncTable,
+    RowOperation,
+    SyncPhase,
+    SyncRowEvent,
+)
 from data_agent.data_sync.repository import ClaimedSyncTask, DataSyncRepository
 
 
@@ -88,3 +95,28 @@ async def test_peer_generation_change_requeues_paused_task() -> None:
     assert any(
         "phase" in statement and "target_table" in statement for statement in statements
     )
+
+
+async def test_append_events_splits_batches_by_serialized_bytes() -> None:
+    """大型事件批次按序列化字节预算切分，而非只依赖行数。"""
+    session = AsyncMock()
+    events = tuple(
+        SyncRowEvent(
+            source="local",
+            source_schema="business",
+            source_table="fact_order",
+            operation=RowOperation.INSERT,
+            before=None,
+            after={"payload": "x" * 80},
+            coordinate=BinlogCoordinate(
+                file="mysql-bin.000001", position=4, row_index=index
+            ),
+        )
+        for index in range(3)
+    )
+
+    await DataSyncRepository(session).append_events(
+        1, events, chunk_size=1000, chunk_bytes=300
+    )
+
+    check_equal("事件按字节预算拆为多条 INSERT", session.execute.await_count, 3)

@@ -438,6 +438,27 @@ def test_plan_accepts_nullable_target_for_required_source_column() -> None:
     )
 
 
+def test_plan_relaxes_required_target_for_later_nullable_source() -> None:
+    """后发布的 nullable 来源可安全放宽既有 NOT NULL 共享列。"""
+    desired = _desired()
+    desired.columns[1] = DesiredColumn(
+        id="amount", name="amount", data_type="DECIMAL(12, 2)", nullable=True
+    )
+    current = CurrentTable(
+        columns=(
+            CurrentColumn("order_id", "bigint", False),
+            CurrentColumn("amount", "decimal(12,2)", False),
+        ),
+        primary_key=("order_id",),
+    )
+
+    check_equal(
+        "后到 nullable 契约生成安全放宽 DDL",
+        plan_schema_changes(database="dw", desired=desired, current=current),
+        ["ALTER TABLE dw.fact_order MODIFY COLUMN amount DECIMAL(12, 2) NULL"],
+    )
+
+
 def test_plan_preserves_nullable_target_when_widening_required_column() -> None:
     """目标扩宽类型时不收紧已有的可空性。"""
     current = CurrentTable(

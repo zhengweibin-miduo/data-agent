@@ -701,6 +701,16 @@ targets.
 - Persist captured CDC rows and generation-reset deletes with bounded bulk
   statements; the surrounding service transaction owns their coordinates,
   task-state transitions, and ownership tombstones atomically.
+- Bound captured-event bulk inserts by both row count and serialized payload
+  bytes. A single event that exceeds the byte budget must fail explicitly
+  rather than constructing an oversized MySQL packet.
+- Run the complete DW-row/ownership provenance scan through one independent
+  `REPEATABLE READ` Session. The DDL authority Session remains `READ COMMITTED`
+  so it can observe lease heartbeats; mixing both concerns in that Session can
+  either compare different peer-DML snapshots or hide a renewed lease.
+- Treat `NOT NULL -> NULL` as a safe shared-column relaxation. A nullable peer
+  published after the target table was created must converge by `MODIFY
+  COLUMN`, not remain permanently paused because it arrived later.
 - When saturated CDC events are drained during backfill, commit each event in
   its own bounded transaction and renew the task lease between transactions;
   do not run an independent heartbeat against a task row already locked by the
