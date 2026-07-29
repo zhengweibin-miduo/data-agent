@@ -37,6 +37,21 @@ async def test_streaming_backlog_returns_to_replaying(
     repository.settle_phase.assert_awaited_once_with(task, SyncPhase.REPLAYING)
 
 
+async def test_unexpected_error_persists_phase_and_exception_type() -> None:
+    """未分类异常应留下安全且可定位的阶段与异常类型。"""
+    task = _streaming_task()
+    sync_service = DataSyncService({"local": AsyncMock()}, AsyncMock())
+    sync_service._process = AsyncMock(side_effect=ValueError("sensitive row data"))
+    sync_service._retry = AsyncMock()
+
+    await sync_service._process_safely(task)
+
+    sync_service._retry.assert_awaited_once_with(
+        task,
+        "unexpected_sync_error:streaming:ValueError",
+    )
+
+
 class _fake_session:
     """提供服务单元测试所需的异步 Session 上下文。"""
 

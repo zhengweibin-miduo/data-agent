@@ -74,9 +74,17 @@ class DataSyncService:
         except (ConnectionError, OSError, TimeoutError):
             logger.warning("DW 增量同步连接失败，任务将在退避后重试")
             await self._retry(task, "source_transport_error")
-        except Exception:
-            logger.error("DW 增量同步发生未分类系统错误，任务将在有界退避后重试")
-            await self._retry(task, "unexpected_sync_error")
+        except Exception as error:
+            logger.error(
+                f"DW 增量同步任务 {task.id} 在 {task.phase.value} 阶段发生"
+                "未分类系统错误，"
+                f"来源 {task.desired.source}、目标表 {task.desired.target_table} "
+                "将在有界退避后重试"
+            )
+            await self._retry(
+                task,
+                f"unexpected_sync_error:{task.phase.value}:{type(error).__name__}",
+            )
 
     async def _process(self, task: ClaimedSyncTask) -> None:
         """按当前阶段执行一个短步骤。"""
