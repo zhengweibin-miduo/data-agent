@@ -186,11 +186,11 @@ original PR branch.
 
 - The PR must be non-draft, use a same-repository head, and have an author in
   `PR_AUTHORS`.
-- The job grants `pull-requests: write`; a separate
-  `resolveOutdatedReviewThreads` step uses the ephemeral `${{ github.token }}`
-  only to resolve outdated threads.
-- `CODEX_TRIGGER_TOKEN` is required by the later delegation step to read the PR
-  and create the `@codex` comment as the configured user.
+- The job grants the ephemeral `${{ github.token }}` only `contents: read`.
+- `CODEX_TRIGGER_TOKEN` must be a user PAT with `Pull requests: Read and write`;
+  the separate `resolveOutdatedReviewThreads` step uses it to resolve outdated
+  threads, and the later delegation step uses it to read the PR and create the
+  `@codex` comment as the configured user.
 - The scanner includes every unresolved thread whose first comment author is
   in `REVIEW_BOTS`, regardless of the originating review or its head SHA.
 - A thread ID already listed in a trusted `codex-review-loop` or
@@ -208,8 +208,9 @@ original PR branch.
 
 - Invalid `pr_number`, draft PR, fork head, or unauthorized PR author -> fail
   without a comment.
-- Failure to resolve an outdated thread -> fail before creating a delegation
-  comment.
+- Failure to resolve an outdated thread -> retain the failed resolver step for
+  diagnosis, but continue to the delegation step so other missed threads are
+  still delegated.
 - The automatic `pull_request_review` event skips the resolver step and retains
   its existing PAT-backed delegation behavior.
 - No missed unresolved Codex thread -> complete without a comment.
@@ -232,22 +233,25 @@ original PR branch.
   blocked-thread exclusion, comment pagination, reviewer filtering, stable
   marker ordering, duplicate suppression, invalid PR rejection, and the rule
   that the PAT-backed delegation path never calls `resolveReviewThread`.
-- Parse the workflow YAML and run `git diff --check`; run `actionlint` when it
-  is available.
+- Parse the workflow YAML and verify the resolver uses `CODEX_TRIGGER_TOKEN`
+  with `continue-on-error: true`; run `git diff --check` and `actionlint` when
+  it is available.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
-Delegate only the latest review, use `CODEX_TRIGGER_TOKEN` for
-`resolveReviewThread`, repeatedly delegate a thread already listed in a prior
-delegation, or retry a thread with an explicit `无法安全完成：` blocker.
+Delegate only the latest review, use the ephemeral `${{ github.token }}` for
+`resolveReviewThread`, let a resolver failure block all missed threads,
+repeatedly delegate a thread already listed in a prior delegation, or retry a
+thread with an explicit `无法安全完成：` blocker.
 
 #### Correct
 
-Use `${{ github.token }}` with `pull-requests: write` to resolve outdated
-threads first; then use `CODEX_TRIGGER_TOKEN` to exclude resolved, explicitly
-blocked, and previously delegated thread IDs and comment only the missed set.
+Use the user PAT in `CODEX_TRIGGER_TOKEN` to resolve outdated threads first,
+while allowing the later step to continue when resolution fails; then use the
+same PAT to exclude resolved, explicitly blocked, and previously delegated
+thread IDs and comment only the missed set.
 
 ## Scenario: User-triggered Codex Conflict Resolution
 
