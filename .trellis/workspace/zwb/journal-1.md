@@ -1488,3 +1488,38 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: 修复 PR 66 的 JSON 空值与 DDL 串行化
+
+**Date**: 2026-07-30
+**Task**: 修复 PR 66 的 JSON 空值与 DDL 串行化
+**Branch**: `fix/json-null-ddl-serialization-20260729`
+
+### Summary
+
+区分 CDC 中 JSON SQL NULL 与 literal null；以共享 MySQL generation advisory lock 串行化 accepted snapshot 发布和不可逆 DDL；补齐生命周期测试、规范并解决两个审查 thread。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74e466c` | (see git log) |
+| `c3c80f5` | (see git log) |
+| `bbe6118` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
