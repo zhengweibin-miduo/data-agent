@@ -1,6 +1,6 @@
 """从权威 Meta 与 DW 构造当前索引投影。"""
 
-from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
@@ -31,6 +31,14 @@ from data_agent.settings import app_config
 
 class ProjectionNotReadyError(RuntimeError):
     """权威 DW 投影尚未物化，任务应无损延后。"""
+
+
+@dataclass(frozen=True)
+class ValueProjectionPlan:
+    """一次字段值刷新所需的稳定 DW 表与字段读取计划。"""
+
+    desired: DesiredSyncTable
+    columns: tuple[tuple[str, str], ...]
 
 
 def _search_text(*parts: object) -> str:
@@ -286,47 +294,56 @@ class MetadataProjectionRepository:
         )
         return [(column_id, name) for column_id, name in eligible if name in safe_names]
 
-    async def value_projections(
-        self,
-        table_id: str,
-        refresh_version: str,
-    ) -> AsyncIterator[MetadataValueProjection]:
-        """从当前 DW 快照聚合每字段高频 top-N 非空值。"""
+    async def value_projection_plan(self, table_id: str) -> ValueProjectionPlan | None:
+        """在短事务中解析字段值刷新所需的 DW 表与安全字段。"""
         eligible = await self.eligible_columns(table_id)
         if not eligible:
-            return
+            return None
         resolved = await self.desired_table_for_columns({item[0] for item in eligible})
         if resolved is None:
-            return
+            return None
         desired, phase = resolved
         if phase == SyncPhase.PENDING_SCHEMA:
             raise ProjectionNotReadyError("DW 表尚未完成结构物化")
-        eligible = await self._shared_target_eligible_columns(desired, eligible)
+        columns = await self._shared_target_eligible_columns(desired, eligible)
+        return ValueProjectionPlan(desired=desired, columns=tuple(columns))
+
+    async def value_projection_batch(
+        self,
+        table_id: str,
+        refresh_version: str,
+        plan: ValueProjectionPlan,
+        column: tuple[str, str],
+    ) -> list[MetadataValueProjection]:
+        """在单个短事务中物化一个字段的有界 top-N 投影。"""
+        column_id, name = column
         quote = mysql_dialect().identifier_preparer.quote
         qualified = (
-            f"{quote(app_config.data_sync.dw_database)}.{quote(desired.target_table)}"
+            f"{quote(app_config.data_sync.dw_database)}."
+            f"{quote(plan.desired.target_table)}"
         )
-        for column_id, name in eligible:
-            quoted = quote(name)
-            rows = await self._session.execute(
-                text(
-                    f"SELECT {quoted} AS value, COUNT(*) AS frequency "
-                    f"FROM {qualified} WHERE {quoted} IS NOT NULL "
-                    f"GROUP BY {quoted} ORDER BY frequency DESC, {quoted} "
-                    "LIMIT :limit"
-                ),
-                {"limit": app_config.metadata_index.value_top_n},
+        quoted = quote(name)
+        rows = await self._session.execute(
+            text(
+                f"SELECT {quoted} AS value, COUNT(*) AS frequency "
+                f"FROM {qualified} WHERE {quoted} IS NOT NULL "
+                f"GROUP BY {quoted} ORDER BY frequency DESC, {quoted} "
+                "LIMIT :limit"
+            ),
+            {"limit": app_config.metadata_index.value_top_n},
+        )
+        return [
+            MetadataValueProjection(
+                column_id=column_id,
+                table_id=table_id,
+                value_text=str(value),
+                value_keyword=str(value),
+                frequency=int(frequency),
+                refresh_version=refresh_version,
+                schema_fingerprint=plan.desired.schema_fingerprint,
             )
-            for value, frequency in rows:
-                yield MetadataValueProjection(
-                    column_id=column_id,
-                    table_id=table_id,
-                    value_text=str(value),
-                    value_keyword=str(value),
-                    frequency=int(frequency),
-                    refresh_version=refresh_version,
-                    schema_fingerprint=desired.schema_fingerprint,
-                )
+            for value, frequency in rows
+        ]
 
     async def semantic_identities(
         self,

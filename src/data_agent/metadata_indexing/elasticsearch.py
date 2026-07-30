@@ -2,7 +2,14 @@
 
 import hashlib
 import json
-from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+)
 from typing import Any, cast
 
 from elasticsearch import AsyncElasticsearch
@@ -124,12 +131,17 @@ class MetadataValueElasticsearchIndex:
         table_id: str,
         refresh_version: str,
         projections: AsyncIterable[MetadataValueProjection],
+        heartbeat: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """批量覆盖当前 top-N，并清理表内旧刷新版本。"""
         async for operations in _async_bulk_chunks(projections):
+            if heartbeat is not None:
+                await heartbeat()
             response = await self._client.bulk(operations=operations, refresh=False)
             if response.get("errors"):
                 raise RuntimeError("Elasticsearch Meta 字段值 bulk 写入失败")
+        if heartbeat is not None:
+            await heartbeat()
         cleanup = await self._client.delete_by_query(
             index=self._index,
             conflicts="proceed",

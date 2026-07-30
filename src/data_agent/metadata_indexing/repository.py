@@ -170,6 +170,24 @@ class MetadataIndexOutboxRepository:
             )
         )
 
+    async def renew_lease(self, item: ClaimedMetadataIndexWork) -> bool:
+        """仅为仍未过期且身份完整匹配的领取续租。"""
+        result = await self._session.execute(
+            update(metadata_index_outbox)
+            .where(
+                *self._authority(item),
+                metadata_index_outbox.c.lease_expires_at > func.now(),
+            )
+            .values(
+                lease_expires_at=func.timestampadd(
+                    text("SECOND"),
+                    app_config.metadata_index.claim_lease_seconds,
+                    func.now(),
+                )
+            )
+        )
+        return isinstance(result, CursorResult) and bool(result.rowcount)
+
     def _authority(
         self,
         item: ClaimedMetadataIndexWork,

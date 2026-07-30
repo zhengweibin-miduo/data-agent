@@ -1,5 +1,7 @@
 """Meta 语义与字段值索引 outbox 调度。"""
 
+from collections.abc import AsyncIterator
+
 from loguru import logger
 
 from data_agent.data_sync.locks import generation_lock_name
@@ -14,6 +16,7 @@ from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
     MetadataIndexOperation,
     MetadataIndexTarget,
+    MetadataValueProjection,
 )
 from data_agent.metadata_indexing.projections import (
     MetadataProjectionRepository,
@@ -146,13 +149,39 @@ class MetadataIndexDispatcher:
         if item.operation != MetadataIndexOperation.REFRESH:
             raise ValueError("字段值索引仅支持 refresh 期望状态")
         async with MySQLDatabase.session() as session:
-            projections = MetadataProjectionRepository(session).value_projections(
-                item.object_id, item.desired_version
+            plan = await MetadataProjectionRepository(session).value_projection_plan(
+                item.object_id
             )
-            await MetadataValueElasticsearchIndex(
-                ElasticsearchClient.get_client()
-            ).refresh_table(
-                item.object_id,
-                item.desired_version,
-                projections,
-            )
+
+        async def renew() -> None:
+            async with MySQLDatabase.session() as session:
+                renewed = await MetadataIndexOutboxRepository(session).renew_lease(item)
+            if not renewed:
+                raise RuntimeError("Meta 索引任务 lease 已失效")
+
+        async def projections() -> AsyncIterator[MetadataValueProjection]:
+            if plan is None:
+                return
+            for column in plan.columns:
+                await renew()
+                async with MySQLDatabase.session() as session:
+                    batch = await MetadataProjectionRepository(
+                        session
+                    ).value_projection_batch(
+                        item.object_id,
+                        item.desired_version,
+                        plan,
+                        column,
+                    )
+                await renew()
+                for projection in batch:
+                    yield projection
+
+        await MetadataValueElasticsearchIndex(
+            ElasticsearchClient.get_client()
+        ).refresh_table(
+            item.object_id,
+            item.desired_version,
+            projections(),
+            heartbeat=renew,
+        )

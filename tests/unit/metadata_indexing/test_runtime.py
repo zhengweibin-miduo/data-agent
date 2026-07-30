@@ -115,6 +115,11 @@ def test_memory_content_version_rejects_pre_value_index_records() -> None:
     check_equal("长期记忆内容版本已提升", app_config.memory.content_version, "v3")
 
 
+def test_graph_version_rejects_pre_value_index_checkpoints() -> None:
+    """字段语义契约变化必须隔离旧 LangGraph 检查点。"""
+    check_equal("工作流图版本已提升", app_config.llm.graph_version, "v2")
+
+
 async def test_destructive_rebuild_persists_recovery_before_reset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

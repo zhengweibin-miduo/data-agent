@@ -207,6 +207,31 @@ async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
         )
 
 
+async def test_lease_renewal_requires_current_unexpired_generation() -> None:
+    """续租必须匹配完整身份且拒绝已经过期的 lease。"""
+    session = _RecordingSession([_FakeResult(rowcount=1)])
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.renew_lease(_work())
+
+    rendered = _rendered(session.statements[0])
+    check_condition(
+        "续租完整 CAS",
+        all(
+            field in rendered
+            for field in (
+                "operation",
+                "desired_version",
+                "lease_token",
+                "lease_expires_at > now()",
+                "timestampadd",
+            )
+        ),
+        actual=rendered,
+        expected="UPDATE 匹配完整代次、未过期 lease 并使用数据库时钟续租",
+    )
+
+
 async def test_stale_write_preserves_an_existing_newer_generation() -> None:
     """迟到外部写入只在 outbox 缺失时补回，不得覆盖并发新版本。"""
     session = _RecordingSession([_FakeResult(rowcount=1)])
