@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 50
+- **Total Sessions**: 51
 - **Last Active**: 2026-07-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1624 | Active |
+| `journal-1.md` | ~1657 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 51 | 2026-07-30 | 完成元数据值索引有界可恢复刷新 | `02a6c0d` | `feature/metadata-semantic-value-index-20260730` |
 | 50 | 2026-07-30 | 修复元数据索引长刷新无法收敛 | `38a9b22` | `fix/metadata-index-resumable-refresh-20260730` |
 | 49 | 2026-07-30 | 修复 PR #71 CDC 集成测试 CI | `e7975f0` | `fix/stabilize-ci-20260730` |
 | 48 | 2026-07-30 | 建立 Meta 语义与字段值索引 | `c247d61` | `feature/metadata-semantic-value-index-20260730` |

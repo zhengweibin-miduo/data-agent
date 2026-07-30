@@ -1622,3 +1622,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 51: 完成元数据值索引有界可恢复刷新
+
+**Date**: 2026-07-30
+**Task**: 完成元数据值索引有界可恢复刷新
+**Branch**: `feature/metadata-semantic-value-index-20260730`
+
+### Summary
+
+实现精确频次、主键 keyset 扫描、CDC 同事务增量、有界 Elasticsearch 差量发布和可恢复状态机；补齐单元及真实服务集成故障测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `02a6c0d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
