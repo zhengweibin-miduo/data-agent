@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from types import SimpleNamespace, TracebackType
 from typing import cast
 
@@ -117,6 +118,25 @@ def test_bit_value_text_is_numeric_business_value() -> None:
     """MySQL BIT 投影必须按字段类型转换为可查询的十进制业务值。"""
     check_equal("BIT bytes 转十进制", _stable_value_text(b"\x05", "BIT(8)"), "5")
     check_equal("bare BIT bytes 转十进制", _stable_value_text(b"\x01", "BIT"), "1")
+
+
+def test_time_value_text_uses_mysql_business_format() -> None:
+    """MySQL TIME 投影必须保留可直接用于条件的有符号业务文本。"""
+    check_equal(
+        "普通 TIME",
+        _stable_value_text(timedelta(hours=12, minutes=30), "TIME"),
+        "12:30:00",
+    )
+    check_equal(
+        "负数及微秒 TIME",
+        _stable_value_text(timedelta(microseconds=-3_661_000_001), "TIME(6)"),
+        "-01:01:01.000001",
+    )
+    check_equal(
+        "超过 24 小时 TIME",
+        _stable_value_text(timedelta(hours=27), "TIME"),
+        "27:00:00",
+    )
 
 
 def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:

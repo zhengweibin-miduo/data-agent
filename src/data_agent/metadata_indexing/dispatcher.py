@@ -23,7 +23,10 @@ from data_agent.metadata_indexing.projections import (
     ProjectionNotReadyError,
 )
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
-from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
+from data_agent.metadata_indexing.rebuilder import (
+    MetadataIndexRebuilder,
+    RebuildProjectionError,
+)
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
 from data_agent.settings import app_config
 
@@ -101,7 +104,7 @@ class MetadataIndexDispatcher:
                 await MetadataIndexOutboxRepository(session).defer(item)
             logger.info("Meta 索引任务租约已失效，本次处理无损结束")
             return False
-        except LocalProjectionError:
+        except (LocalProjectionError, RebuildProjectionError):
             async with MySQLDatabase.session() as session:
                 await MetadataIndexOutboxRepository(session).defer(item)
             logger.warning("Meta 索引权威投影读取失败，本次处理无损延后")

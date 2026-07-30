@@ -4,7 +4,7 @@ import hashlib
 import json
 from uuid import uuid4
 
-from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +53,16 @@ class MetadataIndexOutboxRepository:
             metadata_index_outbox.c.desired_version
             != statement.inserted.desired_version
         )
+        continuing_refresh = and_(
+            changed,
+            metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
+            metadata_index_outbox.c.operation == MetadataIndexOperation.REFRESH.value,
+            or_(
+                metadata_index_outbox.c.lease_token.is_not(None),
+                metadata_index_outbox.c.progress_column_id.is_not(None),
+            ),
+        )
+        replace_current = and_(changed, ~continuing_refresh)
         available = func.timestampadd(text("SECOND"), debounce_seconds, func.now())
         await self._session.execute(
             statement.on_duplicate_key_update(
@@ -60,7 +70,10 @@ class MetadataIndexOutboxRepository:
                     ("operation", statement.inserted.operation),
                     (
                         "attempts",
-                        case((changed, 0), else_=metadata_index_outbox.c.attempts),
+                        case(
+                            (replace_current, 0),
+                            else_=metadata_index_outbox.c.attempts,
+                        ),
                     ),
                     (
                         "available_at",
@@ -68,7 +81,7 @@ class MetadataIndexOutboxRepository:
                             # 保留首次变更建立的最早执行期限；持续到达的新版本
                             # 只能提前而不能反复推迟同一对象的刷新。
                             (
-                                changed,
+                                replace_current,
                                 func.least(
                                     metadata_index_outbox.c.available_at,
                                     available,
@@ -80,33 +93,51 @@ class MetadataIndexOutboxRepository:
                     (
                         "lease_token",
                         case(
-                            (changed, None), else_=metadata_index_outbox.c.lease_token
+                            (replace_current, None),
+                            else_=metadata_index_outbox.c.lease_token,
                         ),
                     ),
                     (
                         "lease_expires_at",
                         case(
-                            (changed, None),
+                            (replace_current, None),
                             else_=metadata_index_outbox.c.lease_expires_at,
                         ),
                     ),
                     (
                         "last_error_type",
                         case(
-                            (changed, None),
+                            (replace_current, None),
                             else_=metadata_index_outbox.c.last_error_type,
                         ),
                     ),
                     (
                         "progress_column_id",
                         case(
-                            (changed, None),
+                            (replace_current, None),
                             else_=metadata_index_outbox.c.progress_column_id,
+                        ),
+                    ),
+                    (
+                        "pending_desired_version",
+                        case(
+                            (continuing_refresh, statement.inserted.desired_version),
+                            (replace_current, None),
+                            else_=metadata_index_outbox.c.pending_desired_version,
                         ),
                     ),
                     # MySQL 从左到右计算赋值；版本列必须最后覆盖，前面的
                     # changed 表达式才能与行内旧版本比较。
-                    ("desired_version", statement.inserted.desired_version),
+                    (
+                        "desired_version",
+                        case(
+                            (
+                                continuing_refresh,
+                                metadata_index_outbox.c.desired_version,
+                            ),
+                            else_=statement.inserted.desired_version,
+                        ),
+                    ),
                 ]
             )
         )
@@ -212,6 +243,25 @@ class MetadataIndexOutboxRepository:
 
     async def acknowledge(self, item: ClaimedMetadataIndexWork) -> bool:
         """仅确认仍由当前 worker 持有的完整期望状态。"""
+        promoted = await self._session.execute(
+            update(metadata_index_outbox)
+            .where(
+                *self._authority(item),
+                metadata_index_outbox.c.pending_desired_version.is_not(None),
+            )
+            .values(
+                desired_version=metadata_index_outbox.c.pending_desired_version,
+                pending_desired_version=None,
+                progress_column_id=None,
+                attempts=0,
+                available_at=func.now(),
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type=None,
+            )
+        )
+        if isinstance(promoted, CursorResult) and bool(promoted.rowcount):
+            return True
         result = await self._session.execute(
             delete(metadata_index_outbox).where(*self._authority(item))
         )
@@ -232,6 +282,7 @@ class MetadataIndexOutboxRepository:
                 lease_token=None,
                 lease_expires_at=None,
                 last_error_type=None,
+                attempts=0,
             )
         )
         return isinstance(result, CursorResult) and bool(result.rowcount)

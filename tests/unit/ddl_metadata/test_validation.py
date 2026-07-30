@@ -179,7 +179,10 @@ async def test_metadata_validator() -> None:
 async def test_value_index_profile_uses_strict_three_state_gate() -> None:
     """只有 index + non_sensitive + 当前证据通过值索引门禁。"""
     schema, metadata = await _valid_metadata()
-    first = metadata.columns[0]
+    relationship_source = schema.relationships[0].source_column_id
+    first = next(
+        column for column in metadata.columns if column.column_id == relationship_source
+    )
 
     for decision, sensitivity in (
         (ValueIndexDecision.SKIP, ValueSensitivity.SENSITIVE),
@@ -191,8 +194,12 @@ async def test_value_index_profile_uses_strict_three_state_gate() -> None:
         candidate = metadata.model_copy(
             update={
                 "columns": [
-                    first.model_copy(update={"value_index": profile}),
-                    *metadata.columns[1:],
+                    *[
+                        column.model_copy(update={"value_index": profile})
+                        if column.column_id == first.column_id
+                        else column
+                        for column in metadata.columns
+                    ],
                 ]
             }
         )
@@ -205,11 +212,14 @@ async def test_value_index_profile_uses_strict_three_state_gate() -> None:
     candidate = metadata.model_copy(
         update={
             "columns": [
-                first.model_copy(update={"value_index": conflict}),
-                metadata.columns[1].model_copy(
-                    update={"value_index": invalid_evidence}
-                ),
-                *metadata.columns[2:],
+                *[
+                    column.model_copy(update={"value_index": conflict})
+                    if column.column_id == first.column_id
+                    else column.model_copy(update={"value_index": invalid_evidence})
+                    if column.column_id == metadata.columns[1].column_id
+                    else column
+                    for column in metadata.columns
+                ],
             ]
         }
     )
@@ -354,4 +364,49 @@ async def test_value_index_evidence_resolves_mysql_reference_names() -> None:
         "未限定外键目标按来源 schema 解析",
         validate_metadata(schema, metadata),
         [],
+    )
+
+
+async def test_foreign_key_cannot_index_sensitive_target_values() -> None:
+    """直接外键目标非明确非敏感时，引用端不得侧写相同标识值。"""
+    schema, metadata = await _valid_metadata()
+    relationship = schema.relationships[0]
+    source_table = next(
+        table for table in schema.tables if table.id == relationship.source_table_id
+    )
+    target_name = relationship.target_table.casefold()
+    if "." not in target_name and source_table.schema_name:
+        target_name = f"{source_table.schema_name}.{target_name}"
+    target_table = next(
+        table
+        for table in schema.tables
+        if table.qualified_name.casefold() == target_name
+    )
+    target_id = next(
+        column.id
+        for column in target_table.columns
+        if column.name.casefold() == relationship.target_column.casefold()
+    )
+    candidate = metadata.model_copy(
+        update={
+            "columns": [
+                column.model_copy(
+                    update={
+                        "value_index": column.value_index.model_copy(
+                            update={"sensitivity": ValueSensitivity.SENSITIVE}
+                        )
+                    }
+                )
+                if column.column_id == target_id
+                else column
+                for column in metadata.columns
+            ]
+        }
+    )
+
+    check_equal(
+        "敏感目标阻止引用端值索引",
+        "conflicting_related_value_sensitivity"
+        in {issue.code for issue in validate_metadata(schema, candidate)},
+        True,
     )

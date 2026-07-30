@@ -1,6 +1,7 @@
 """从权威 Meta 与 DW 构造当前索引投影。"""
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
@@ -45,6 +46,21 @@ def _stable_value_text(value: object, data_type: str | None = None) -> str:
     """把特殊 MySQL 值转换为跨进程稳定的可检索业务文本。"""
     if data_type and data_type.upper().startswith("BIT") and isinstance(value, bytes):
         return str(int.from_bytes(value, byteorder="big", signed=False))
+    if data_type and data_type.upper().split("(", 1)[0] == "TIME" and isinstance(
+        value, timedelta
+    ):
+        total_microseconds = (
+            value.days * 86_400_000_000
+            + value.seconds * 1_000_000
+            + value.microseconds
+        )
+        sign = "-" if total_microseconds < 0 else ""
+        absolute = abs(total_microseconds)
+        hours, remainder = divmod(absolute, 3_600_000_000)
+        minutes, remainder = divmod(remainder, 60_000_000)
+        seconds, microseconds = divmod(remainder, 1_000_000)
+        fraction = f".{microseconds:06d}" if microseconds else ""
+        return f"{sign}{hours:02d}:{minutes:02d}:{seconds:02d}{fraction}"
     encoded = encode_row_value(value)
     if isinstance(encoded, dict):
         return next(iter(encoded.values()))

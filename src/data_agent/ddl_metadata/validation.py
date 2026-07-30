@@ -98,6 +98,36 @@ def _value_index_evidence_by_column(schema: PhysicalSchema) -> dict[str, set[str
     return allowed
 
 
+def _foreign_key_targets_by_column(schema: PhysicalSchema) -> dict[str, set[str]]:
+    """按 MySQL 名称解析规则返回每个外键字段的直接目标字段。"""
+    targets: dict[str, set[str]] = {}
+    tables_by_name = {table.qualified_name.casefold(): table for table in schema.tables}
+    source_tables = {table.id: table for table in schema.tables}
+    for relationship in schema.relationships:
+        source_table = source_tables.get(relationship.source_table_id)
+        target_name = relationship.target_table.casefold()
+        target_table = tables_by_name.get(target_name)
+        if target_table is None and source_table is not None and "." not in target_name:
+            schema_name = source_table.schema_name
+            qualified = f"{schema_name}.{target_name}" if schema_name else target_name
+            target_table = tables_by_name.get(qualified.casefold())
+        if target_table is None:
+            continue
+        target_column = next(
+            (
+                column
+                for column in target_table.columns
+                if column.name.casefold() == relationship.target_column.casefold()
+            ),
+            None,
+        )
+        if target_column is not None:
+            targets.setdefault(relationship.source_column_id, set()).add(
+                target_column.id
+            )
+    return targets
+
+
 def validate_metadata(
     schema: PhysicalSchema,
     metadata: SemanticMetadata,
@@ -123,6 +153,8 @@ def validate_metadata(
     # 步骤二：逐表校验置信度与证据引用，低置信度属于不可自动修复问题。
     known_evidence = expected_tables | expected_columns
     value_index_evidence = _value_index_evidence_by_column(schema)
+    foreign_key_targets = _foreign_key_targets_by_column(schema)
+    semantic_columns = {column.column_id: column for column in metadata.columns}
     for table in metadata.tables:
         if table.confidence < confidence_threshold:
             issues.append(
@@ -202,6 +234,19 @@ def validate_metadata(
                     code="conflicting_value_index_profile",
                     path=f"columns.{column.column_id}.value_index",
                     message="只有明确非敏感字段可以获得值索引资格",
+                )
+            )
+        if profile.eligible and any(
+            semantic_columns[target_id].value_index.sensitivity
+            != ValueSensitivity.NON_SENSITIVE
+            for target_id in foreign_key_targets.get(column.column_id, set())
+            if target_id in semantic_columns
+        ):
+            issues.append(
+                ValidationIssue(
+                    code="conflicting_related_value_sensitivity",
+                    path=f"columns.{column.column_id}.value_index.sensitivity",
+                    message="直接外键目标非明确非敏感时，引用字段不能获得值索引资格",
                 )
             )
     return issues

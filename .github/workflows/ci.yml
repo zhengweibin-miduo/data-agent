@@ -47,6 +47,19 @@ jobs:
           --health-interval=5s
           --health-timeout=3s
           --health-retries=20
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+        ports:
+          - "9200:9200"
+        options: >-
+          --health-cmd="curl --fail http://localhost:9200/_cluster/health"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=30
+          --health-start-period=30s
 
     steps:
       - name: Checkout repository

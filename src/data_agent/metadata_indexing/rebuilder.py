@@ -70,7 +70,10 @@ class MetadataIndexRebuilder:
             ).recreate()
         else:
             await MetadataQdrantIndex(QdrantClient.get_client()).recreate()
-        await self.enqueue(target=target)
+        try:
+            await self.enqueue(target=target)
+        except Exception as error:
+            raise RebuildProjectionError from error
 
     async def enqueue(
         self, target: MetadataIndexTarget | None = None
@@ -129,3 +132,7 @@ class MetadataIndexRebuilder:
             semantic_objects=len(identities),
             value_tables=len(table_ids),
         )
+
+
+class RebuildProjectionError(RuntimeError):
+    """后端重建后的权威扫描失败，不应消耗远程失败预算。"""

@@ -215,7 +215,9 @@ async def test_claim_uses_database_clock_and_excludes_dead_letters() -> None:
 
 async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
     """确认和退避都必须匹配版本、操作与领取令牌。"""
-    session = _RecordingSession([_FakeResult(rowcount=0), _FakeResult(rowcount=0)])
+    session = _RecordingSession(
+        [_FakeResult(rowcount=0), _FakeResult(rowcount=0), _FakeResult(rowcount=0)]
+    )
     repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
     stale = _work("stale-worker-token".ljust(32, "x"))
 
@@ -225,7 +227,9 @@ async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
         await repository.backoff(stale, "TimeoutError"),
         False,
     )
-    for label, statement in zip(("确认", "退避"), session.statements, strict=True):
+    for label, statement in zip(
+        ("待处理版本提升", "确认", "退避"), session.statements, strict=True
+    ):
         rendered = _rendered(statement)
         check_condition(
             f"{label}完整 CAS",
@@ -344,6 +348,7 @@ async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
                 "lease_expires_at",
                 "last_error_type",
                 "progress_column_id",
+                "pending_desired_version",
             )
         ),
         actual=duplicate,
@@ -354,6 +359,14 @@ async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
         "least(data_sync.metadata_index_outbox.available_at" in duplicate.lower(),
         actual=duplicate,
         expected="available_at 使用既有期限与新 debounce 期限的较早值",
+    )
+    check_condition(
+        "执行中的刷新保留当前代次并记录最新代次",
+        "pending_desired_version" in duplicate
+        and "lease_token IS NOT NULL" in duplicate
+        and "progress_column_id IS NOT NULL" in duplicate,
+        actual=duplicate,
+        expected="活跃刷新把新版本写入 pending_desired_version",
     )
 
 

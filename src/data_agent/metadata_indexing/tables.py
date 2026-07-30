@@ -13,6 +13,7 @@ metadata_index_outbox = Table(
     Column("object_id", String(128), primary_key=True),
     Column("operation", String(16), nullable=False),
     Column("desired_version", String(64), nullable=False),
+    Column("pending_desired_version", String(64), nullable=True),
     Column("progress_column_id", String(128), nullable=True),
     Column("attempts", Integer, nullable=False, server_default="0"),
     Column("available_at", DateTime, nullable=False, server_default=func.now()),

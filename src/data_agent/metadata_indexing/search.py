@@ -120,6 +120,15 @@ class MetadataSearchService:
         if not generation_matches:
             values = []
             complete = False
+        # 以最后一次权威读取作为完整性线性化点；ES 代次检查期间新投递但
+        # 尚未写入索引的 generation 也必须使结果降级为不完整。
+        async with MySQLDatabase.session() as session:
+            final_scope, final_complete = await MetadataProjectionRepository(
+                session
+            ).resolve_value_scope(column_ids)
+        if final_scope != current_scope or not final_complete:
+            values = []
+            complete = False
         return MetadataValueSearchResult(
             values=values[:bounded_limit], complete=complete
         )
