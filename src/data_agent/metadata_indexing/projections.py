@@ -3,9 +3,10 @@
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from data_agent.data_sync.models import DesiredSyncTable, SyncPhase, encode_row_value
 from data_agent.data_sync.tables import data_sync_task
@@ -17,6 +18,7 @@ from data_agent.ddl_metadata.persistence.tables import (
 )
 from data_agent.metadata_indexing.models import (
     MetadataCandidate,
+    MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
     MetadataSemanticHit,
@@ -28,6 +30,18 @@ from data_agent.metadata_indexing.repository import metadata_desired_version
 from data_agent.metadata_indexing.tables import metadata_index_outbox
 from data_agent.models.semantic import ColumnValueIndexProfile
 from data_agent.settings import app_config
+
+
+def _pending_value_scope_statement(table_ids: set[str]) -> Select[tuple[str]]:
+    """构造字段表及全局重建的待处理状态查询。"""
+    return select(metadata_index_outbox.c.object_id).where(
+        metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
+        or_(
+            metadata_index_outbox.c.object_id.in_(table_ids),
+            metadata_index_outbox.c.operation
+            == MetadataIndexOperation.REBUILD.value,
+        ),
+    )
 
 
 class ProjectionNotReadyError(RuntimeError):
@@ -477,10 +491,7 @@ class MetadataProjectionRepository:
         table_ids = {table_id for table_id, _ in resolved.values()}
         pending = set(
             await self._session.scalars(
-                select(metadata_index_outbox.c.object_id).where(
-                    metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
-                    metadata_index_outbox.c.object_id.in_(table_ids),
-                )
+                _pending_value_scope_statement(table_ids)
             )
         )
         complete = (

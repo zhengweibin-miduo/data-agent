@@ -12,6 +12,7 @@ import pytest
 from elasticsearch import AsyncElasticsearch
 from pydantic import ValidationError
 from qdrant_client.async_qdrant_client import AsyncQdrantClient
+from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 from tests.helpers.checks import check_equal, check_exception, fail_check
 
@@ -40,6 +41,7 @@ from data_agent.metadata_indexing.models import (
 )
 from data_agent.metadata_indexing.projections import (
     MetadataProjectionRepository,
+    _pending_value_scope_statement,
     _safe_shared_column_names,
     _stable_value_text,
 )
@@ -105,6 +107,20 @@ def test_value_search_overfetches_bounded_candidate_pool() -> None:
         _value_candidate_limit(),
         app_config.metadata_index.search_limit,
     )
+
+
+def test_value_scope_includes_global_rebuild_state() -> None:
+    """字段值完整性必须包含未完成的全局重建任务。"""
+    compiled = str(
+        _pending_value_scope_statement({"table-1"}).compile(
+            dialect=mysql_dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    check_equal("查询限定 VALUES 目标", "target = 'values'" in compiled, True)
+    check_equal("查询包含当前表", "object_id IN ('table-1')" in compiled, True)
+    check_equal("查询包含全局重建", "operation = 'rebuild'" in compiled, True)
 
 
 def test_set_value_text_is_stable_business_value() -> None:
