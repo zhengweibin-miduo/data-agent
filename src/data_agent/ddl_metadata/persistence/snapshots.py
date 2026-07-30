@@ -81,7 +81,7 @@ class MetadataSnapshotService:
             answers,
             metrics,
             versions=MemoryVersions(
-                content=app_config.memory.content_version,
+                content=app_config.memory.ddl_semantic_content_version,
                 projection=app_config.memory.projection_version,
             ),
         )

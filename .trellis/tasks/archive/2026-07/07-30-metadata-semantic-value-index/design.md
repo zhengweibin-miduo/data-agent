@@ -73,7 +73,7 @@ LLM 每次接收整张物理表上下文：表名、角色、描述、字段名�
 
 `examples` 保持现有展示样例语义，不复用为策略或索引状态。
 
-仓库无迁移框架：SQLAlchemy Core 与 `docs/docker/mysql/meta.sql` 必须同步更新。已有环境需要部署前执行经审批的精确 `ALTER TABLE` 或使用可丢弃环境重新初始化，运行时不得自动改表。
+仓库无迁移框架：SQLAlchemy Core 与 `docs/docker/mysql/meta.sql` 必须同步更新。已有环境需要部署前执行经审批的 `docs/docker/mysql/upgrades/20260730_metadata_semantic_value_index.sql`（同时增加 `table_info.alias` 与 `column_info.index_profile`，并为既有字段回填保守的 `skip + unknown` 决策），或在可丢弃环境重新初始化；运行时不得自动改表。
 
 ## 4. 索引结构先建
 

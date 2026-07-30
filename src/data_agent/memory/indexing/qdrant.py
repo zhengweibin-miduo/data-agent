@@ -20,6 +20,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from data_agent.memory.versions import search_content_versions
 from data_agent.models.memory import MemoryProjection
 from data_agent.settings import app_config
 
@@ -40,7 +41,7 @@ def _filter_conditions(
         FieldCondition(key="status", match=MatchValue(value="ACTIVE")),
         FieldCondition(
             key="content_version",
-            match=MatchValue(value=app_config.memory.content_version),
+            match=MatchAny(any=sorted(search_content_versions(categories))),
         ),
         FieldCondition(
             key="projection_version",

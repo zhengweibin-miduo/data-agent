@@ -93,7 +93,7 @@ class MemoryContextLoader:
                 schema.source,
                 fingerprints,
                 BuiltinMemoryCategory.DDL_SEMANTIC.value,
-                app_config.memory.content_version,
+                app_config.memory.ddl_semantic_content_version,
             )
             grouped = {
                 scope: [
@@ -107,7 +107,7 @@ class MemoryContextLoader:
                 schema.source,
                 schema.schema_fingerprint,
                 {BuiltinMemoryCategory.DDL_METRIC.value},
-                app_config.memory.content_version,
+                app_config.memory.ddl_semantic_content_version,
             )
             metric_memories = [
                 memory

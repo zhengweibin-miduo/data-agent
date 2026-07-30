@@ -182,7 +182,12 @@ def test_shared_target_requires_unambiguous_column_ownership() -> None:
 
 def test_memory_content_version_rejects_pre_value_index_records() -> None:
     """字段资格成为必填内容后必须隔离旧版语义记忆。"""
-    check_equal("长期记忆内容版本已提升", app_config.memory.content_version, "v3")
+    check_equal("用户记忆内容版本保持兼容", app_config.memory.content_version, "v2")
+    check_equal(
+        "DDL 语义记忆内容版本已提升",
+        app_config.memory.ddl_semantic_content_version,
+        "v3",
+    )
 
 
 def test_graph_version_rejects_pre_value_index_checkpoints() -> None:

@@ -387,6 +387,9 @@ class MemorySettings(SettingsModel):
     content_version: str = Field(
         min_length=1, description="长期记忆内容结构的版本标识。"
     )
+    ddl_semantic_content_version: str = Field(
+        min_length=1, description="DDL 语义记忆内容结构的版本标识。"
+    )
     projection_version: str = Field(
         min_length=1, description="长期记忆派生索引结构的版本标识。"
     )

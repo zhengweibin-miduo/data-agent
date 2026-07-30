@@ -457,7 +457,7 @@ class DDLWorkflowNodes:
                 for content in state.get("reused_memory", [])
             ],
             versions=MemoryVersions(
-                content=app_config.memory.content_version,
+                content=app_config.memory.ddl_semantic_content_version,
                 projection=app_config.memory.projection_version,
             ),
             job_id=_state_string(state, "job_id"),
