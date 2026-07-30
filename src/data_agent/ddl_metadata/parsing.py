@@ -15,6 +15,7 @@ from data_agent.errors import DataAgentError
 from data_agent.identifiers import column_id, table_id
 from data_agent.models.physical import (
     PhysicalColumn,
+    PhysicalRelationship,
     PhysicalSchema,
     PhysicalTable,
 )
@@ -190,6 +191,81 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     )
 
 
+def _relationships(
+    creates: list[exp.Create],
+    tables: list[PhysicalTable],
+) -> list[PhysicalRelationship]:
+    """把表级与列级外键约束规范化为字段引用边。"""
+    relationships: list[PhysicalRelationship] = []
+    for create, table in zip(creates, tables, strict=True):
+        schema = create.this
+        if not isinstance(schema, exp.Schema):
+            continue
+        columns = {column.name.casefold(): column for column in table.columns}
+
+        def append_reference(
+            source_name: str,
+            reference: exp.Reference,
+        ) -> None:
+            """追加单字段外键引用。"""
+            target = reference.this
+            if not isinstance(target, exp.Schema) or not isinstance(
+                target.this, exp.Table
+            ):
+                return
+            target_columns = [
+                identifier.name
+                for identifier in target.expressions
+                if isinstance(identifier, exp.Identifier)
+            ]
+            if len(target_columns) != 1:
+                return
+            relationships.append(
+                PhysicalRelationship(
+                    source_table_id=table.id,
+                    source_column_id=columns[source_name.casefold()].id,
+                    target_table=target.this.sql(dialect="mysql"),
+                    target_column=target_columns[0],
+                )
+            )
+
+        for foreign_key in schema.find_all(exp.ForeignKey):
+            reference = foreign_key.args.get("reference")
+            target = reference.this if isinstance(reference, exp.Reference) else None
+            if not isinstance(target, exp.Schema) or not isinstance(
+                target.this, exp.Table
+            ):
+                continue
+            source_names = [
+                identifier.name
+                for identifier in foreign_key.expressions
+                if isinstance(identifier, exp.Identifier)
+            ]
+            target_names = [
+                identifier.name
+                for identifier in target.expressions
+                if isinstance(identifier, exp.Identifier)
+            ]
+            for source_name, target_name in zip(
+                source_names, target_names, strict=True
+            ):
+                relationships.append(
+                    PhysicalRelationship(
+                        source_table_id=table.id,
+                        source_column_id=columns[source_name.casefold()].id,
+                        target_table=target.this.sql(dialect="mysql"),
+                        target_column=target_name,
+                    )
+                )
+        for column in schema.expressions:
+            if not isinstance(column, exp.ColumnDef):
+                continue
+            for constraint in column.constraints:
+                if isinstance(constraint.kind, exp.Reference):
+                    append_reference(column.name, constraint.kind)
+    return relationships
+
+
 def _parse_ddl_sync(
     source: str,
     ddl: str,
@@ -317,6 +393,7 @@ def _parse_ddl_sync(
         ddl_hash=ddl_hash,
         schema_fingerprint=schema_fingerprint,
         tables=tables,
+        relationships=_relationships(creates, tables),
     )
 
 

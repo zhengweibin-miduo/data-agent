@@ -111,6 +111,32 @@ async def test_ddl_parser() -> None:
         len(schema.schema_fingerprint),
         64,
     )
+    check_equal(
+        "外键引用边包含真实目标表列",
+        [
+            (
+                relationship.source_column_id,
+                relationship.target_table,
+                relationship.target_column,
+            )
+            for relationship in schema.relationships
+        ],
+        [(schema.tables[1].columns[1].id, "dim_customer", "customer_id")],
+    )
+
+    inline_reference = await parse_ddl(
+        "test_source",
+        "CREATE TABLE child (id BIGINT PRIMARY KEY, parent_id BIGINT "
+        "REFERENCES parent(id))",
+    )
+    check_equal(
+        "列级外键同样生成引用边",
+        [
+            (relationship.target_table, relationship.target_column)
+            for relationship in inline_reference.relationships
+        ],
+        [("parent", "id")],
+    )
 
     reordered = await parse_ddl(
         "test_source",

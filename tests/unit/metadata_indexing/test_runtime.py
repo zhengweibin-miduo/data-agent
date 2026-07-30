@@ -366,6 +366,36 @@ async def test_elasticsearch_setup_rejects_dynamic_mapping() -> None:
         )
 
 
+async def test_value_search_uses_bounded_fuzzy_matching() -> None:
+    """字段范围内的文本查询必须启用有界编辑距离召回。"""
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        """记录 Elasticsearch 查询载荷。"""
+
+        async def search(self, **kwargs: object) -> dict[str, object]:
+            """保存查询并返回空命中。"""
+            captured.update(kwargs)
+            return {"hits": {"hits": []}}
+
+    index = MetadataValueElasticsearchIndex(
+        cast(AsyncElasticsearch, FakeClient())
+    )
+    values = await index.search("Shanghi", {"column-1"}, 10)
+
+    check_equal("模糊查询返回空测试结果", values, [])
+    query = cast(dict[str, object], captured["query"])
+    should = cast(dict[str, object], query["bool"])["should"]
+    fuzzy = cast(list[dict[str, object]], should)[1]
+    options = cast(
+        dict[str, object],
+        cast(dict[str, object], fuzzy["match"])["value_text"],
+    )
+    check_equal("启用自动编辑距离", options["fuzziness"], "AUTO")
+    check_equal("限制模糊展开数量", options["max_expansions"], 50)
+    check_equal("保留首字符前缀", options["prefix_length"], 1)
+
+
 async def test_qdrant_setup_rejects_wrong_vector_dimension() -> None:
     """Meta 语义集合维度不一致时启动校验必须失败。"""
 

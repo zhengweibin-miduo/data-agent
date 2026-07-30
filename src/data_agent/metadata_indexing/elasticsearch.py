@@ -140,7 +140,16 @@ class MetadataValueElasticsearchIndex:
                     "filter": [{"terms": {"column_id": sorted(column_ids)}}],
                     "should": [
                         {"term": {"value_keyword": {"value": query, "boost": 4}}},
-                        {"match": {"value_text": {"query": query}}},
+                        {
+                            "match": {
+                                "value_text": {
+                                    "query": query,
+                                    "fuzziness": "AUTO",
+                                    "max_expansions": 50,
+                                    "prefix_length": 1,
+                                }
+                            }
+                        },
                     ],
                     "minimum_should_match": 1,
                 }
