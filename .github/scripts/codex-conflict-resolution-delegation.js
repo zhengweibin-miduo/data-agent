@@ -69,9 +69,9 @@ Expected head: \`${pull.head.sha}\`
 PR base: \`${pull.base.ref}\`
 Observed base: \`${observedBaseSha}\`
 
-开始前执行 \`git fetch --prune origin\`，确认 \`origin/${pull.head.ref}\` 等于 Expected head；不一致就停止。检出原 head 分支，执行 \`git merge --no-ff --no-commit origin/${pull.base.ref}\` 合并 fetch 后最新的 base，只解决冲突后创建 merge commit；无法可靠判断取舍时停止并报告。禁止 rebase，最终只创建一个 merge commit，不创建其他业务修改提交。
+开始前读取根目录 \`.agents/skills/git-pr-rules/SKILL.md\` 并执行 \`git fetch --prune origin\`。Expected head 是冲突分析基线，不是要求远端永远不变的锁；\`origin/${pull.head.ref}\` 已变化时，先按项目 Git/PR Skill 的远端干预判定矩阵处理。远端只是 Expected head 的线性后继且本地没有其他改动时，可检出并同步最新原 head 后继续；历史关系不明、存在未识别或重叠改动、同步冲突、需要改写已发布历史或 force-push 时停止。然后执行 \`git merge --no-ff --no-commit origin/${pull.base.ref}\` 合并 fetch 后最新的 base，只解决冲突后创建 merge commit；无法可靠判断取舍时停止并报告。禁止 rebase，最终只创建一个 merge commit，不创建其他业务修改提交。
 
-完成最小验证后，推送前重新 fetch 并只确认远端 head 仍等于 Expected head；head 变化就停止且不得推送，base 前进不阻止推送。仅使用 \`git push origin HEAD:${pull.head.ref}\` 推送回原 PR 分支，禁止 force-push，不要创建新 PR。
+完成最小验证后，推送前重新 fetch；远端 head 再次前进时重新执行一次完整干预判定，安全同步后重新验证，第二次竞态或任一停止条件出现时不得推送；base 前进不阻止推送。仅使用 \`git push origin HEAD:${pull.head.ref}\` 推送回原 PR 分支，禁止 force-push，不要创建新 PR。
 
 所有 GitHub 回复和最终总结使用简体中文，只保留冲突处理、merge commit SHA 和测试摘要。`;
 }
@@ -205,6 +205,11 @@ async function selfTest() {
   assert.match(body, /Observed base: `livebase456`/);
   assert.doesNotMatch(body, /Expected base/);
   assert.match(body, /base 前进不阻止推送/);
+  assert.match(body, /\.agents\/skills\/git-pr-rules\/SKILL\.md/);
+  assert.match(body, /远端只是 Expected head 的线性后继/);
+  assert.match(body, /可检出并同步最新原 head 后继续/);
+  assert.match(body, /历史关系不明[\s\S]*force-push 时停止/);
+  assert.match(body, /第二次竞态或任一停止条件出现时不得推送/);
   assert.match(body, /origin\/release\/dev/);
   assert.match(body, /git merge --no-ff --no-commit origin\/release\/dev/);
   assert.match(body, /只创建一个 merge commit/);

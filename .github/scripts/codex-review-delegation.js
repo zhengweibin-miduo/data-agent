@@ -25,9 +25,9 @@ Expected head: \`${headSha}\`
 Threads:
 ${threadList}
 
-直接执行修复，不要只做分析、审查或等待人工确认。开始前确认 \`origin\` 存在，并确认远端分支仍指向 Expected head；如果 head 已变化，停止任务且不要推送。\`gh auth status\` 失败时仍要完成修复和推送，只需在结果中说明无法自动回复或 resolve thread。
+直接执行修复，不要只做分析、审查或等待人工确认。开始前读取根目录 \`code_review.md\` 和 \`.agents/skills/git-pr-rules/SKILL.md\`，确认 \`origin\` 存在并 fetch。Expected head 是本任务的分析基线，不是要求远端永远不变的锁：如果远端 head 已变化，按项目 Git/PR Skill 的远端干预判定矩阵处理。远端只是 Expected head 的线性后继，且本地只有已核验的本任务改动或未发布提交时，可以安全同步、重新验证并继续普通推送；历史关系不明、发生冲突、存在未识别或重叠改动、验证失败、需要改写已发布历史或 force-push 时才停止。\`gh auth status\` 失败时仍要完成修复和推送，只需在结果中说明无法自动回复或 resolve thread。
 
-请先读取根目录 \`code_review.md\`、PR diff 和每条 thread 的代码上下文，再逐条判断：
+请再读取 PR diff 和每条 thread 的代码上下文，逐条判断：
 - 需要修复：做最小修复并验证。
 - 不需要修复：在原 thread 说明依据并 resolve。
 - 无法安全完成：在原 thread 说明阻塞原因，并保持 unresolved。
@@ -362,6 +362,10 @@ async function selfTest() {
   assert.doesNotMatch(body, /\bP1\b/);
   assert.match(body, /discussion_r1/);
   assert.match(body, /Expected head: `abc123`/);
+  assert.match(body, /\.agents\/skills\/git-pr-rules\/SKILL\.md/);
+  assert.match(body, /远端只是 Expected head 的线性后继/);
+  assert.match(body, /可以安全同步、重新验证并继续普通推送/);
+  assert.match(body, /历史关系不明、发生冲突[\s\S]*force-push 时才停止/);
   assert.match(body, /最小修复并验证/);
   assert.match(body, /仅对已完成修复或确认不需要修复的 thread.*resolve/);
   assert.match(body, /说明依据并 resolve/);

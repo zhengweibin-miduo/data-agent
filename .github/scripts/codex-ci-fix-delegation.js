@@ -53,7 +53,7 @@ Expected head: \`${pull.head.sha}\`
 Failures:
 ${failures}
 
-直接定位根因并做最小修复，不要复制完整 Actions 或测试日志。开始前确认 \`origin\` 存在；修改和验证完成后只创建一个提交。推送前再次确认远端 \`origin/${pull.head.ref}\` 仍等于 Expected head，若已变化则停止且不得推送。使用 \`git push origin HEAD:${pull.head.ref}\` 推送回原 PR 分支，禁止 force-push，不要创建新 PR。
+直接定位根因并做最小修复，不要复制完整 Actions 或测试日志。开始前读取根目录 \`.agents/skills/git-pr-rules/SKILL.md\`，确认 \`origin\` 存在并 fetch；修改和验证完成后只创建一个提交。Expected head 是 CI 失败的分析基线，不是要求远端永远不变的锁。推送前远端 \`origin/${pull.head.ref}\` 已变化时，按项目 Git/PR Skill 的远端干预判定矩阵处理：远端只是 Expected head 的线性后继，且本地只有已核验的本任务改动或未发布提交时，可以安全同步、重新验证并继续普通推送；历史关系不明、发生冲突、存在未识别或重叠改动、验证失败、需要改写已发布历史或 force-push 时才停止。使用 \`git push origin HEAD:${pull.head.ref}\` 推送回原 PR 分支，禁止 force-push，不要创建新 PR。
 
 所有 GitHub 回复和最终总结使用简体中文，只保留提交 SHA、根因、修复内容和测试摘要。`;
 }
@@ -209,8 +209,10 @@ async function selfTest() {
   assert.match(body, /@codex/);
   assert.match(body, /Expected head: `abc123`/);
   assert.match(body, /只创建一个提交/);
-  assert.match(body, /再次确认远端 `origin\/feature\/fix` 仍等于 Expected head/);
-  assert.match(body, /若已变化则停止且不得推送/);
+  assert.match(body, /\.agents\/skills\/git-pr-rules\/SKILL\.md/);
+  assert.match(body, /远端只是 Expected head 的线性后继/);
+  assert.match(body, /可以安全同步、重新验证并继续普通推送/);
+  assert.match(body, /历史关系不明、发生冲突[\s\S]*force-push 时才停止/);
   assert.match(body, /git push origin HEAD:feature\/fix/);
   assert.match(body, /禁止 force-push/);
   assert.match(body, /只保留提交 SHA、根因、修复内容和测试摘要/);
