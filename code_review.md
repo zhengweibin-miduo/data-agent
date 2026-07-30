@@ -56,6 +56,5 @@ Codex 必须读取对应代码、PR diff 和 thread 上下文，自行判断是�
 - 不需要修复时，在原 thread 说明依据后 resolve。
 - 无法安全完成修复或验证时，说明阻塞原因并保持 unresolved。
 - 回复正文禁止出现 `@codex` 字样，避免触发重新评审造成循环。
-- 内部判断过程可以保留在执行上下文中，但 GitHub thread 回复和最终任务总结禁止出现 `[裁决]`、`SHOULD_FIX` 或同类内部分类标签。
 - 自动委派不设轮数上限；同一 review 与 head 只委派一次，新的 review 或 head 必须继续委派。
 - 修复推送后依赖仓库的自动 Codex Review 发起下一轮审查；仅当自动审查未触发时，才由人工评论 `@codex review`。
