@@ -68,9 +68,7 @@ def semantic_desired_states(
                     "table_id": table.id,
                     "physical": column.model_dump(mode="json"),
                     "semantic": semantic_columns[column.id].model_dump(mode="json"),
-                    "table_semantic": semantic_tables[table.id].model_dump(
-                        mode="json"
-                    ),
+                    "table_semantic": semantic_tables[table.id].model_dump(mode="json"),
                     "table_physical": table.model_dump(mode="json"),
                 },
             )
@@ -165,6 +163,83 @@ def semantic_desired_states(
     return semantic
 
 
+async def shared_value_refresh_states(
+    session: AsyncSession,
+    target_tables: set[str],
+) -> list[MetadataIndexDesired]:
+    """为资格变化涉及的共享 DW 目标生成全部表级刷新状态。"""
+    if not target_tables:
+        return []
+    peer_payloads = (
+        await session.scalars(
+            select(data_sync_task.c.desired_json).where(
+                data_sync_task.c.target_table.in_(target_tables)
+            )
+        )
+    ).all()
+    peers = [DesiredSyncTable.model_validate(payload) for payload in peer_payloads]
+    column_ids = {column.id for peer in peers for column in peer.columns}
+    rows = (
+        await session.execute(
+            select(
+                column_info.c.id,
+                column_info.c.table_id,
+                column_info.c.index_profile,
+            ).where(column_info.c.id.in_(column_ids))
+        )
+    ).mappings()
+    column_metadata = {
+        str(row["id"]): {
+            "table_id": str(row["table_id"]),
+            "index_profile": row["index_profile"],
+        }
+        for row in rows
+    }
+    states: list[MetadataIndexDesired] = []
+    for target_table in sorted(target_tables):
+        target_peers = [peer for peer in peers if peer.target_table == target_table]
+        eligibility = sorted(
+            [
+                {
+                    "column_id": column.id,
+                    "name": column.name,
+                    "index_profile": column_metadata[column.id]["index_profile"],
+                }
+                for peer in target_peers
+                for column in peer.columns
+                if column.id in column_metadata
+            ],
+            key=lambda item: str(item["column_id"]),
+        )
+        table_ids = {
+            str(column_metadata[column.id]["table_id"])
+            for peer in target_peers
+            for column in peer.columns
+            if column.id in column_metadata
+        }
+        version = metadata_desired_version(
+            {
+                "target_table": target_table,
+                "peer_generations": sorted(
+                    peer.desired_hash() for peer in target_peers
+                ),
+                "field_eligibility": eligibility,
+                "projection_version": app_config.metadata_index.projection_version,
+            }
+        )
+        states.extend(
+            MetadataIndexDesired(
+                target=MetadataIndexTarget.VALUES,
+                object_kind=MetadataObjectKind.TABLE,
+                object_id=table_id,
+                operation=MetadataIndexOperation.REFRESH,
+                desired_version=version,
+            )
+            for table_id in sorted(table_ids)
+        )
+    return states
+
+
 async def enqueue_value_refresh(
     session: AsyncSession,
     desired: DesiredSyncTable,
@@ -179,9 +254,7 @@ async def enqueue_value_refresh(
         )
     ).all()
     peers = [DesiredSyncTable.model_validate(payload) for payload in peer_payloads]
-    column_ids = {
-        column.id for item in [desired, *peers] for column in item.columns
-    }
+    column_ids = {column.id for item in [desired, *peers] for column in item.columns}
     table_identifiers = set(
         await session.scalars(
             select(column_info.c.table_id).where(column_info.c.id.in_(column_ids))

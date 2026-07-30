@@ -121,6 +121,14 @@ def _install_repository_fakes(
             del desired
             events.append("metadata_outbox")
 
+    async def fake_shared_value_refresh_states(
+        session: object,
+        target_tables: set[str],
+    ) -> list[object]:
+        """跳过仅与投影内容有关的权威查询。"""
+        del session, target_tables
+        return []
+
     monkeypatch.setattr(snapshots, "MetadataRepository", FakeMetadataRepository)
     monkeypatch.setattr(snapshots, "MemoryRepository", FakeMemoryRepository)
     monkeypatch.setattr(snapshots, "DataSyncRepository", FakeDataSyncRepository)
@@ -128,6 +136,11 @@ def _install_repository_fakes(
         snapshots,
         "MetadataIndexOutboxRepository",
         FakeMetadataIndexOutboxRepository,
+    )
+    monkeypatch.setattr(
+        snapshots,
+        "shared_value_refresh_states",
+        fake_shared_value_refresh_states,
     )
 
 

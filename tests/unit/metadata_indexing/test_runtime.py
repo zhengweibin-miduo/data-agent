@@ -506,6 +506,65 @@ async def test_elasticsearch_setup_rejects_dynamic_mapping() -> None:
         )
 
 
+async def test_elasticsearch_setup_rejects_analyzer_filter_drift() -> None:
+    """字段值 analyzer 任一组成部分漂移时必须阻断启动。"""
+
+    class FakeIndices:
+        """返回 mapping 正确但 analyzer filter 漂移的配置。"""
+
+        async def exists(self, *, index: str) -> bool:
+            """报告索引已存在。"""
+            del index
+            return True
+
+        async def get_mapping(self, *, index: str) -> SimpleNamespace:
+            """返回当前代码声明的严格 mapping。"""
+            mappings = MetadataValueElasticsearchIndex(
+                cast(AsyncElasticsearch, object())
+            )._mappings()
+            return SimpleNamespace(body={index: {"mappings": mappings}})
+
+        async def get_settings(self, *, index: str) -> SimpleNamespace:
+            """返回额外 lowercase filter 的不兼容 analyzer。"""
+            return SimpleNamespace(
+                body={
+                    index: {
+                        "settings": {
+                            "index": {
+                                "analysis": {
+                                    "analyzer": {
+                                        "metadata_value_zh": {
+                                            "type": "custom",
+                                            "tokenizer": (
+                                                app_config.elasticsearch.analyzer
+                                            ),
+                                            "filter": ["lowercase"],
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+
+    client = SimpleNamespace(indices=FakeIndices())
+    try:
+        await MetadataValueElasticsearchIndex(cast(AsyncElasticsearch, client)).setup()
+    except DataAgentError as error:
+        check_equal(
+            "拒绝 analyzer filter 漂移",
+            error.code,
+            "metadata_value_mapping_invalid",
+        )
+    else:
+        fail_check(
+            "拒绝 analyzer filter 漂移",
+            actual="setup 成功",
+            expected="DataAgentError",
+        )
+
+
 async def test_value_search_uses_bounded_fuzzy_matching() -> None:
     """字段范围内的文本查询必须启用有界编辑距离召回。"""
     captured: dict[str, object] = {}

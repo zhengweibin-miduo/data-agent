@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, cast
 
 from sqlalchemy.dialects import mysql
@@ -10,8 +11,12 @@ from sqlalchemy.sql import ClauseElement
 from tests.helpers.checks import check_condition, check_equal
 from tests.helpers.factories import semantic_for
 
+from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
 from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.metadata_indexing.desired import semantic_desired_states
+from data_agent.metadata_indexing.desired import (
+    semantic_desired_states,
+    shared_value_refresh_states,
+)
 from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
     MetadataIndexDesired,
@@ -57,6 +62,81 @@ class _RecordingSession:
         """记录标量查询并返回存在计数。"""
         self.statements.append(statement)
         return 1
+
+
+async def test_shared_eligibility_change_refreshes_every_peer_table() -> None:
+    """共享目标任一字段资格变化必须刷新所有关联 Meta 表。"""
+    profile = {
+        "decision": "skip",
+        "sensitivity": "sensitive",
+        "reason": "测试敏感字段",
+        "evidence": ["column-b"],
+    }
+    peers = [
+        DesiredSyncTable(
+            source=source,
+            source_schema="sales",
+            source_table=f"orders_{source}",
+            target_table="orders",
+            columns=[
+                DesiredColumn(
+                    id=f"column-{source}",
+                    name="region",
+                    data_type="VARCHAR(64)",
+                    nullable=False,
+                )
+            ],
+            primary_key=["region"],
+            schema_fingerprint=source * 64,
+        )
+        for source in ("a", "b")
+    ]
+
+    class FakeScalars:
+        """返回共享 DW 任务载荷。"""
+
+        def all(self) -> list[dict[str, object]]:
+            """返回两个来源的期望状态。"""
+            return [peer.model_dump(mode="json") for peer in peers]
+
+    class FakeRows:
+        """返回字段到 Meta 表及资格的映射。"""
+
+        def mappings(self) -> FakeRows:
+            """保持映射结果接口。"""
+            return self
+
+        def __iter__(self) -> Iterator[dict[str, object]]:
+            """遍历字段映射。"""
+            return iter(
+                [
+                    {"id": "column-a", "table_id": "table-a", "index_profile": profile},
+                    {"id": "column-b", "table_id": "table-b", "index_profile": profile},
+                ]
+            )
+
+    class FakeSession:
+        """提供共享刷新查询所需的最小 Session 接口。"""
+
+        async def scalars(self, statement: object) -> FakeScalars:
+            """忽略 SQL 并返回 peer 任务。"""
+            del statement
+            return FakeScalars()
+
+        async def execute(self, statement: object) -> FakeRows:
+            """忽略 SQL 并返回字段权威信息。"""
+            del statement
+            return FakeRows()
+
+    states = await shared_value_refresh_states(
+        cast(AsyncSession, FakeSession()), {"orders"}
+    )
+
+    check_equal(
+        "共享资格变化刷新全部表",
+        {state.object_id for state in states},
+        {"table-a", "table-b"},
+    )
 
 
 def _rendered(statement: ClauseElement) -> str:

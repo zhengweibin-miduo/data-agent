@@ -15,6 +15,26 @@ _BULK_DOCUMENT_LIMIT = 500
 _BULK_BYTE_LIMIT = 5 * 1024 * 1024
 
 
+def _analyzer_config(tokenizer: str) -> dict[str, object]:
+    """返回字段值索引声明的完整 analyzer 配置。"""
+    return {
+        "type": "custom",
+        "tokenizer": tokenizer,
+        "filter": [],
+        "char_filter": [],
+    }
+
+
+def _normalized_analyzer(config: dict[str, Any]) -> dict[str, object]:
+    """规范化 Elasticsearch 省略的空 analyzer 列表。"""
+    return {
+        "type": config.get("type"),
+        "tokenizer": config.get("tokenizer"),
+        "filter": config.get("filter", []),
+        "char_filter": config.get("char_filter", []),
+    }
+
+
 def metadata_value_document_id(column_id: str, value: str) -> str:
     """生成字段内规范值的稳定文档 ID。"""
     return hashlib.sha256(f"{column_id}\0{value}".encode()).hexdigest()
@@ -51,10 +71,9 @@ class MetadataValueElasticsearchIndex:
                 settings={
                     "analysis": {
                         "analyzer": {
-                            _ANALYZER: {
-                                "type": "custom",
-                                "tokenizer": app_config.elasticsearch.analyzer,
-                            }
+                            _ANALYZER: _analyzer_config(
+                                app_config.elasticsearch.analyzer
+                            )
                         }
                     }
                 },
@@ -83,7 +102,8 @@ class MetadataValueElasticsearchIndex:
         if (
             str(actual.get("dynamic")).casefold() != "strict"
             or properties != expected_properties
-            or analyzer.get("tokenizer") != app_config.elasticsearch.analyzer
+            or _normalized_analyzer(analyzer)
+            != _analyzer_config(app_config.elasticsearch.analyzer)
         ):
             raise DataAgentError(
                 "metadata_value_mapping_invalid",

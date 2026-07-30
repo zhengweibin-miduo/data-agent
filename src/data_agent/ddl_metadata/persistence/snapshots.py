@@ -18,7 +18,10 @@ from data_agent.infrastructure.mysql import (
 )
 from data_agent.memory.domain.candidates import MemoryVersions, build_accepted_memories
 from data_agent.memory.mysql.repository import MemoryRepository
-from data_agent.metadata_indexing.desired import semantic_desired_states
+from data_agent.metadata_indexing.desired import (
+    semantic_desired_states,
+    shared_value_refresh_states,
+)
 from data_agent.metadata_indexing.models import (
     MetadataIndexDesired,
     MetadataIndexOperation,
@@ -159,6 +162,17 @@ class MetadataSnapshotService:
                         metrics,
                         removed_columns=previous_columns - current_columns,
                         removed_metrics=previous_metrics - surviving_metrics,
+                    )
+                    semantic_states = [
+                        state
+                        for state in semantic_states
+                        if state.target != MetadataIndexTarget.VALUES
+                    ]
+                    semantic_states.extend(
+                        await shared_value_refresh_states(
+                            session,
+                            {item.target_table for item in desired_tables},
+                        )
                     )
                     semantic_states.extend(
                         MetadataIndexDesired(

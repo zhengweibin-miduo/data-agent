@@ -370,13 +370,14 @@ class MetadataProjectionRepository:
             await self._session.execute(
                 select(
                     column_info.c.id,
+                    column_info.c.name,
                     column_info.c.table_id,
                     column_info.c.index_profile,
                 ).where(column_info.c.id.in_(column_ids))
             )
         ).mappings()
         eligible = {
-            str(row["id"]): str(row["table_id"])
+            str(row["id"]): (str(row["table_id"]), str(row["name"]))
             for row in rows
             if ColumnValueIndexProfile.model_validate(row["index_profile"]).eligible
         }
@@ -385,7 +386,7 @@ class MetadataProjectionRepository:
                 select(data_sync_task.c.desired_json, data_sync_task.c.phase)
             )
         ).all()
-        matches: dict[str, list[tuple[str, SyncPhase, str]]] = {
+        matches: dict[str, list[tuple[str, SyncPhase, DesiredSyncTable]]] = {
             column_id: [] for column_id in eligible
         }
         for payload, phase in task_rows:
@@ -396,13 +397,31 @@ class MetadataProjectionRepository:
                         (
                             desired.schema_fingerprint,
                             SyncPhase(str(phase)),
-                            desired.target_table,
+                            desired,
                         )
                     )
+        safe_column_ids: set[str] = set()
+        eligible_by_target: dict[str, list[tuple[str, str]]] = {}
+        desired_by_target: dict[str, DesiredSyncTable] = {}
+        for column_id, task_matches in matches.items():
+            if len(task_matches) != 1:
+                continue
+            desired = task_matches[0][2]
+            desired_by_target[desired.target_table] = desired
+            eligible_by_target.setdefault(desired.target_table, []).append(
+                (column_id, eligible[column_id][1])
+            )
+        for target_table, target_eligible in eligible_by_target.items():
+            safe_column_ids.update(
+                column_id
+                for column_id, _ in await self._shared_target_eligible_columns(
+                    desired_by_target[target_table], target_eligible
+                )
+            )
         resolved = {
-            column_id: (eligible[column_id], task_matches[0][0])
+            column_id: (eligible[column_id][0], task_matches[0][0])
             for column_id, task_matches in matches.items()
-            if len(task_matches) == 1
+            if len(task_matches) == 1 and column_id in safe_column_ids
         }
         table_ids = {table_id for table_id, _ in resolved.values()}
         pending = set(
@@ -423,7 +442,7 @@ class MetadataProjectionRepository:
             )
         )
         target_tables = {
-            task_matches[0][2]
+            task_matches[0][2].target_table
             for task_matches in matches.values()
             if len(task_matches) == 1
         }
