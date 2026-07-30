@@ -42,6 +42,18 @@ def _search_text(*parts: object) -> str:
     return "\n".join(values)
 
 
+def _safe_shared_column_names(
+    peer_column_ids_by_name: dict[str, set[str]],
+    eligible_peer_ids: set[str],
+) -> set[str]:
+    """仅保留每个共享来源字段均通过资格门禁的物理列名。"""
+    return {
+        name
+        for name, column_ids in peer_column_ids_by_name.items()
+        if column_ids and column_ids <= eligible_peer_ids
+    }
+
+
 def _semantic_projection(
     *,
     kind: MetadataObjectKind,
@@ -232,6 +244,46 @@ class MetadataProjectionRepository:
                 return desired, SyncPhase(str(phase))
         return None
 
+    async def _shared_target_eligible_columns(
+        self,
+        desired: DesiredSyncTable,
+        eligible: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """共享 DW 同名字段仅在所有来源均通过资格门禁时允许聚合。"""
+        names = {name for _, name in eligible}
+        task_rows = (
+            await self._session.execute(select(data_sync_task.c.desired_json))
+        ).scalars()
+        peer_column_ids_by_name: dict[str, set[str]] = {name: set() for name in names}
+        for payload in task_rows:
+            peer = DesiredSyncTable.model_validate(payload)
+            if peer.target_table != desired.target_table:
+                continue
+            for column in peer.columns:
+                if column.name in peer_column_ids_by_name:
+                    peer_column_ids_by_name[column.name].add(column.id)
+        peer_column_ids = {
+            column_id
+            for column_ids in peer_column_ids_by_name.values()
+            for column_id in column_ids
+        }
+        rows = (
+            await self._session.execute(
+                select(column_info.c.id, column_info.c.index_profile).where(
+                    column_info.c.id.in_(peer_column_ids)
+                )
+            )
+        ).mappings()
+        eligible_peer_ids = {
+            str(row["id"])
+            for row in rows
+            if ColumnValueIndexProfile.model_validate(row["index_profile"]).eligible
+        }
+        safe_names = _safe_shared_column_names(
+            peer_column_ids_by_name, eligible_peer_ids
+        )
+        return [(column_id, name) for column_id, name in eligible if name in safe_names]
+
     async def value_projections(
         self,
         table_id: str,
@@ -247,6 +299,7 @@ class MetadataProjectionRepository:
         desired, phase = resolved
         if phase == SyncPhase.PENDING_SCHEMA:
             raise ProjectionNotReadyError("DW 表尚未完成结构物化")
+        eligible = await self._shared_target_eligible_columns(desired, eligible)
         quote = mysql_dialect().identifier_preparer.quote
         qualified = (
             f"{quote(app_config.data_sync.dw_database)}.{quote(desired.target_table)}"

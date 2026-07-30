@@ -98,7 +98,7 @@ llm:
 
 memory:
   database: data_agent
-  content_version: v2
+  content_version: v3
   projection_version: v2
   source_lease_seconds: 3600
   rebuild_batch_size: 100

@@ -10,6 +10,7 @@ from data_agent.metadata_indexing.elasticsearch import (
 from data_agent.metadata_indexing.models import (
     MetadataCandidate,
     MetadataObjectKind,
+    MetadataValueProjection,
     MetadataValueSearchResult,
 )
 from data_agent.metadata_indexing.projections import MetadataProjectionRepository
@@ -24,6 +25,18 @@ def _bounded_limit(limit: int | None) -> int:
     return min(
         limit or app_config.metadata_index.search_limit,
         app_config.metadata_index.search_limit,
+    )
+
+
+def _refresh_generation_matches(
+    before: dict[str, str],
+    after: dict[str, str],
+    projections: list[MetadataValueProjection],
+) -> bool:
+    """确认查询前后表级可见代次稳定，包含零命中场景。"""
+    return before == after and all(
+        after.get(projection.table_id) == projection.refresh_version
+        for projection in projections
     )
 
 
@@ -72,6 +85,8 @@ class MetadataSearchService:
             return MetadataValueSearchResult(values=[], complete=False)
         # 步骤二：Elasticsearch 只在解析后的字段范围内提供候选值。
         value_index = MetadataValueElasticsearchIndex(ElasticsearchClient.get_client())
+        table_ids = {table_id for table_id, _ in scope.values()}
+        versions_before = await value_index.current_refresh_versions(table_ids)
         projections = await value_index.search(query, set(scope), bounded_limit)
         # 步骤三：外部调用后重新解析权威范围，拒绝并发结构变更产生的旧命中。
         async with MySQLDatabase.session() as session:
@@ -81,12 +96,13 @@ class MetadataSearchService:
                 projections,
                 current_scope,
             )
-        current_versions = await value_index.current_refresh_versions(
+        versions_after = await value_index.current_refresh_versions(
             {table_id for table_id, _ in current_scope.values()}
         )
-        generation_matches = all(
-            current_versions.get(projection.table_id) == projection.refresh_version
-            for projection in projections
+        generation_matches = _refresh_generation_matches(
+            versions_before,
+            versions_after,
+            projections,
         )
         if not generation_matches:
             values = []

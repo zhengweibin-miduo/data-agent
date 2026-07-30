@@ -30,14 +30,44 @@ from data_agent.metadata_indexing.models import (
     MetadataSemanticProjection,
     MetadataValueProjection,
 )
-from data_agent.metadata_indexing.projections import MetadataProjectionRepository
+from data_agent.metadata_indexing.projections import (
+    MetadataProjectionRepository,
+    _safe_shared_column_names,
+)
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
+from data_agent.metadata_indexing.search import _refresh_generation_matches
 from data_agent.settings import AppSettings, app_config
 
 
 class _Session:
     """测试用 Session 占位符。"""
+
+
+def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:
+    """零命中也必须通过查询前后代次判断并发刷新。"""
+    check_equal(
+        "零命中检测到新增可见代次",
+        _refresh_generation_matches({}, {"table-1": "v2"}, []),
+        False,
+    )
+
+
+def test_shared_target_requires_every_peer_column_to_be_eligible() -> None:
+    """共享 DW 同名列存在敏感或跳过来源时不得聚合任何来源的值。"""
+    safe = _safe_shared_column_names(
+        {
+            "region": {"source-a-region", "source-b-region"},
+            "status": {"source-a-status", "source-b-status"},
+        },
+        {"source-a-region", "source-a-status", "source-b-status"},
+    )
+    check_equal("不同资格的共享字段被保守排除", safe, {"status"})
+
+
+def test_memory_content_version_rejects_pre_value_index_records() -> None:
+    """字段资格成为必填内容后必须隔离旧版语义记忆。"""
+    check_equal("长期记忆内容版本已提升", app_config.memory.content_version, "v3")
 
 
 async def test_destructive_rebuild_persists_recovery_before_reset(
@@ -488,9 +518,7 @@ async def test_value_search_uses_bounded_fuzzy_matching() -> None:
             captured.update(kwargs)
             return {"hits": {"hits": []}}
 
-    index = MetadataValueElasticsearchIndex(
-        cast(AsyncElasticsearch, FakeClient())
-    )
+    index = MetadataValueElasticsearchIndex(cast(AsyncElasticsearch, FakeClient()))
     values = await index.search("Shanghi", {"column-1"}, 10)
 
     check_equal("模糊查询返回空测试结果", values, [])
