@@ -65,7 +65,15 @@ class MetadataIndexOutboxRepository:
                     (
                         "available_at",
                         case(
-                            (changed, available),
+                            # 保留首次变更建立的最早执行期限；持续到达的新版本
+                            # 只能提前而不能反复推迟同一对象的刷新。
+                            (
+                                changed,
+                                func.least(
+                                    metadata_index_outbox.c.available_at,
+                                    available,
+                                ),
+                            ),
                             else_=metadata_index_outbox.c.available_at,
                         ),
                     ),
@@ -151,6 +159,16 @@ class MetadataIndexOutboxRepository:
                 )
             )
         return claimed
+
+    async def is_authoritative(self, item: ClaimedMetadataIndexWork) -> bool:
+        """在外部修改前确认领取身份仍是当前权威期望状态。"""
+        return bool(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(metadata_index_outbox)
+                .where(*self._authority(item))
+            )
+        )
 
     def _authority(
         self,

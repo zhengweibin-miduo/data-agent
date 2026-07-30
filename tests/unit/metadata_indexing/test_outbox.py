@@ -52,6 +52,11 @@ class _RecordingSession:
         self.statements.append(statement)
         return self._results.pop(0) if self._results else _FakeResult()
 
+    async def scalar(self, statement: ClauseElement) -> int:
+        """记录标量查询并返回存在计数。"""
+        self.statements.append(statement)
+        return 1
+
 
 def _rendered(statement: ClauseElement) -> str:
     """使用 MySQL 方言渲染语句和参数。"""
@@ -174,6 +179,30 @@ async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
         ),
         actual=duplicate,
         expected="冲突更新覆盖完整执行状态",
+    )
+    check_condition(
+        "连续变更保留最早刷新期限",
+        "least(data_sync.metadata_index_outbox.available_at" in duplicate.lower(),
+        actual=duplicate,
+        expected="available_at 使用既有期限与新 debounce 期限的较早值",
+    )
+
+
+async def test_authority_check_matches_full_claim_identity() -> None:
+    """外部修改前必须用完整期望状态与租约身份复核执行权。"""
+    session = _RecordingSession()
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+
+    check_equal("当前领取仍有执行权", await repository.is_authoritative(_work()), True)
+    rendered = _rendered(session.statements[0])
+    check_condition(
+        "执行权复核使用完整 CAS",
+        all(
+            field in rendered
+            for field in ("operation", "desired_version", "lease_token")
+        ),
+        actual=rendered,
+        expected="SELECT 同时匹配操作、版本和租约令牌",
     )
 
 

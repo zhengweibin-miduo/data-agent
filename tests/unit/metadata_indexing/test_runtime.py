@@ -59,6 +59,21 @@ class _SessionContext:
         self._state["depth"] = cast(int, self._state["depth"]) - 1
 
 
+class _LockContext:
+    """不改变事务深度的命名锁异步上下文。"""
+
+    async def __aenter__(self) -> None:
+        """进入命名锁。"""
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """退出命名锁。"""
+
+
 async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -71,6 +86,7 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
         "projection_reads": 0,
         "current_fingerprint": "v" * 64,
         "restore_calls": 0,
+        "authoritative": True,
     }
     item = ClaimedMetadataIndexWork(
         target=MetadataIndexTarget.SEMANTIC,
@@ -97,6 +113,17 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
             """返回新的记录型事务上下文。"""
             return _SessionContext(state)
 
+        @classmethod
+        def advisory_locks(
+            cls,
+            names: set[str],
+            *,
+            timeout_seconds: float,
+        ) -> _LockContext:
+            """模拟语义对象命名锁。"""
+            del cls, names, timeout_seconds
+            return _LockContext()
+
     class FakeOutboxRepository:
         """返回单项任务并记录确认深度。"""
 
@@ -107,6 +134,11 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
         async def claim(self) -> list[ClaimedMetadataIndexWork]:
             """返回一个语义 upsert。"""
             return [item]
+
+        async def is_authoritative(self, work: ClaimedMetadataIndexWork) -> bool:
+            """模拟锁内领取身份仍然有效。"""
+            del work
+            return cast(bool, state["authoritative"])
 
         async def acknowledge(self, work: ClaimedMetadataIndexWork) -> bool:
             """记录确认发生在事务内。"""
@@ -215,6 +247,17 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
     check_equal("指纹变化的迟到写入不得确认", processed, 0)
     check_equal("指纹变化不删除当前 desired state", state["ack_calls"], 1)
     check_equal("指纹变化强制新一轮收敛", state["restore_calls"], 1)
+
+    state["authoritative"] = False
+    projection_reads = state["projection_reads"]
+    processed = await MetadataIndexDispatcher().dispatch()
+
+    check_equal("过期语义领取不得处理", processed, 0)
+    check_equal(
+        "过期语义领取不得读取或修改外部投影",
+        state["projection_reads"],
+        projection_reads,
+    )
 
 
 def test_value_candidates_reject_stale_schema_fingerprint() -> None:

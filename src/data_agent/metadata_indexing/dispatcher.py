@@ -35,16 +35,23 @@ class MetadataIndexDispatcher:
         processed = 0
         # 步骤二：逐项隔离投影读取、外部写入与结算。
         for item in items:
-            if item.target == MetadataIndexTarget.VALUES:
-                lock = generation_lock_name("metadata-values", item.object_id)
-                async with MySQLDatabase.advisory_locks(
-                    {lock},
-                    timeout_seconds=app_config.data_sync.generation_lock_timeout_seconds,
-                ):
-                    if await self._synchronize(item):
-                        processed += 1
-            elif await self._synchronize(item):
-                processed += 1
+            lock_scope = (
+                "metadata-values"
+                if item.target == MetadataIndexTarget.VALUES
+                else f"metadata-semantic-{item.object_kind.value}"
+            )
+            lock = generation_lock_name(lock_scope, item.object_id)
+            async with MySQLDatabase.advisory_locks(
+                {lock},
+                timeout_seconds=app_config.data_sync.generation_lock_timeout_seconds,
+            ):
+                # 等锁期间期望状态可能已被替换；过期 worker 不得触碰外部索引。
+                async with MySQLDatabase.session() as session:
+                    authoritative = await MetadataIndexOutboxRepository(
+                        session
+                    ).is_authoritative(item)
+                if authoritative and await self._synchronize(item):
+                    processed += 1
         return processed
 
     async def report_dead_letters(self) -> None:
