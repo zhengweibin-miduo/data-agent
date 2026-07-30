@@ -48,35 +48,22 @@ ${threadList}
 
 验证全部通过后，复核 diff，确保没有无关修改。所有修复只创建一个中文提交，然后执行 \`git push origin HEAD:${headRef}\`；禁止 force-push，不创建新 PR，也不发起新的 Codex 审查。推送后使用 \`git ls-remote\` 核验远端实际提交 SHA。
 
-仅对已完成修复或确认无需修改的 thread 回复并 resolve；无法安全完成的 thread 说明阻塞原因并保持 unresolved。修复、验证或推送任一步骤失败时，不得声称已修复或 resolve。
+所有原 thread 回复和 resolve 必须通过仓库的结构化发布器执行，禁止直接使用 \`gh api\`、GraphQL mutation 或网页手工拼接回复正文：
 
-已修复的 thread 使用以下结构：
+- 已修复：推送并核验实际 40 位 SHA 后执行
+  \`node .github/scripts/codex-review-thread-reply.js --thread-id <THREAD_ID> --outcome fixed --commit-sha <实际40位SHA> --reason "<单行根因>" --fix "<单行修复说明>" --test-command "<测试命令>" --test-summary "<单行测试摘要>"\`
+- 确认无需修改：执行
+  \`node .github/scripts/codex-review-thread-reply.js --thread-id <THREAD_ID> --outcome no_change --reason "<单行判断依据>"\`
+- 无法安全完成：执行
+  \`node .github/scripts/codex-review-thread-reply.js --thread-id <THREAD_ID> --outcome blocked --reason "<单行阻塞原因>"\`
 
-提交 \`<实际提交 SHA>\` 已修复。
-
-- 根因：<问题原因>
-- 修复：<关键修改>
-- 验证：\`<测试命令>\` 通过（<简要结果>）
-
-该 thread 已 resolve。
-
-确认无需修改的 thread 使用以下结构，不得声称已有提交修复或附加测试结果：
-
-无需修改：<具体判断依据>。
-
-该 thread 已 resolve。
-
-无法安全完成时使用以下结构：
-
-无法安全完成：<具体阻塞原因>。
-
-该 thread 保持 unresolved。
+发布器负责校验实际 SHA、拒绝字面量换行和完整日志、生成固定 Markdown、跳过已 resolved thread，并且只在回复成功后按 outcome resolve。发布器失败时不得绕过它直接回复或 resolve，只在最终任务总结中说明失败。
 
 ## 输出要求
 
-每条审查意见必须在原 thread 下分别回复，并根据处理结果 resolve 或保持 unresolved。Codex 完成任务后可以使用默认格式发布任务总结，但所有 GitHub 回复、提交信息和任务总结必须使用简体中文。
+每条审查意见必须分别调用一次结构化发布器。Codex 完成任务后可以使用默认格式发布任务总结，但所有结构化字段、提交信息和任务总结必须使用简体中文。
 
-代码标识符、文件路径、命令和原始错误信息可以保留英文。代码链接必须指向推送后的实际提交 SHA，不得引用任务开始时的 Expected head。禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出，只保留测试命令、通过数量及与本次修改直接相关的异常。`;
+代码标识符、文件路径、命令和原始错误信息可以保留英文。任务总结中的代码链接必须指向推送后的实际提交 SHA，不得引用任务开始时的 Expected head。任务总结禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出，只保留测试命令、通过数量及与本次修改直接相关的异常。`;
 }
 
 function delegationBody(reviewId, headSha, headRef, threads) {
@@ -374,15 +361,15 @@ async function selfTest() {
   assert.match(body, /codex-review-loop:42:abc123/);
   assert.match(body, /^@codex fix$/m);
   assert.match(body, /修复此 PR 中所有有效且尚未解决的审查问题/);
-  assert.match(body, /所有 GitHub 回复、提交信息和任务总结必须使用简体中文/);
-  assert.match(body, /已修复的 thread 使用以下结构[\s\S]*提交 `<实际提交 SHA>` 已修复/);
-  assert.match(body, /提交 `<实际提交 SHA>` 已修复/);
-  assert.match(body, /确认无需修改的 thread[\s\S]*无需修改：<具体判断依据>/);
-  assert.match(body, /不得声称已有提交修复或附加测试结果/);
-  assert.match(body, /无法安全完成：<具体阻塞原因>/);
-  assert.match(body, /该 thread 保持 unresolved/);
-  assert.match(body, /修复、验证或推送任一步骤失败时，不得声称已修复或 resolve/);
-  assert.match(body, /禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出/);
+  assert.match(body, /所有结构化字段、提交信息和任务总结必须使用简体中文/);
+  assert.match(body, /所有原 thread 回复和 resolve 必须通过仓库的结构化发布器执行/);
+  assert.match(body, /codex-review-thread-reply\.js --thread-id <THREAD_ID> --outcome fixed/);
+  assert.match(body, /--commit-sha <实际40位SHA>/);
+  assert.match(body, /--outcome no_change/);
+  assert.match(body, /--outcome blocked/);
+  assert.match(body, /禁止直接使用 `gh api`、GraphQL mutation 或网页手工拼接回复正文/);
+  assert.match(body, /发布器失败时不得绕过它直接回复或 resolve/);
+  assert.match(body, /任务总结禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出/);
   assert.match(body, /代码链接必须指向推送后的实际提交 SHA/);
   assert.doesNotMatch(body, /\bP1\b/);
   assert.match(body, /discussion_r1/);
@@ -392,9 +379,7 @@ async function selfTest() {
   assert.match(body, /可以安全同步、重新验证并继续普通推送/);
   assert.match(body, /历史关系不明、发生冲突[\s\S]*force-push 时才停止/);
   assert.match(body, /最小修复并验证/);
-  assert.match(body, /仅对已完成修复或确认无需修改的 thread 回复并 resolve/);
-  assert.match(body, /说明依据并 resolve/);
-  assert.match(body, /无法安全完成的 thread 说明阻塞原因并保持 unresolved/);
+  assert.match(body, /只在回复成功后按 outcome resolve/);
   assert.match(body, /git push origin HEAD:feature\/test/);
   assert.doesNotMatch(body, /@codex review/);
   const context = {
