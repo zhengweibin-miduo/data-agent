@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy import column, delete, literal, or_, select, table, tuple_, update
+from sqlalchemy import (
+    case,
+    column,
+    delete,
+    func,
+    literal,
+    or_,
+    select,
+    table,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from data_agent.data_sync.models import (
     DesiredSyncTable,
@@ -188,7 +202,44 @@ async def prepare_frequency_mutation(
     return states
 
 
-def _row_is_counted(
+def _literal_type_members(data_type: str) -> tuple[str, ...]:
+    """解析 ENUM/SET 的声明顺序，供 MySQL 原生排序表达式使用。"""
+    start = data_type.find("(")
+    if start < 0 or not data_type.rstrip().endswith(")"):
+        return ()
+    return tuple(
+        next(
+            csv.reader(
+                [data_type[start + 1 : data_type.rfind(")")]],
+                delimiter=",",
+                quotechar="'",
+                escapechar="\\",
+                skipinitialspace=True,
+            )
+        )
+    )
+
+
+def _mysql_order_value(value: object, data_type: str) -> ColumnElement[Any]:
+    """把绑定值转换为与 MySQL ENUM/SET 列排序一致的数据库表达式。"""
+    normalized = data_type.lstrip().upper()
+    members = _literal_type_members(data_type)
+    bound = literal(encode_row_value(value))
+    if normalized.startswith("ENUM(") and members:
+        return func.field(bound, *members)
+    if normalized.startswith("SET(") and members:
+        numeric = literal(0)
+        for index, member in enumerate(members):
+            numeric += case(
+                (func.find_in_set(member, bound) > 0, 1 << index),
+                else_=0,
+            )
+        return numeric
+    return bound
+
+
+async def _row_is_counted(
+    session: AsyncSession,
     state: FrequencyMutationState,
     column_id: str,
     row: Mapping[str, object],
@@ -212,8 +263,24 @@ def _row_is_counted(
         return True
     if column_index > current_index or state.last_primary_key is None:
         return False
-    primary_key = tuple(row[name] for name in state.plan.desired.primary_key)
-    return primary_key <= state.last_primary_key
+    types = _primary_key_types(state.plan)
+    primary_key = tuple(
+        _mysql_order_value(row[name], data_type)
+        for name, data_type in zip(
+            state.plan.desired.primary_key,
+            types,
+            strict=True,
+        )
+    )
+    cursor = tuple(
+        _mysql_order_value(value, data_type)
+        for value, data_type in zip(
+            state.last_primary_key,
+            types,
+            strict=True,
+        )
+    )
+    return bool(await session.scalar(select(tuple_(*primary_key) <= tuple_(*cursor))))
 
 
 async def apply_frequency_row_changes(
@@ -228,10 +295,14 @@ async def apply_frequency_row_changes(
         for column_id, name, data_type in state.plan.columns:
             delta: Counter[str] = Counter()
             for row in before_rows:
-                if row.get(name) is not None and _row_is_counted(state, column_id, row):
+                if row.get(name) is not None and await _row_is_counted(
+                    session, state, column_id, row
+                ):
                     delta[_stable_value_text(row[name], data_type)] -= 1
             for row in after_rows:
-                if row.get(name) is not None and _row_is_counted(state, column_id, row):
+                if row.get(name) is not None and await _row_is_counted(
+                    session, state, column_id, row
+                ):
                     delta[_stable_value_text(row[name], data_type)] += 1
             for value_text, amount in sorted(delta.items()):
                 if amount:

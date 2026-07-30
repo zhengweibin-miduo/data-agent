@@ -4,7 +4,8 @@ from typing import cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.helpers.checks import check_equal
+from sqlalchemy.sql.elements import ClauseElement
+from tests.helpers.checks import check_condition, check_equal
 
 from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
 from data_agent.metadata_indexing import value_refresh
@@ -99,6 +100,17 @@ async def test_scan_cursor_only_applies_cdc_to_already_scanned_rows(
         "MetadataValueFrequencyRepository",
         FakeRepository,
     )
+
+    async def row_is_counted(
+        session: AsyncSession,
+        state: FrequencyMutationState,
+        column_id: str,
+        row: dict[str, object],
+    ) -> bool:
+        del session, state, column_id
+        return int(str(row["id"])) <= 10
+
+    monkeypatch.setattr(value_refresh, "_row_is_counted", row_is_counted)
     state = _state(
         MetadataValueRefreshPhase.SCAN,
         progress="region-id",
@@ -114,6 +126,61 @@ async def test_scan_cursor_only_applies_cdc_to_already_scanned_rows(
         ],
     )
     check_equal("SCAN 条件频次维护", calls, [("已扫描", 1)])
+
+
+async def test_scan_cursor_uses_mysql_enum_and_set_order() -> None:
+    """CDC 游标边界必须由 MySQL ENUM/SET 声明顺序表达式判定。"""
+    statements: list[ClauseElement] = []
+
+    class FakeSession:
+        async def scalar(self, statement: ClauseElement) -> bool:
+            statements.append(statement)
+            return True
+
+    state = _state(
+        MetadataValueRefreshPhase.SCAN,
+        progress="region-id",
+        cursor=("a", "x,y"),
+    )
+    desired = state.plan.desired.model_copy(
+        update={
+            "columns": [
+                state.plan.desired.columns[0].model_copy(
+                    update={"data_type": "ENUM('z','a')"}
+                ),
+                state.plan.desired.columns[1],
+                DesiredColumn(
+                    id="flags-id",
+                    name="flags",
+                    data_type="SET('x','y')",
+                    nullable=False,
+                ),
+            ],
+            "primary_key": ["id", "flags"],
+        }
+    )
+    enum_set_state = FrequencyMutationState(
+        table_id=state.table_id,
+        phase=state.phase,
+        frequency_version=state.frequency_version,
+        progress_column_id=state.progress_column_id,
+        last_primary_key=state.last_primary_key,
+        plan=ValueProjectionPlan(desired=desired, columns=state.plan.columns),
+    )
+
+    counted = await value_refresh._row_is_counted(
+        cast(AsyncSession, FakeSession()),
+        enum_set_state,
+        "region-id",
+        {"id": "z", "flags": "y", "region": "华东"},
+    )
+
+    check_equal("数据库边界判断结果", counted, True)
+    rendered = str(
+        statements[0].compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+    check_condition("ENUM 使用 MySQL FIELD 顺序", "field(" in rendered)
+    check_condition("SET 使用 MySQL FIND_IN_SET 位序", "find_in_set(" in rendered)
 
 
 def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:
