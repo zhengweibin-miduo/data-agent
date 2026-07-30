@@ -38,11 +38,13 @@ class ValueProjectionPlan:
     """一次字段值刷新所需的稳定 DW 表与字段读取计划。"""
 
     desired: DesiredSyncTable
-    columns: tuple[tuple[str, str], ...]
+    columns: tuple[tuple[str, str, str], ...]
 
 
-def _stable_value_text(value: object) -> str:
+def _stable_value_text(value: object, data_type: str | None = None) -> str:
     """把特殊 MySQL 值转换为跨进程稳定的可检索业务文本。"""
+    if data_type and data_type.upper().startswith("BIT(") and isinstance(value, bytes):
+        return str(int.from_bytes(value, byteorder="big", signed=False))
     encoded = encode_row_value(value)
     if isinstance(encoded, dict):
         return next(iter(encoded.values()))
@@ -316,17 +318,23 @@ class MetadataProjectionRepository:
         if phase == SyncPhase.PENDING_SCHEMA:
             raise ProjectionNotReadyError("DW 表尚未完成结构物化")
         columns = await self._shared_target_eligible_columns(desired, eligible)
-        return ValueProjectionPlan(desired=desired, columns=tuple(columns))
+        data_types = {column.name: column.data_type for column in desired.columns}
+        return ValueProjectionPlan(
+            desired=desired,
+            columns=tuple(
+                (column_id, name, data_types[name]) for column_id, name in columns
+            ),
+        )
 
     async def value_projection_batch(
         self,
         table_id: str,
         refresh_version: str,
         plan: ValueProjectionPlan,
-        column: tuple[str, str],
+        column: tuple[str, str, str],
     ) -> list[MetadataValueProjection]:
         """在单个短事务中物化一个字段的有界 top-N 投影。"""
-        column_id, name = column
+        column_id, name, data_type = column
         quote = mysql_dialect().identifier_preparer.quote
         qualified = (
             f"{quote(app_config.data_sync.dw_database)}."
@@ -346,8 +354,8 @@ class MetadataProjectionRepository:
             MetadataValueProjection(
                 column_id=column_id,
                 table_id=table_id,
-                value_text=_stable_value_text(value),
-                value_keyword=_stable_value_text(value),
+                value_text=_stable_value_text(value, data_type),
+                value_keyword=_stable_value_text(value, data_type),
                 frequency=int(frequency),
                 refresh_version=refresh_version,
                 schema_fingerprint=plan.desired.schema_fingerprint,

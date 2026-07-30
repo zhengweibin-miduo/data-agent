@@ -28,6 +28,7 @@ class MetadataIndexOperation(StrEnum):
     UPSERT = "upsert"
     DELETE = "delete"
     REFRESH = "refresh"
+    REBUILD = "rebuild"
 
 
 class MetadataIndexDesired(ContractModel):

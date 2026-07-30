@@ -23,6 +23,7 @@ from data_agent.metadata_indexing.projections import (
     ProjectionNotReadyError,
 )
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
+from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
 from data_agent.settings import app_config
 
@@ -77,8 +78,11 @@ class MetadataIndexDispatcher:
         """处理一个目标，并按完整 desired identity 确认或退避。"""
         semantic_fingerprint: str | None = None
         try:
+            if item.operation == MetadataIndexOperation.REBUILD:
+                await MetadataIndexRebuilder().rebuild_target(item.target)
+                semantic_fingerprint = None
             # 步骤一：只在短事务内读取权威投影，随后关闭事务再调用外部服务。
-            if item.target == MetadataIndexTarget.SEMANTIC:
+            elif item.target == MetadataIndexTarget.SEMANTIC:
                 semantic_fingerprint = await self._synchronize_semantic(item)
             else:
                 await self._synchronize_values(item)
@@ -104,7 +108,10 @@ class MetadataIndexDispatcher:
         # 步骤三：语义写入先重读当前 Meta 指纹，再按 desired identity 结算。
         async with MySQLDatabase.session() as session:
             repository = MetadataIndexOutboxRepository(session)
-            if item.target == MetadataIndexTarget.SEMANTIC:
+            if (
+                item.target == MetadataIndexTarget.SEMANTIC
+                and item.operation != MetadataIndexOperation.REBUILD
+            ):
                 current = await MetadataProjectionRepository(
                     session
                 ).semantic_projection(item.object_kind, item.object_id)

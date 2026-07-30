@@ -24,10 +24,10 @@ from data_agent.metadata_indexing.elasticsearch import (
 )
 from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
+    MetadataIndexDesired,
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
-    MetadataRebuildResult,
     MetadataSemanticHit,
     MetadataSemanticProjection,
     MetadataValueProjection,
@@ -109,6 +109,11 @@ def test_set_value_text_is_stable_business_value() -> None:
     )
 
 
+def test_bit_value_text_is_numeric_business_value() -> None:
+    """MySQL BIT 投影必须按字段类型转换为可查询的十进制业务值。"""
+    check_equal("BIT bytes 转十进制", _stable_value_text(b"\x05", "BIT(8)"), "5")
+
+
 def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:
     """零命中也必须通过查询前后代次判断并发刷新。"""
     check_equal(
@@ -144,64 +149,43 @@ async def test_destructive_rebuild_persists_recovery_before_reset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """破坏性重建必须先持久化恢复任务并隔离 dispatcher。"""
-    events: list[str] = []
-    lock_names: set[str] = set()
+    enqueued: list[MetadataIndexDesired] = []
 
     class FakeMySQLDatabase:
         """记录重建锁并提供异步上下文。"""
 
         @classmethod
-        def advisory_locks(
-            cls,
-            names: set[str],
-            *,
-            timeout_seconds: float,
-        ) -> _LockContext:
-            """记录锁名并返回测试上下文。"""
-            del cls, timeout_seconds
-            lock_names.update(names)
-            return _LockContext()
-
-    class FakeIndex:
-        """记录后端重建顺序。"""
-
-        def __init__(self, client: object) -> None:
-            """忽略测试客户端。"""
-            del client
-
-        async def recreate(self) -> None:
-            """记录一次外部重建。"""
-            events.append("reset")
-
-    class FakeClient:
-        """返回固定客户端占位符。"""
-
-        @classmethod
-        def get_client(cls) -> object:
-            """返回客户端占位符。"""
+        def session(cls) -> _SessionContext:
             del cls
-            return object()
+            return _SessionContext({"depth": 0})
 
-    async def fake_enqueue(self: MetadataIndexRebuilder) -> MetadataRebuildResult:
-        """记录 durable enqueue 已先完成。"""
+    async def fake_enqueue(
+        self: object, desired: list[MetadataIndexDesired]
+    ) -> None:
         del self
-        events.append("enqueue")
-        return MetadataRebuildResult(semantic_objects=1, value_tables=1)
+        enqueued.extend(desired)
 
     monkeypatch.setattr(rebuilder_module, "MySQLDatabase", FakeMySQLDatabase)
-    monkeypatch.setattr(rebuilder_module, "MetadataValueElasticsearchIndex", FakeIndex)
-    monkeypatch.setattr(rebuilder_module, "MetadataQdrantIndex", FakeIndex)
-    monkeypatch.setattr(rebuilder_module, "ElasticsearchClient", FakeClient)
-    monkeypatch.setattr(rebuilder_module, "QdrantClient", FakeClient)
-    monkeypatch.setattr(MetadataIndexRebuilder, "enqueue", fake_enqueue)
+    monkeypatch.setattr(
+        rebuilder_module.MetadataIndexOutboxRepository, "enqueue", fake_enqueue
+    )
 
     await MetadataIndexRebuilder().reset_indexes(
         confirmed_es_index=app_config.elasticsearch.metadata_value_index,
         confirmed_qdrant_collection=app_config.qdrant.metadata_collection,
     )
 
-    check_equal("恢复任务先于两个后端 reset", events, ["enqueue", "reset", "reset"])
-    check_equal("重建持有全局隔离锁", len(lock_names), 1)
+    check_equal("两个后端均有 durable 重建阶段", len(enqueued), 2)
+    check_equal(
+        "重建阶段覆盖两个目标",
+        {item.target for item in enqueued},
+        set(MetadataIndexTarget),
+    )
+    check_equal(
+        "重建阶段由 dispatcher 重试",
+        {item.operation for item in enqueued},
+        {MetadataIndexOperation.REBUILD},
+    )
 
 
 class _SessionContext:
