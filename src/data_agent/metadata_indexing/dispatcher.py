@@ -146,13 +146,13 @@ class MetadataIndexDispatcher:
         if item.operation != MetadataIndexOperation.REFRESH:
             raise ValueError("字段值索引仅支持 refresh 期望状态")
         async with MySQLDatabase.session() as session:
-            projections = await MetadataProjectionRepository(session).value_projections(
+            projections = MetadataProjectionRepository(session).value_projections(
                 item.object_id, item.desired_version
             )
-        await MetadataValueElasticsearchIndex(
-            ElasticsearchClient.get_client()
-        ).refresh_table(
-            item.object_id,
-            item.desired_version,
-            projections,
-        )
+            await MetadataValueElasticsearchIndex(
+                ElasticsearchClient.get_client()
+            ).refresh_table(
+                item.object_id,
+                item.desired_version,
+                projections,
+            )

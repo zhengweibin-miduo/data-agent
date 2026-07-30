@@ -28,6 +28,11 @@ def _bounded_limit(limit: int | None) -> int:
     )
 
 
+def _semantic_candidate_limit() -> int:
+    """返回权威过滤前的有界语义候选池大小。"""
+    return app_config.metadata_index.search_limit
+
+
 def _refresh_generation_matches(
     before: dict[str, str],
     after: dict[str, str],
@@ -56,13 +61,14 @@ class MetadataSearchService:
         # 步骤一：Qdrant 只提供有序对象身份，不提供权威业务内容。
         vector = await TEIEmbeddingClient.get_client().aembed_query(query)
         identities = await MetadataQdrantIndex(QdrantClient.get_client()).search(
-            query, vector, kinds, bounded_limit
+            query, vector, kinds, _semantic_candidate_limit()
         )
         # 步骤二：从 Meta 回读当前对象；存在 pending desired state 的候选不可用。
         async with MySQLDatabase.session() as session:
-            return await MetadataProjectionRepository(session).authoritative_candidates(
-                identities
-            )
+            candidates = await MetadataProjectionRepository(
+                session
+            ).authoritative_candidates(identities)
+        return candidates[:bounded_limit]
 
     async def search_values(
         self,

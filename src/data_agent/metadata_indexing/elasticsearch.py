@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
 from typing import Any, cast
 
 from elasticsearch import AsyncElasticsearch
@@ -122,10 +123,10 @@ class MetadataValueElasticsearchIndex:
         self,
         table_id: str,
         refresh_version: str,
-        projections: list[MetadataValueProjection],
+        projections: AsyncIterable[MetadataValueProjection],
     ) -> None:
         """批量覆盖当前 top-N，并清理表内旧刷新版本。"""
-        for operations in _bulk_chunks(projections):
+        async for operations in _async_bulk_chunks(projections):
             response = await self._client.bulk(operations=operations, refresh=False)
             if response.get("errors"):
                 raise RuntimeError("Elasticsearch Meta 字段值 bulk 写入失败")
@@ -206,40 +207,68 @@ class MetadataValueElasticsearchIndex:
 
 
 def _bulk_chunks(
-    projections: list[MetadataValueProjection],
-) -> list[list[dict[str, object]]]:
-    """按文档数和 NDJSON 字节双预算构造 bulk 分块。"""
-    chunks: list[list[dict[str, object]]] = []
+    projections: Iterable[MetadataValueProjection],
+) -> Iterator[list[dict[str, object]]]:
+    """按文档数和 NDJSON 字节双预算惰性生成 bulk 分块。"""
     current: list[dict[str, object]] = []
     current_bytes = 0
     for projection in projections:
-        pair: list[dict[str, object]] = [
-            {
-                "index": {
-                    "_index": app_config.elasticsearch.metadata_value_index,
-                    "_id": metadata_value_document_id(
-                        projection.column_id, projection.value_keyword
-                    ),
-                }
-            },
-            projection.model_dump(mode="json"),
-        ]
-        pair_bytes = sum(
-            len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode())
-            + 1
-            for item in pair
-        )
+        pair, pair_bytes = _bulk_pair(projection)
         if pair_bytes > _BULK_BYTE_LIMIT:
             raise ValueError("单个 Meta 字段值超过 Elasticsearch bulk 字节上限")
         if current and (
             len(current) // 2 >= _BULK_DOCUMENT_LIMIT
             or current_bytes + pair_bytes > _BULK_BYTE_LIMIT
         ):
-            chunks.append(current)
+            yield current
             current = []
             current_bytes = 0
         current.extend(pair)
         current_bytes += pair_bytes
     if current:
-        chunks.append(current)
-    return chunks
+        yield current
+
+
+async def _async_bulk_chunks(
+    projections: AsyncIterable[MetadataValueProjection],
+) -> AsyncIterator[list[dict[str, object]]]:
+    """消费异步投影流，并在达到预算时立即产出 bulk 分块。"""
+    current: list[dict[str, object]] = []
+    current_bytes = 0
+    async for projection in projections:
+        pair, pair_bytes = _bulk_pair(projection)
+        if current and (
+            len(current) // 2 >= _BULK_DOCUMENT_LIMIT
+            or current_bytes + pair_bytes > _BULK_BYTE_LIMIT
+        ):
+            yield current
+            current = []
+            current_bytes = 0
+        current.extend(pair)
+        current_bytes += pair_bytes
+    if current:
+        yield current
+
+
+def _bulk_pair(
+    projection: MetadataValueProjection,
+) -> tuple[list[dict[str, object]], int]:
+    """构造单文档 bulk 操作并计算其 NDJSON 字节数。"""
+    pair: list[dict[str, object]] = [
+        {
+            "index": {
+                "_index": app_config.elasticsearch.metadata_value_index,
+                "_id": metadata_value_document_id(
+                    projection.column_id, projection.value_keyword
+                ),
+            }
+        },
+        projection.model_dump(mode="json"),
+    ]
+    pair_bytes = sum(
+        len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode()) + 1
+        for item in pair
+    )
+    if pair_bytes > _BULK_BYTE_LIMIT:
+        raise ValueError("单个 Meta 字段值超过 Elasticsearch bulk 字节上限")
+    return pair, pair_bytes

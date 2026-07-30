@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace, TracebackType
 from typing import cast
 
@@ -19,6 +20,7 @@ from data_agent.metadata_indexing import rebuilder as rebuilder_module
 from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 from data_agent.metadata_indexing.elasticsearch import (
     MetadataValueElasticsearchIndex,
+    _async_bulk_chunks,
 )
 from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
@@ -36,12 +38,55 @@ from data_agent.metadata_indexing.projections import (
 )
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
-from data_agent.metadata_indexing.search import _refresh_generation_matches
+from data_agent.metadata_indexing.search import (
+    _refresh_generation_matches,
+    _semantic_candidate_limit,
+)
 from data_agent.settings import AppSettings, app_config
 
 
 class _Session:
     """测试用 Session 占位符。"""
+
+
+def _value_projection(value: str) -> MetadataValueProjection:
+    """构造字段值流式分块测试投影。"""
+    return MetadataValueProjection(
+        column_id="column-1",
+        table_id="table-1",
+        value_text=value,
+        value_keyword=value,
+        frequency=1,
+        refresh_version="v1",
+        schema_fingerprint="schema-1",
+    )
+
+
+async def test_bulk_chunks_emit_before_projection_stream_is_exhausted() -> None:
+    """字段值流尚未穷尽时必须先产出首个有界 bulk。"""
+    consumed = 0
+
+    async def projections() -> AsyncIterator[MetadataValueProjection]:
+        """产生超过一个 bulk 的投影，并记录已读取数量。"""
+        nonlocal consumed
+        for index in range(1_000):
+            consumed += 1
+            yield _value_projection(str(index))
+
+    chunks = _async_bulk_chunks(projections())
+    first = await anext(chunks)
+
+    check_equal("首批文档数受预算限制", len(first) // 2, 500)
+    check_equal("首批发送前未读取剩余投影", consumed, 501)
+
+
+def test_semantic_search_overfetches_bounded_candidate_pool() -> None:
+    """语义权威过滤前必须拉取配置允许的完整候选池。"""
+    check_equal(
+        "语义候选池使用配置上限",
+        _semantic_candidate_limit(),
+        app_config.metadata_index.search_limit,
+    )
 
 
 def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:

@@ -1,5 +1,7 @@
 """从权威 Meta 与 DW 构造当前索引投影。"""
 
+from collections.abc import AsyncIterator
+
 from sqlalchemy import select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -288,14 +290,14 @@ class MetadataProjectionRepository:
         self,
         table_id: str,
         refresh_version: str,
-    ) -> list[MetadataValueProjection]:
+    ) -> AsyncIterator[MetadataValueProjection]:
         """从当前 DW 快照聚合每字段高频 top-N 非空值。"""
         eligible = await self.eligible_columns(table_id)
         if not eligible:
-            return []
+            return
         resolved = await self.desired_table_for_columns({item[0] for item in eligible})
         if resolved is None:
-            return []
+            return
         desired, phase = resolved
         if phase == SyncPhase.PENDING_SCHEMA:
             raise ProjectionNotReadyError("DW 表尚未完成结构物化")
@@ -304,7 +306,6 @@ class MetadataProjectionRepository:
         qualified = (
             f"{quote(app_config.data_sync.dw_database)}.{quote(desired.target_table)}"
         )
-        projections: list[MetadataValueProjection] = []
         for column_id, name in eligible:
             quoted = quote(name)
             rows = await self._session.execute(
@@ -316,8 +317,8 @@ class MetadataProjectionRepository:
                 ),
                 {"limit": app_config.metadata_index.value_top_n},
             )
-            projections.extend(
-                MetadataValueProjection(
+            for value, frequency in rows:
+                yield MetadataValueProjection(
                     column_id=column_id,
                     table_id=table_id,
                     value_text=str(value),
@@ -326,9 +327,6 @@ class MetadataProjectionRepository:
                     refresh_version=refresh_version,
                     schema_fingerprint=desired.schema_fingerprint,
                 )
-                for value, frequency in rows
-            )
-        return projections
 
     async def semantic_identities(
         self,
