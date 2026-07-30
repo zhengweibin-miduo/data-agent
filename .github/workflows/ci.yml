@@ -65,6 +65,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Initialize metadata database
+        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/meta.sql
+
       - name: Initialize application memory database
         run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_agent.sql
 
