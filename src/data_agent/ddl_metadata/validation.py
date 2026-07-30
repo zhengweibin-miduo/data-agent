@@ -66,17 +66,27 @@ def _value_index_evidence_by_column(schema: PhysicalSchema) -> dict[str, set[str
         for table in schema.tables
         for column in table.columns
     }
-    tables_by_name = {table.qualified_name: table for table in schema.tables}
+    tables_by_name = {table.qualified_name.casefold(): table for table in schema.tables}
+    source_tables = {table.id: table for table in schema.tables}
     # 步骤二：仅把当前字段直接引用的目标表列加入作用域，拒绝同模式无关对象。
     for relationship in schema.relationships:
-        target_table = tables_by_name.get(relationship.target_table)
+        source_table = source_tables.get(relationship.source_table_id)
+        target_name = relationship.target_table.casefold()
+        target_table = tables_by_name.get(target_name)
+        if target_table is None and source_table is not None and "." not in target_name:
+            qualified_target = (
+                f"{source_table.schema_name}.{target_name}"
+                if source_table.schema_name
+                else target_name
+            )
+            target_table = tables_by_name.get(qualified_target.casefold())
         if target_table is None:
             continue
         target_column = next(
             (
                 column
                 for column in target_table.columns
-                if column.name == relationship.target_column
+                if column.name.casefold() == relationship.target_column.casefold()
             ),
             None,
         )

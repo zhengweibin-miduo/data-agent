@@ -238,17 +238,21 @@ async def test_value_index_evidence_is_scoped_to_column_context() -> None:
         column.id for column in customer_table.columns if column.name == "id"
     )
     foreign_key = next(
-        column for column in metadata.columns if column.column_id in {
+        column
+        for column in metadata.columns
+        if column.column_id
+        in {
             physical.id
             for physical in order_table.columns
             if physical.name == "customer_id"
         }
     )
     unrelated = next(
-        column for column in metadata.columns if column.column_id in {
-            physical.id
-            for physical in order_table.columns
-            if physical.name == "amount"
+        column
+        for column in metadata.columns
+        if column.column_id
+        in {
+            physical.id for physical in order_table.columns if physical.name == "amount"
         }
     )
 
@@ -286,4 +290,68 @@ async def test_value_index_evidence_is_scoped_to_column_context() -> None:
             if issue.code == "invalid_value_index_evidence"
         ],
         [f"columns.{unrelated.column_id}.value_index.evidence"],
+    )
+
+
+async def test_value_index_evidence_resolves_mysql_reference_names() -> None:
+    """限定建表名下未限定且大小写不同的外键目标仍属于真实关系证据。"""
+    schema = await parse_ddl(
+        "validator",
+        """
+        CREATE TABLE sales.dim_customer (ID BIGINT PRIMARY KEY);
+        CREATE TABLE sales.fact_order (
+            order_id BIGINT PRIMARY KEY,
+            customer_id BIGINT,
+            FOREIGN KEY (customer_id) REFERENCES DIM_CUSTOMER(id)
+        );
+        """,
+    )
+    target = next(table for table in schema.tables if table.name == "dim_customer")
+    source = next(table for table in schema.tables if table.name == "fact_order")
+    source_column = next(
+        column for column in source.columns if column.name == "customer_id"
+    )
+    target_column = target.columns[0]
+    metadata = SemanticMetadata(
+        tables=[
+            SemanticTable(
+                table_id=table.id,
+                role=TableRole.DIM,
+                description=table.name,
+                confidence=0.99,
+                evidence=[table.id],
+            )
+            for table in schema.tables
+        ],
+        columns=[
+            SemanticColumn(
+                column_id=column.id,
+                role=(
+                    ColumnRole(column.structural_role)
+                    if column.structural_role
+                    else ColumnRole.DIMENSION
+                ),
+                description=column.name,
+                confidence=0.99,
+                evidence=[column.id],
+                value_index=ColumnValueIndexProfile(
+                    decision=ValueIndexDecision.INDEX,
+                    sensitivity=ValueSensitivity.NON_SENSITIVE,
+                    reason="真实外键关系支持业务检索",
+                    evidence=(
+                        [column.id, target.id, target_column.id]
+                        if column.id == source_column.id
+                        else [column.id]
+                    ),
+                ),
+            )
+            for table in schema.tables
+            for column in table.columns
+        ],
+    )
+
+    check_equal(
+        "未限定外键目标按来源 schema 解析",
+        validate_metadata(schema, metadata),
+        [],
     )

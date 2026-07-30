@@ -32,6 +32,10 @@ class LeaseLostError(RuntimeError):
     """当前 worker 已失去任务租约，不应消耗远程失败预算。"""
 
 
+class LocalProjectionError(RuntimeError):
+    """权威 MySQL 投影读取失败，不应消耗远程服务失败预算。"""
+
+
 class MetadataIndexDispatcher:
     """以短事务领取和结算可重建的 Meta 索引投影。"""
 
@@ -96,6 +100,11 @@ class MetadataIndexDispatcher:
                 await MetadataIndexOutboxRepository(session).defer(item)
             logger.info("Meta 索引任务租约已失效，本次处理无损结束")
             return False
+        except LocalProjectionError:
+            async with MySQLDatabase.session() as session:
+                await MetadataIndexOutboxRepository(session).defer(item)
+            logger.warning("Meta 索引权威投影读取失败，本次处理无损延后")
+            return False
         except Exception as error:
             # 步骤二：失败只退避本项，异常内容不进入持久化状态。
             async with MySQLDatabase.session() as session:
@@ -141,13 +150,16 @@ class MetadataIndexDispatcher:
         if item.operation == MetadataIndexOperation.DELETE:
             await index.delete(item.object_kind, item.object_id)
             return None
-        async with MySQLDatabase.session() as session:
-            projection = await MetadataProjectionRepository(
-                session
-            ).semantic_projection(
-                item.object_kind,
-                item.object_id,
-            )
+        try:
+            async with MySQLDatabase.session() as session:
+                projection = await MetadataProjectionRepository(
+                    session
+                ).semantic_projection(
+                    item.object_kind,
+                    item.object_id,
+                )
+        except Exception as error:
+            raise LocalProjectionError from error
         if projection is None:
             await index.delete(item.object_kind, item.object_id)
             return None
@@ -164,10 +176,15 @@ class MetadataIndexDispatcher:
         """从当前 DW 快照重算一张表的合格字段 top-N 值。"""
         if item.operation != MetadataIndexOperation.REFRESH:
             raise ValueError("字段值索引仅支持 refresh 期望状态")
-        async with MySQLDatabase.session() as session:
-            plan = await MetadataProjectionRepository(session).value_projection_plan(
-                item.object_id
-            )
+        try:
+            async with MySQLDatabase.session() as session:
+                plan = await MetadataProjectionRepository(
+                    session
+                ).value_projection_plan(item.object_id)
+        except ProjectionNotReadyError:
+            raise
+        except Exception as error:
+            raise LocalProjectionError from error
 
         async def renew() -> None:
             async with MySQLDatabase.session() as session:
@@ -180,15 +197,18 @@ class MetadataIndexDispatcher:
                 return
             for column in plan.columns:
                 await renew()
-                async with MySQLDatabase.session() as session:
-                    batch = await MetadataProjectionRepository(
-                        session
-                    ).value_projection_batch(
-                        item.object_id,
-                        item.desired_version,
-                        plan,
-                        column,
-                    )
+                try:
+                    async with MySQLDatabase.session() as session:
+                        batch = await MetadataProjectionRepository(
+                            session
+                        ).value_projection_batch(
+                            item.object_id,
+                            item.desired_version,
+                            plan,
+                            column,
+                        )
+                except Exception as error:
+                    raise LocalProjectionError from error
                 await renew()
                 for projection in batch:
                     yield projection
