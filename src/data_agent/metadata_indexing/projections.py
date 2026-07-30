@@ -6,7 +6,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.mysql import dialect as mysql_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data_agent.data_sync.models import DesiredSyncTable, SyncPhase
+from data_agent.data_sync.models import DesiredSyncTable, SyncPhase, encode_row_value
 from data_agent.data_sync.tables import data_sync_task
 from data_agent.ddl_metadata.persistence.tables import (
     column_info,
@@ -39,6 +39,16 @@ class ValueProjectionPlan:
 
     desired: DesiredSyncTable
     columns: tuple[tuple[str, str], ...]
+
+
+def _stable_value_text(value: object) -> str:
+    """把特殊 MySQL 值转换为跨进程稳定的可检索业务文本。"""
+    encoded = encode_row_value(value)
+    if isinstance(encoded, dict):
+        return next(iter(encoded.values()))
+    if encoded is None:
+        raise TypeError("Meta 字段值投影不接受 NULL")
+    return str(encoded)
 
 
 def _search_text(*parts: object) -> str:
@@ -336,8 +346,8 @@ class MetadataProjectionRepository:
             MetadataValueProjection(
                 column_id=column_id,
                 table_id=table_id,
-                value_text=str(value),
-                value_keyword=str(value),
+                value_text=_stable_value_text(value),
+                value_keyword=_stable_value_text(value),
                 frequency=int(frequency),
                 refresh_version=refresh_version,
                 schema_fingerprint=plan.desired.schema_fingerprint,

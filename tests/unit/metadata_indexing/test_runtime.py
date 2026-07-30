@@ -35,12 +35,14 @@ from data_agent.metadata_indexing.models import (
 from data_agent.metadata_indexing.projections import (
     MetadataProjectionRepository,
     _safe_shared_column_names,
+    _stable_value_text,
 )
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
 from data_agent.metadata_indexing.search import (
     _refresh_generation_matches,
     _semantic_candidate_limit,
+    _value_candidate_limit,
 )
 from data_agent.settings import AppSettings, app_config
 
@@ -86,6 +88,24 @@ def test_semantic_search_overfetches_bounded_candidate_pool() -> None:
         "语义候选池使用配置上限",
         _semantic_candidate_limit(),
         app_config.metadata_index.search_limit,
+    )
+
+
+def test_value_search_overfetches_bounded_candidate_pool() -> None:
+    """字段值权威过滤前必须拉取配置允许的完整候选池。"""
+    check_equal(
+        "字段值候选池使用配置上限",
+        _value_candidate_limit(),
+        app_config.metadata_index.search_limit,
+    )
+
+
+def test_set_value_text_is_stable_business_value() -> None:
+    """MySQL SET 投影必须使用稳定业务文本而非 Python 容器表示。"""
+    check_equal(
+        "SET 值按名称排序并用逗号连接",
+        _stable_value_text({"beta", "alpha"}),
+        "alpha,beta",
     )
 
 

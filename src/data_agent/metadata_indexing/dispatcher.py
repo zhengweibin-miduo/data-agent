@@ -27,6 +27,10 @@ from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepositor
 from data_agent.settings import app_config
 
 
+class LeaseLostError(RuntimeError):
+    """当前 worker 已失去任务租约，不应消耗远程失败预算。"""
+
+
 class MetadataIndexDispatcher:
     """以短事务领取和结算可重建的 Meta 索引投影。"""
 
@@ -82,6 +86,11 @@ class MetadataIndexDispatcher:
             async with MySQLDatabase.session() as session:
                 await MetadataIndexOutboxRepository(session).defer(item)
             logger.info("Meta 字段值投影等待 DW 表完成物化")
+            return False
+        except LeaseLostError:
+            async with MySQLDatabase.session() as session:
+                await MetadataIndexOutboxRepository(session).defer(item)
+            logger.info("Meta 索引任务租约已失效，本次处理无损结束")
             return False
         except Exception as error:
             # 步骤二：失败只退避本项，异常内容不进入持久化状态。
@@ -157,7 +166,7 @@ class MetadataIndexDispatcher:
             async with MySQLDatabase.session() as session:
                 renewed = await MetadataIndexOutboxRepository(session).renew_lease(item)
             if not renewed:
-                raise RuntimeError("Meta 索引任务 lease 已失效")
+                raise LeaseLostError("Meta 索引任务 lease 已失效")
 
         async def projections() -> AsyncIterator[MetadataValueProjection]:
             if plan is None:

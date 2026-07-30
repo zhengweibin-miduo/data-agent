@@ -33,6 +33,11 @@ def _semantic_candidate_limit() -> int:
     return app_config.metadata_index.search_limit
 
 
+def _value_candidate_limit() -> int:
+    """返回权威过滤前的有界字段值候选池大小。"""
+    return app_config.metadata_index.search_limit
+
+
 def _refresh_generation_matches(
     before: dict[str, str],
     after: dict[str, str],
@@ -93,7 +98,9 @@ class MetadataSearchService:
         value_index = MetadataValueElasticsearchIndex(ElasticsearchClient.get_client())
         table_ids = {table_id for table_id, _ in scope.values()}
         versions_before = await value_index.current_refresh_versions(table_ids)
-        projections = await value_index.search(query, set(scope), bounded_limit)
+        projections = await value_index.search(
+            query, set(scope), _value_candidate_limit()
+        )
         # 步骤三：外部调用后重新解析权威范围，拒绝并发结构变更产生的旧命中。
         async with MySQLDatabase.session() as session:
             repository = MetadataProjectionRepository(session)
@@ -113,4 +120,6 @@ class MetadataSearchService:
         if not generation_matches:
             values = []
             complete = False
-        return MetadataValueSearchResult(values=values, complete=complete)
+        return MetadataValueSearchResult(
+            values=values[:bounded_limit], complete=complete
+        )

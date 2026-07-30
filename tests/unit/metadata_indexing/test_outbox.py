@@ -138,6 +138,35 @@ async def test_shared_eligibility_change_refreshes_every_peer_table() -> None:
         {"table-a", "table-b"},
     )
 
+    changed_peers = [
+        peers[0],
+        peers[1].model_copy(update={"schema_fingerprint": "c" * 64}),
+    ]
+
+    class ChangedScalars(FakeScalars):
+        """返回仅全局投影指纹变化的共享任务载荷。"""
+
+        def all(self) -> list[dict[str, object]]:
+            """保持物理 desired hash，仅替换投影使用的指纹。"""
+            return [peer.model_dump(mode="json") for peer in changed_peers]
+
+    class ChangedSession(FakeSession):
+        """提供变更后的共享任务。"""
+
+        async def scalars(self, statement: object) -> ChangedScalars:
+            """忽略 SQL 并返回变更后的 peer 任务。"""
+            del statement
+            return ChangedScalars()
+
+    changed_states = await shared_value_refresh_states(
+        cast(AsyncSession, ChangedSession()), {"orders"}
+    )
+    check_condition(
+        "共享投影指纹变化生成新值版本",
+        states[0].desired_version != changed_states[0].desired_version,
+        expected="schema_fingerprint 变化必须替换 VALUES desired_version",
+    )
+
 
 def _rendered(statement: ClauseElement) -> str:
     """使用 MySQL 方言渲染语句和参数。"""

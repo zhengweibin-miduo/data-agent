@@ -221,7 +221,8 @@ async def shared_value_refresh_states(
             {
                 "target_table": target_table,
                 "peer_generations": sorted(
-                    peer.desired_hash() for peer in target_peers
+                    (peer.desired_hash(), peer.schema_fingerprint)
+                    for peer in target_peers
                 ),
                 "field_eligibility": eligibility,
                 "projection_version": app_config.metadata_index.projection_version,
@@ -272,6 +273,9 @@ async def enqueue_value_refresh(
                 desired_version=metadata_desired_version(
                     {
                         "desired_hash": desired.desired_hash(),
+                        "peer_schema_fingerprints": sorted(
+                            peer.schema_fingerprint for peer in [desired, *peers]
+                        ),
                         "position": version_payload,
                         "target_table": desired.target_table,
                     }
