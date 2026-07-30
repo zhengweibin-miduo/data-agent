@@ -122,6 +122,16 @@ class MetadataIndexRebuilder:
                             "table_id": table_id,
                         }
                     ),
+                    frequency_version=metadata_desired_version(
+                        {
+                            "rebuild_frequency_generation": rebuild_generation,
+                            "projection_version": (
+                                app_config.metadata_index.projection_version
+                            ),
+                            "table_id": table_id,
+                            "normalization_version": 1,
+                        }
+                    ),
                 )
                 for table_id in sorted(table_ids)
                 if target in (None, MetadataIndexTarget.VALUES)

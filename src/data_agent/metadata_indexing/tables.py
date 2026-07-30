@@ -1,6 +1,17 @@
 """Meta 索引 desired state 表。"""
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, Table, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+    func,
+)
 
 from data_agent.persistence.schema import metadata
 from data_agent.settings import app_config
@@ -14,7 +25,13 @@ metadata_index_outbox = Table(
     Column("operation", String(16), nullable=False),
     Column("desired_version", String(64), nullable=False),
     Column("pending_desired_version", String(64), nullable=True),
+    Column("frequency_version", String(64), nullable=True),
+    Column("pending_frequency_version", String(64), nullable=True),
+    Column("phase", String(24), nullable=True),
     Column("progress_column_id", String(128), nullable=True),
+    Column("last_primary_key", JSON, nullable=True),
+    Column("bulk_cursor", JSON, nullable=True),
+    Column("index_generation", String(64), nullable=True),
     Column("attempts", Integer, nullable=False, server_default="0"),
     Column("available_at", DateTime, nullable=False, server_default=func.now()),
     Column("lease_token", String(32), nullable=True),
@@ -33,6 +50,84 @@ metadata_index_outbox = Table(
         "available_at",
         "lease_expires_at",
         "attempts",
+    ),
+    schema=app_config.data_sync.database,
+)
+
+metadata_value_frequency = Table(
+    "metadata_value_frequency",
+    metadata,
+    Column("table_id", String(128), primary_key=True),
+    Column("column_id", String(128), primary_key=True),
+    Column("frequency_version", String(64), primary_key=True),
+    Column("value_hash", String(64), primary_key=True),
+    Column("value_text", Text, nullable=False),
+    Column("frequency", BigInteger, nullable=False),
+    Column(
+        "updated_at",
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+    Index(
+        "idx_metadata_value_frequency_top",
+        "table_id",
+        "frequency_version",
+        "column_id",
+        "frequency",
+        "value_hash",
+    ),
+    schema=app_config.data_sync.database,
+)
+
+metadata_value_publication = Table(
+    "metadata_value_publication",
+    metadata,
+    Column("table_id", String(128), primary_key=True),
+    Column("index_generation", String(64), primary_key=True),
+    Column("document_id", String(64), primary_key=True),
+    Column("column_id", String(128), nullable=False),
+    Column("value_hash", String(64), nullable=False),
+    Column("value_text", Text, nullable=False),
+    Column("schema_fingerprint", String(64), nullable=False),
+    Column("desired_membership_version", String(64), nullable=True),
+    Column("desired_frequency", BigInteger, nullable=True),
+    Column("desired_payload_hash", String(64), nullable=True),
+    Column("published_payload_hash", String(64), nullable=True),
+    Column("pending_action", String(16), nullable=True),
+    Column("action_version", String(64), nullable=True),
+    Column("action_payload_hash", String(64), nullable=True),
+    Column("action_payload_json", JSON, nullable=True),
+    Column(
+        "updated_at",
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+    Index(
+        "idx_metadata_value_publication_desired",
+        "table_id",
+        "index_generation",
+        "desired_membership_version",
+        "column_id",
+        "document_id",
+    ),
+    Index(
+        "idx_metadata_value_publication_published",
+        "table_id",
+        "index_generation",
+        "published_payload_hash",
+        "document_id",
+    ),
+    Index(
+        "idx_metadata_value_publication_action",
+        "table_id",
+        "index_generation",
+        "action_version",
+        "pending_action",
+        "document_id",
     ),
     schema=app_config.data_sync.database,
 )

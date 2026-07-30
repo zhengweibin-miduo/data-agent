@@ -130,94 +130,99 @@ settlements must not.
 
 ### 1. Scope / Trigger
 
-Use this contract when a derived-index refresh can exceed one worker execution
-because it scans several fields or sends several remote batches. Extending the
-job timeout is not recovery: cancellation and process exit still lose volatile
-progress.
+Use this contract whenever exact field-value indexing can exceed one worker
+execution. Extending the timeout, `GROUP BY LIMIT/OFFSET`, and table-wide
+`delete_by_query` are not recovery mechanisms.
 
 ### 2. Signatures
 
 ```python
-await MetadataIndexOutboxRepository(session).advance_progress(
-    claimed_work,
-    column_id,
-) -> bool
-await MetadataValueElasticsearchIndex.upsert_projections(projections, heartbeat)
-await MetadataValueElasticsearchIndex.finalize_table(
-    table_id,
-    refresh_version,
-    heartbeat,
-)
+await MetadataValueRefresh().run_next_unit(claimed_work) -> bool
+await prepare_frequency_mutation(session, desired_table)
+await apply_frequency_row_changes(session, states, before_rows, after_rows)
 ```
 
-`data_sync.metadata_index_outbox.progress_column_id VARCHAR(128) NULL` stores
-the last fully written field for `target=values, operation=refresh`.
+The durable phases are `SCAN`, `SELECT_TOP_N`, `PUBLISH`, `CLEANUP`, and
+`COMPLETE`. The outbox stores `phase`, `progress_column_id`,
+`last_primary_key`, `bulk_cursor`, `desired_version`, `frequency_version`,
+`index_generation`, and lease authority. `metadata_value_frequency` stores
+exact counts. `metadata_value_publication` stores desired membership, the
+previously published ID set, and pending remote actions.
 
 ### 3. Contracts
 
-- Eligible fields are processed in stable `column_info.id` order, one field per
-  claimed execution. A missing cursor starts at the first field; an unknown
-  cursor conservatively restarts there.
-- `advance_progress` matches the full desired identity plus `lease_token`, then
-  stores the field ID and releases the lease in the same short transaction.
-- A new `desired_version` atomically clears progress, retry error, and lease
-  state. Re-enqueueing the same version preserves progress.
-- Elasticsearch field writes are idempotent by stable document ID and refresh
-  version. MySQL progress failure after a write replays that field without
-  consuming the remote-service retry budget.
-- Old refresh versions are deleted only on a later claim after the last field
-  cursor is durable. Search remains incomplete while the outbox row exists.
-- Renew the lease both before and after every remote write or cleanup. A stale
-  worker may have produced a harmless old projection, but it must not advance
-  progress or acknowledge the outbox.
+- `SCAN` reads raw DW rows by ordered primary-key keyset and advances
+  `last_primary_key` in the same transaction that updates exact frequency.
+  One claim reads at most `value_scan_batch_size` rows. The cursor is a
+  versioned envelope containing `v`, `schema_fingerprint`, ordered primary-key
+  column names, their MySQL types, and encoded values; recovery rejects the
+  cursor unless every identity field matches the current plan.
+- Backfill and CDC lock in the order metadata state, DW row, frequency row.
+  Their DW DML, exact `before -1 / after +1`, event or cursor acknowledgement,
+  and desired enqueue share one MySQL transaction.
+- Existing CDC coordinates and backfill cursors are the only delivery
+  idempotency source. A count reaching zero is deleted; an unapplied event
+  producing a negative count aborts the transaction.
+- `SELECT_TOP_N` handles one stable column per claim and reads
+  `frequency DESC, value_hash ASC` from the ordering index. At most N selected
+  rows are fetched for `value_text`; no full-table aggregation is performed.
+- Current membership is exactly
+  `desired_membership_version == desired_version`. Older membership is an
+  executable tombstone, not an implicit refresh-version query.
+- Elasticsearch IDs are derived from `table_id`, `column_id`, and
+  `value_hash`. `PUBLISH` and `CLEANUP` persist actions before remote I/O,
+  execute count/byte-bounded bulk calls, and settle with full lease/version
+  CAS. Cleanup deletes only explicit IDs.
+- A same-frequency desired version preserves an active SCAN cursor but resets
+  later phases to `SELECT_TOP_N`. A changed frequency version restarts SCAN in
+  a new generation. Late workers cannot settle a replaced lease.
+- A VALUES outbox row remains at `COMPLETE`; completeness queries ignore that
+  terminal phase but use it as the stable CDC and future-version anchor.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required behavior |
 |---|---|
-| Worker is cancelled before cursor commit | Lease expires; replay current field |
-| Bulk succeeds but progress transaction fails | Defer without incrementing `attempts`; replay idempotently |
-| Desired version changes during field write | Post-write lease check fails; do not advance old progress |
-| Final cleanup fails | Keep last-field cursor and outbox; retry cleanup with remote back-off |
-| Lease changes during final cleanup | Do not acknowledge; the current desired state runs again |
-| Cursor is absent from the current plan | Restart from the first stable field |
-| No eligible fields remain | Finalize immediately so old documents are removed |
+| Worker exits before SCAN commit | Frequency and cursor roll back together |
+| Worker exits after SCAN commit | Resume strictly after `last_primary_key` |
+| Cursor schema, PK order, or PK type differs | Reject recovery; never reuse values by length alone |
+| Bulk outcome is unknown | Replay the persisted stable-ID action |
+| Bulk succeeds but settle fails | Pending action remains and is replayed |
+| Desired version changes during a unit | Promote at the unit boundary |
+| Lease changes during remote I/O | Do not settle; current owner replays |
+| Value leaves Top-N | CLEANUP selects its older membership and explicit ID |
+| No eligible fields remain | Publish an empty desired set, then bounded cleanup |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: a wide table advances one durable field per claim and eventually
-  finalizes even when total work exceeds the worker timeout.
-- Base: cancellation replays at most the current field; repeated writes are
-  idempotent and completed fields are not recomputed.
-- Bad: one claim loops over every field, stores progress only in memory, or
-  deletes old versions before the last field cursor commits.
+- Good: every claim performs one row batch, one field Top-N, or one bounded
+  remote batch and eventually reaches `COMPLETE`.
+- Base: stable IDs and a persisted action journal make remote retries
+  idempotent.
+- Bad: full-field `GROUP BY`, offset pagination, all-table cleanup, or a
+  transaction held open across Elasticsearch I/O.
 
 ### 6. Tests Required
 
 ```powershell
 uv run pytest tests/unit/metadata_indexing/test_outbox.py
 uv run pytest tests/unit/metadata_indexing/test_runtime.py
+uv run pytest tests/unit/metadata_indexing/test_value_refresh.py
 uv run pytest tests/integration/test_metadata_index_resumable_refresh.py
 ```
 
-Tests assert full-authority progress CAS, new-version cursor reset, one-field
-advancement, cancellation propagation, local failure without remote retry
-consumption, lease checks around cleanup, and final removal of old versions.
+Tests assert keyset recovery, cursor-envelope identity rejection, CDC deltas,
+stable IDs, full-authority phase CAS, publish/cleanup interruption recovery,
+desired-version promotion, and final MySQL/Elasticsearch equality.
 
 ### 7. Wrong vs Correct
 
 ```python
-# Wrong: cancellation restarts the whole table and cleanup is coupled to bulk.
-await index.refresh_table(table_id, version, all_field_projections())
+# Wrong: LIMIT caps output but GROUP BY still scans the whole field.
+await session.execute(text("SELECT value, COUNT(*) ... GROUP BY value LIMIT :n"))
 
-# Correct: persist each completed field; finalize only when a later claim has
-# no remaining field.
-if next_column is not None:
-    await index.upsert_projections(current_field_projections(), heartbeat=renew)
-    await renew()
-    await repository.advance_progress(work, next_column.id)
-else:
-    await index.finalize_table(table_id, version, heartbeat=renew)
+# Correct: one deep module owns the durable phase and runs one bounded unit.
+await MetadataValueRefresh().run_next_unit(claimed_work)
 ```
 
 ### Re-verify a lockless scan under lock before acting on it
@@ -250,9 +255,11 @@ async with MySQLDatabase.session() as session:
 
 Contracts:
 
-- Table and column identifiers come from
-  `data_agent.ddl_metadata.persistence.tables`, never interpolated request or
-  model output.
+- Owned control-table identifiers come from static Core `Table` definitions.
+  Dynamic source/DW identifiers come only from validated `DesiredSyncTable`
+  schema and are expressed with Core `table()` / `column()` for DML and
+  queries. Narrow DDL/control SQL may use the dialect identifier preparer;
+  request or model output is never interpolated directly.
 - Idempotent snapshot and outbox desired-state writes use
   `sqlalchemy.dialects.mysql.insert()` with explicit update columns. Immutable
   authority versions use plain inserts after lifecycle comparison; duplicates

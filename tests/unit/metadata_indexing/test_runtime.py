@@ -575,11 +575,6 @@ async def test_value_refresh_advances_one_column_then_finalizes(
         desired_version="v" * 64,
         lease_token="l" * 32,
     )
-    columns = (
-        ("column-1", "region", "VARCHAR(64)"),
-        ("column-2", "status", "VARCHAR(64)"),
-    )
-
     class FakeMySQLDatabase:
         """为多次领取提供独立短事务与无状态命名锁。"""
 
@@ -670,76 +665,25 @@ async def test_value_refresh_advances_one_column_then_finalizes(
             del item, error_type
             return False
 
-    class FakeProjectionRepository:
-        """返回两个固定有序字段及各自一个值。"""
+    class FakeValueRefresh:
+        """模拟每次只推进一个持久化工作单元。"""
 
-        def __init__(self, session: _Session) -> None:
-            """接收测试 Session。"""
-            del session
-
-        async def value_projection_plan(self, table_id: str) -> SimpleNamespace:
-            """返回稳定字段顺序。"""
-            del table_id
-            return SimpleNamespace(columns=columns)
-
-        async def value_projection_batch(
-            self,
-            table_id: str,
-            refresh_version: str,
-            plan: object,
-            column: tuple[str, str, str],
-        ) -> list[MetadataValueProjection]:
-            """返回当前字段的单文档投影。"""
-            del plan
-            return [
-                MetadataValueProjection(
-                    column_id=column[0],
-                    table_id=table_id,
-                    value_text=column[1],
-                    value_keyword=column[1],
-                    frequency=1,
-                    refresh_version=refresh_version,
-                    schema_fingerprint="schema-1",
-                )
-            ]
-
-    class FakeValueIndex:
-        """记录逐字段写入与最终表级清理。"""
-
-        def __init__(self, client: object) -> None:
-            """接收测试客户端。"""
-            del client
-
-        async def upsert_projections(
-            self,
-            projections: AsyncIterator[MetadataValueProjection],
-            heartbeat: object = None,
-        ) -> None:
-            """消费当前字段投影并记录字段标识。"""
-            del heartbeat
-            async for projection in projections:
-                cast(list[str], state["upserts"]).append(projection.column_id)
-
-        async def finalize_table(
-            self,
-            table_id: str,
-            refresh_version: str,
-            heartbeat: object = None,
-        ) -> None:
-            """记录旧版本清理只执行一次。"""
-            del heartbeat
+        async def run_next_unit(self, item: ClaimedMetadataIndexWork) -> bool:
+            """依次推进两个字段和最终 cleanup。"""
+            del self
+            if state["progress"] is None:
+                state["progress"] = "column-1"
+                cast(list[str], state["upserts"]).append("column-1")
+                return False
+            if state["progress"] == "column-1":
+                state["progress"] = "column-2"
+                cast(list[str], state["upserts"]).append("column-2")
+                return False
             cast(list[tuple[str, str]], state["finalized"]).append(
-                (table_id, refresh_version)
+                (item.object_id, item.desired_version)
             )
-
-    class FakeElasticsearchClient:
-        """提供值索引构造所需占位客户端。"""
-
-        @classmethod
-        def get_client(cls) -> object:
-            """返回占位客户端。"""
-            del cls
-            return object()
+            state["acknowledged"] = 1
+            return True
 
     monkeypatch.setattr(dispatcher_module, "MySQLDatabase", FakeMySQLDatabase)
     monkeypatch.setattr(
@@ -747,26 +691,12 @@ async def test_value_refresh_advances_one_column_then_finalizes(
         "MetadataIndexOutboxRepository",
         FakeOutboxRepository,
     )
-    monkeypatch.setattr(
-        dispatcher_module,
-        "MetadataProjectionRepository",
-        FakeProjectionRepository,
-    )
-    monkeypatch.setattr(
-        dispatcher_module,
-        "MetadataValueElasticsearchIndex",
-        FakeValueIndex,
-    )
-    monkeypatch.setattr(
-        dispatcher_module,
-        "ElasticsearchClient",
-        FakeElasticsearchClient,
-    )
+    monkeypatch.setattr(dispatcher_module, "MetadataValueRefresh", FakeValueRefresh)
 
     dispatcher = MetadataIndexDispatcher()
     counts = [await dispatcher.dispatch() for _ in range(3)]
 
-    check_equal("字段工作单元不提前确认表级任务", counts, [0, 0, 1])
+    check_equal("每次 dispatch 只完成一个有界工作单元", counts, [1, 1, 1])
     check_equal("每个字段仅写入一次", state["upserts"], ["column-1", "column-2"])
     check_equal("持久化游标停在最后字段", state["progress"], "column-2")
     check_equal(
@@ -774,8 +704,7 @@ async def test_value_refresh_advances_one_column_then_finalizes(
         state["finalized"],
         [("table-1", "v" * 64)],
     )
-    check_equal("最终清理后确认一次 outbox", state["acknowledged"], 1)
-    check_equal("每个字段写入前后均复核租约", state["renewals"], 6)
+    check_equal("COMPLETE 状态持久化一次", state["acknowledged"], 1)
 
 
 async def test_value_refresh_cancellation_propagates_without_backoff(
@@ -871,29 +800,25 @@ async def test_local_progress_failure_defers_without_remote_retry_budget(
     check_equal("本地进度失败不消耗远程预算", state["backoffs"], 0)
 
 
-async def test_finalize_renews_lease_before_and_after_cleanup() -> None:
-    """旧版本清理完成后必须再次确认租约，迟到 worker 不得继续确认。"""
-    calls: list[str] = []
+async def test_cleanup_uses_explicit_document_ids() -> None:
+    """旧集合清理只能使用有界 bulk 明确删除稳定文档 ID。"""
+    operations: list[dict[str, object]] = []
 
     class FakeClient:
-        """记录 delete-by-query 与心跳顺序。"""
+        """记录 bulk 删除操作。"""
 
-        async def delete_by_query(self, **kwargs: object) -> dict[str, object]:
-            del kwargs
-            calls.append("cleanup")
-            return {"failures": [], "version_conflicts": 0}
-
-    async def heartbeat() -> None:
-        calls.append("heartbeat")
+        async def bulk(self, **kwargs: object) -> dict[str, object]:
+            operations.extend(cast(list[dict[str, object]], kwargs["operations"]))
+            return {"errors": False}
 
     await MetadataValueElasticsearchIndex(
         cast(AsyncElasticsearch, FakeClient())
-    ).finalize_table("table-1", "v" * 64, heartbeat=heartbeat)
+    ).delete_documents(["doc-1", "doc-2"])
 
     check_equal(
-        "最终清理前后均复核租约",
-        calls,
-        ["heartbeat", "cleanup", "heartbeat"],
+        "cleanup 仅包含明确 ID",
+        [item["delete"]["_id"] for item in operations],  # type: ignore[index]
+        ["doc-1", "doc-2"],
     )
 
 

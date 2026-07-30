@@ -1,22 +1,15 @@
 """Meta 语义与字段值索引 outbox 调度。"""
 
-from collections.abc import AsyncIterator
-
 from loguru import logger
 
 from data_agent.data_sync.locks import generation_lock_name
-from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
-from data_agent.metadata_indexing.elasticsearch import (
-    MetadataValueElasticsearchIndex,
-)
 from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
     MetadataIndexOperation,
     MetadataIndexTarget,
-    MetadataValueProjection,
 )
 from data_agent.metadata_indexing.projections import (
     MetadataProjectionRepository,
@@ -28,11 +21,11 @@ from data_agent.metadata_indexing.rebuilder import (
     RebuildProjectionError,
 )
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
+from data_agent.metadata_indexing.value_refresh import (
+    MetadataValueRefresh,
+    ValueRefreshPersistenceError,
+)
 from data_agent.settings import app_config
-
-
-class LeaseLostError(RuntimeError):
-    """当前 worker 已失去任务租约，不应消耗远程失败预算。"""
 
 
 class LocalProjectionError(RuntimeError):
@@ -84,7 +77,6 @@ class MetadataIndexDispatcher:
     async def _synchronize(self, item: ClaimedMetadataIndexWork) -> bool:
         """处理一个目标，并按完整 desired identity 确认或退避。"""
         semantic_fingerprint: str | None = None
-        values_finalized = True
         try:
             if item.operation == MetadataIndexOperation.REBUILD:
                 await MetadataIndexRebuilder().rebuild_target(item.target)
@@ -93,16 +85,12 @@ class MetadataIndexDispatcher:
             elif item.target == MetadataIndexTarget.SEMANTIC:
                 semantic_fingerprint = await self._synchronize_semantic(item)
             else:
-                values_finalized = await self._synchronize_values(item)
+                await self._synchronize_values(item)
+                return True
         except ProjectionNotReadyError:
             async with MySQLDatabase.session() as session:
                 await MetadataIndexOutboxRepository(session).defer(item)
             logger.info("Meta 字段值投影等待 DW 表完成物化")
-            return False
-        except LeaseLostError:
-            async with MySQLDatabase.session() as session:
-                await MetadataIndexOutboxRepository(session).defer(item)
-            logger.info("Meta 索引任务租约已失效，本次处理无损结束")
             return False
         except (LocalProjectionError, RebuildProjectionError):
             async with MySQLDatabase.session() as session:
@@ -117,8 +105,6 @@ class MetadataIndexDispatcher:
                     type(error).__name__,
                 )
             logger.warning("Meta 索引同步失败，当前项目已退避并等待自动重试")
-            return False
-        if not values_finalized:
             return False
         # 步骤三：语义写入先重读当前 Meta 指纹，再按 desired identity 结算。
         async with MySQLDatabase.session() as session:
@@ -178,80 +164,13 @@ class MetadataIndexDispatcher:
     async def _synchronize_values(
         self,
         item: ClaimedMetadataIndexWork,
-    ) -> bool:
-        """处理游标后的一个字段，或在末字段已落盘后执行最终清理。"""
+    ) -> None:
+        """委托深 module 执行一个有界、可恢复的 VALUES 工作单元。"""
         if item.operation != MetadataIndexOperation.REFRESH:
             raise ValueError("字段值索引仅支持 refresh 期望状态")
         try:
-            async with MySQLDatabase.session() as session:
-                plan = await MetadataProjectionRepository(
-                    session
-                ).value_projection_plan(item.object_id)
+            await MetadataValueRefresh().run_next_unit(item)
         except ProjectionNotReadyError:
             raise
-        except Exception as error:
+        except ValueRefreshPersistenceError as error:
             raise LocalProjectionError from error
-
-        async def renew() -> None:
-            async with MySQLDatabase.session() as session:
-                renewed = await MetadataIndexOutboxRepository(session).renew_lease(item)
-            if not renewed:
-                raise LeaseLostError("Meta 索引任务 lease 已失效")
-
-        columns = () if plan is None else plan.columns
-        column_ids = [column[0] for column in columns]
-        if item.progress_column_id is None:
-            cursor_index = -1
-        else:
-            try:
-                cursor_index = column_ids.index(item.progress_column_id)
-            except ValueError:
-                cursor_index = -1
-        next_index = cursor_index + 1
-        index = MetadataValueElasticsearchIndex(ElasticsearchClient.get_client())
-        if next_index >= len(columns):
-            await index.finalize_table(
-                item.object_id,
-                item.desired_version,
-                heartbeat=renew,
-            )
-            return True
-
-        assert plan is not None
-        column = columns[next_index]
-        await renew()
-        try:
-            async with MySQLDatabase.session() as session:
-                batch = await MetadataProjectionRepository(
-                    session
-                ).value_projection_batch(
-                    item.object_id,
-                    item.desired_version,
-                    plan,
-                    column,
-                )
-        except Exception as error:
-            raise LocalProjectionError from error
-        await renew()
-
-        async def projections() -> AsyncIterator[MetadataValueProjection]:
-            for projection in batch:
-                yield projection
-
-        await index.upsert_projections(projections(), heartbeat=renew)
-        await renew()
-        try:
-            async with MySQLDatabase.session() as session:
-                repository = MetadataIndexOutboxRepository(session)
-                advanced = await repository.advance_progress(item, column[0])
-                if not advanced:
-                    await repository.restore_reconciliation(item)
-        except Exception as error:
-            # Elasticsearch 文档 ID 与刷新版本均幂等；游标落盘失败应重放
-            # 当前字段，而不是误计为远程索引失败并消耗 dead-letter 预算。
-            raise LocalProjectionError from error
-        if not advanced:
-            logger.warning(
-                "Meta 字段值刷新进度已被更新，本次迟到写入不予确认并确保后续重新收敛"
-            )
-        return False

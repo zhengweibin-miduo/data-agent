@@ -438,6 +438,16 @@ class MetadataIndexSettings(SettingsModel):
 
     projection_version: str = Field(min_length=1, description="Meta 索引投影版本。")
     value_top_n: int = Field(gt=0, le=10_000, description="每字段保留的高频值上限。")
+    value_scan_batch_size: int = Field(
+        gt=0,
+        le=10_000,
+        description="字段值初始扫描每个工作单元最多读取的 DW 行数。",
+    )
+    value_bulk_batch_size: int = Field(
+        gt=0,
+        le=500,
+        description="字段值发布或清理每个工作单元最多处理的文档数。",
+    )
     dispatch_batch_size: int = Field(gt=0, le=1000, description="每轮领取任务数。")
     claim_lease_seconds: int = Field(gt=0, description="索引任务领取租约秒数。")
     retry_max_seconds: int = Field(gt=0, description="索引任务最大退避秒数。")

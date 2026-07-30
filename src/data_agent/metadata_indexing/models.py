@@ -1,5 +1,6 @@
 """Meta 派生索引的类型化契约。"""
 
+import hashlib
 from enum import StrEnum
 
 from pydantic import Field
@@ -31,6 +32,16 @@ class MetadataIndexOperation(StrEnum):
     REBUILD = "rebuild"
 
 
+class MetadataValueRefreshPhase(StrEnum):
+    """字段值刷新持久化阶段。"""
+
+    SCAN = "scan"
+    SELECT_TOP_N = "select_top_n"
+    PUBLISH = "publish"
+    CLEANUP = "cleanup"
+    COMPLETE = "complete"
+
+
 class MetadataIndexDesired(ContractModel):
     """一条可合并的 Meta 索引期望状态。"""
 
@@ -39,6 +50,12 @@ class MetadataIndexDesired(ContractModel):
     object_id: str = Field(min_length=1, max_length=128, description="对象标识。")
     operation: MetadataIndexOperation = Field(description="期望操作。")
     desired_version: str = Field(min_length=1, max_length=64, description="期望版本。")
+    frequency_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="值索引精确频次代次；语义索引为空。",
+    )
 
 
 class ClaimedMetadataIndexWork(MetadataIndexDesired):
@@ -49,6 +66,23 @@ class ClaimedMetadataIndexWork(MetadataIndexDesired):
         default=None,
         max_length=128,
         description="字段值刷新最后完成的字段标识。",
+    )
+    phase: MetadataValueRefreshPhase | None = Field(
+        default=None,
+        description="字段值刷新阶段；语义索引为空。",
+    )
+    last_primary_key: dict[str, object] | None = Field(
+        default=None,
+        description="SCAN 最后提交的版本化、schema 绑定主键游标。",
+    )
+    bulk_cursor: dict[str, object] | None = Field(
+        default=None,
+        description="PUBLISH/CLEANUP 最后提交的结构化游标。",
+    )
+    index_generation: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Elasticsearch 索引代次。",
     )
 
 
@@ -75,6 +109,11 @@ class MetadataValueProjection(ContractModel):
     frequency: int = Field(ge=1, description="当前 DW 快照中的出现次数。")
     refresh_version: str = Field(description="表级刷新版本。")
     schema_fingerprint: str = Field(description="源数据版本标识。")
+
+    @property
+    def value_hash(self) -> str:
+        """返回规范值稳定哈希。"""
+        return hashlib.sha256(self.value_keyword.encode()).hexdigest()
 
 
 class MetadataCandidate(ContractModel):

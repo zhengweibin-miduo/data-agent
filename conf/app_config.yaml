@@ -114,6 +114,8 @@ memory:
 metadata_index:
   projection_version: v1
   value_top_n: 10000
+  value_scan_batch_size: 1000
+  value_bulk_batch_size: 500
   dispatch_batch_size: 100
   claim_lease_seconds: 300
   retry_max_seconds: 3600

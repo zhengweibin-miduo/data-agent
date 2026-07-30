@@ -3,8 +3,7 @@
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import or_, select, text
-from sqlalchemy.dialects.mysql import dialect as mysql_dialect
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
@@ -354,46 +353,15 @@ class MetadataProjectionRepository:
         return ValueProjectionPlan(
             desired=desired,
             columns=tuple(
-                (column_id, name, data_types[name]) for column_id, name in columns
+                sorted(
+                    (
+                        (column_id, name, data_types[name])
+                        for column_id, name in columns
+                    ),
+                    key=lambda item: item[0].encode(),
+                )
             ),
         )
-
-    async def value_projection_batch(
-        self,
-        table_id: str,
-        refresh_version: str,
-        plan: ValueProjectionPlan,
-        column: tuple[str, str, str],
-    ) -> list[MetadataValueProjection]:
-        """在单个短事务中物化一个字段的有界 top-N 投影。"""
-        column_id, name, data_type = column
-        quote = mysql_dialect().identifier_preparer.quote
-        qualified = (
-            f"{quote(app_config.data_sync.dw_database)}."
-            f"{quote(plan.desired.target_table)}"
-        )
-        quoted = quote(name)
-        rows = await self._session.execute(
-            text(
-                f"SELECT {quoted} AS value, COUNT(*) AS frequency "
-                f"FROM {qualified} WHERE {quoted} IS NOT NULL "
-                f"GROUP BY {quoted} ORDER BY frequency DESC, {quoted} "
-                "LIMIT :limit"
-            ),
-            {"limit": app_config.metadata_index.value_top_n},
-        )
-        return [
-            MetadataValueProjection(
-                column_id=column_id,
-                table_id=table_id,
-                value_text=_stable_value_text(value, data_type),
-                value_keyword=_stable_value_text(value, data_type),
-                frequency=int(frequency),
-                refresh_version=refresh_version,
-                schema_fingerprint=plan.desired.schema_fingerprint,
-            )
-            for value, frequency in rows
-        ]
 
     async def semantic_identities(
         self,

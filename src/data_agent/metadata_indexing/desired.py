@@ -157,6 +157,15 @@ def semantic_desired_states(
                     "projection_version": app_config.metadata_index.projection_version,
                 }
             ),
+            frequency_version=metadata_desired_version(
+                {
+                    "schema_fingerprint": schema.schema_fingerprint,
+                    "table_id": table.id,
+                    "field_eligibility": eligibility_by_table[table.id],
+                    "projection_version": app_config.metadata_index.projection_version,
+                    "normalization_version": 1,
+                }
+            ),
         )
         for table in schema.tables
     )
@@ -235,6 +244,7 @@ async def shared_value_refresh_states(
                 object_id=table_id,
                 operation=MetadataIndexOperation.REFRESH,
                 desired_version=version,
+                frequency_version=version,
             )
             for table_id in sorted(table_ids)
         )
@@ -263,6 +273,16 @@ async def enqueue_value_refresh(
     )
     if not table_identifiers:
         raise RuntimeError("DW 字段未对应当前 Meta 表")
+    frequency_version = metadata_desired_version(
+        {
+            "desired_hash": desired.desired_hash(),
+            "peer_schema_fingerprints": sorted(
+                peer.schema_fingerprint for peer in [desired, *peers]
+            ),
+            "target_table": desired.target_table,
+            "normalization_version": 1,
+        }
+    )
     await MetadataIndexOutboxRepository(session).enqueue(
         [
             MetadataIndexDesired(
@@ -280,6 +300,7 @@ async def enqueue_value_refresh(
                         "target_table": desired.target_table,
                     }
                 ),
+                frequency_version=frequency_version,
             )
             for table_identifier in sorted(table_identifiers)
         ],

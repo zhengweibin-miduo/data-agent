@@ -11,7 +11,11 @@ from data_agent.data_sync.tables import (
     data_sync_key_owner,
     data_sync_task,
 )
-from data_agent.metadata_indexing.tables import metadata_index_outbox
+from data_agent.metadata_indexing.tables import (
+    metadata_index_outbox,
+    metadata_value_frequency,
+    metadata_value_publication,
+)
 from data_agent.settings import app_config
 
 
@@ -35,6 +39,8 @@ def test_data_sync_core_columns_match_bootstrap_script() -> None:
         data_sync_event,
         data_sync_key_owner,
         metadata_index_outbox,
+        metadata_value_frequency,
+        metadata_value_publication,
     )
     check_equal(
         "data_sync 表集合",

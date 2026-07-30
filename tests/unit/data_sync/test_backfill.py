@@ -47,7 +47,11 @@ def _task() -> ClaimedSyncTask:
 def value_refresh(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """隔离并记录与 DW 写入同事务触发的索引刷新。"""
     refresh = AsyncMock()
+    mutation = AsyncMock(return_value=[])
+    apply_changes = AsyncMock()
     monkeypatch.setattr(backfill, "enqueue_value_refresh", refresh)
+    monkeypatch.setattr(backfill, "prepare_frequency_mutation", mutation)
+    monkeypatch.setattr(backfill, "apply_frequency_row_changes", apply_changes)
     return refresh
 
 

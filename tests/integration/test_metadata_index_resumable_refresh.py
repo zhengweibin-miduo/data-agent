@@ -1,16 +1,31 @@
-"""真实 MySQL 与 Elasticsearch 下的字段值刷新恢复检查。"""
+"""真实 MySQL 与 Elasticsearch 下的字段值有界刷新和故障恢复。"""
 
-from collections.abc import AsyncIterator
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, insert, select, text
+from sqlalchemy.engine import CursorResult
 
-from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable, SyncPhase
-from data_agent.data_sync.tables import data_sync_task
+from data_agent.data_sync.backfill import apply_buffered_event
+from data_agent.data_sync.models import (
+    BinlogCoordinate,
+    DesiredColumn,
+    DesiredSyncTable,
+    RowOperation,
+    SyncPhase,
+    SyncRowEvent,
+)
+from data_agent.data_sync.repository import BufferedSyncEvent, ClaimedSyncTask
+from data_agent.data_sync.tables import (
+    data_sync_event,
+    data_sync_key_owner,
+    data_sync_task,
+)
 from data_agent.ddl_metadata.persistence.tables import column_info, table_info
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.metadata_indexing.desired import enqueue_value_refresh
 from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 from data_agent.metadata_indexing.elasticsearch import MetadataValueElasticsearchIndex
 from data_agent.metadata_indexing.models import (
@@ -18,30 +33,97 @@ from data_agent.metadata_indexing.models import (
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
-    MetadataValueProjection,
+    MetadataValueRefreshPhase,
 )
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
-from data_agent.metadata_indexing.tables import metadata_index_outbox
+from data_agent.metadata_indexing.tables import (
+    metadata_index_outbox,
+    metadata_value_frequency,
+    metadata_value_publication,
+)
+from data_agent.metadata_indexing.value_refresh import (
+    MetadataValueFrequencyRepository,
+)
 from data_agent.settings import app_config
 from tests.helpers.checks import check_equal
 from tests.helpers.factories import ensure_schema
 
 
+async def _phase(table_id: str) -> str | None:
+    async with MySQLDatabase.session() as session:
+        return await session.scalar(
+            select(metadata_index_outbox.c.phase).where(
+                metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
+                metadata_index_outbox.c.object_id == table_id,
+            )
+        )
+
+
+async def _dispatch_until(table_id: str, phase: MetadataValueRefreshPhase) -> int:
+    """逐个有界工作单元推进到指定阶段。"""
+    calls = 0
+    while await _phase(table_id) != phase.value:
+        calls += 1
+        if calls > 40:
+            raise AssertionError(f"字段值刷新未收敛到 {phase.value}")
+        await MetadataIndexDispatcher().dispatch()
+    return calls
+
+
+async def _documents(table_id: str) -> list[dict[str, object]]:
+    client = ElasticsearchClient.get_client()
+    await client.indices.refresh(index=app_config.elasticsearch.metadata_value_index)
+    response = await client.search(
+        index=app_config.elasticsearch.metadata_value_index,
+        size=100,
+        query={"term": {"table_id": table_id}},
+    )
+    return [hit["_source"] for hit in response["hits"]["hits"]]
+
+
+async def _delete_test_documents(table_id: str) -> None:
+    client = ElasticsearchClient.get_client()
+    response = await client.search(
+        index=app_config.elasticsearch.metadata_value_index,
+        size=100,
+        query={"term": {"table_id": table_id}},
+        source=False,
+    )
+    operations = [
+        {
+            "delete": {
+                "_index": app_config.elasticsearch.metadata_value_index,
+                "_id": hit["_id"],
+            }
+        }
+        for hit in response["hits"]["hits"]
+    ]
+    if operations:
+        await client.bulk(operations=operations, refresh=True)
+
+
 @pytest.mark.integration
-async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
-    """字段游标必须跨领取恢复，末字段落盘后的领取才清理旧版本。"""
+async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """跨批扫描及 publish/cleanup 结算中断后必须继续收敛到精确 Top-N。"""
     suffix = uuid4().hex[:8]
     table_id = f"table-{suffix}"
+    id_column_id = f"column-{suffix}-id"
     region_id = f"column-{suffix}-region"
     status_id = f"column-{suffix}-status"
-    target_table = f"resumable_{suffix}"
-    source = f"resumable-{suffix}"
-    refresh_version = "n" * 64
-    old_version = "o" * 64
+    target_table = f"bounded_{suffix}"
+    source = f"bounded-{suffix}"
     profile = {
         "decision": "index",
         "sensitivity": "non_sensitive",
         "reason": "集成测试字段允许索引",
+        "evidence": [table_id],
+    }
+    skipped = {
+        "decision": "skip",
+        "sensitivity": "non_sensitive",
+        "reason": "主键不建立字段值索引",
         "evidence": [table_id],
     }
     desired = DesiredSyncTable(
@@ -50,6 +132,12 @@ async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
         source_table=target_table,
         target_table=target_table,
         columns=[
+            DesiredColumn(
+                id=id_column_id,
+                name="id",
+                data_type="BIGINT",
+                nullable=False,
+            ),
             DesiredColumn(
                 id=region_id,
                 name="region",
@@ -63,44 +151,31 @@ async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
                 nullable=False,
             ),
         ],
-        primary_key=["region"],
+        primary_key=["id"],
         schema_fingerprint="s" * 64,
     )
     client = ElasticsearchClient.initialize()
-    value_index = MetadataValueElasticsearchIndex(client)
-    mysql_ready = False
     index_ready = False
-
-    async def old_projection() -> AsyncIterator[MetadataValueProjection]:
-        """产生一个只属于旧刷新代次的淘汰值。"""
-        yield MetadataValueProjection(
-            column_id=region_id,
-            table_id=table_id,
-            value_text="legacy",
-            value_keyword="legacy",
-            frequency=1,
-            refresh_version=old_version,
-            schema_fingerprint=desired.schema_fingerprint,
-        )
-
+    mysql_ready = False
+    task_id: int | None = None
     try:
         await ensure_schema()
         mysql_ready = True
-        await value_index.setup()
+        await MetadataValueElasticsearchIndex(client).setup()
         index_ready = True
         async with MySQLDatabase.session() as session:
             await session.execute(
                 text(
                     f"CREATE TABLE `{app_config.data_sync.dw_database}`."
-                    f"`{target_table}` (region VARCHAR(64) NOT NULL, "
-                    "status VARCHAR(64) NOT NULL)"
+                    f"`{target_table}` (id BIGINT NOT NULL PRIMARY KEY, "
+                    "region VARCHAR(64) NOT NULL, status VARCHAR(64) NOT NULL)"
                 )
             )
             await session.execute(
                 text(
                     f"INSERT INTO `{app_config.data_sync.dw_database}`."
-                    f"`{target_table}` (region, status) VALUES "
-                    "('华东', '启用'), ('华东', '启用'), ('华西', '停用')"
+                    f"`{target_table}` (id, region, status) VALUES "
+                    "(1, '华东', '启用'), (2, '华东', '启用'), (3, '华西', '停用')"
                 )
             )
             await session.execute(
@@ -108,7 +183,7 @@ async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
                     id=table_id,
                     name=target_table,
                     role="dimension",
-                    description="可恢复刷新集成测试表",
+                    description="有界刷新集成测试表",
                     alias=[],
                 )
             )
@@ -118,21 +193,23 @@ async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
                     {
                         "id": column_id,
                         "name": name,
-                        "type": "VARCHAR(64)",
+                        "type": data_type,
                         "role": "dimension",
                         "examples": [],
                         "description": name,
                         "alias": [],
-                        "index_profile": profile | {"evidence": [table_id, column_id]},
+                        "index_profile": index_profile
+                        | {"evidence": [table_id, column_id]},
                         "table_id": table_id,
                     }
-                    for column_id, name in (
-                        (region_id, "region"),
-                        (status_id, "status"),
+                    for column_id, name, data_type, index_profile in (
+                        (id_column_id, "id", "BIGINT", skipped),
+                        (region_id, "region", "VARCHAR(64)", profile),
+                        (status_id, "status", "VARCHAR(64)", profile),
                     )
                 ],
             )
-            await session.execute(
+            task_result = await session.execute(
                 insert(data_sync_task).values(
                     source=source,
                     source_schema=desired.source_schema,
@@ -141,6 +218,203 @@ async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
                     desired_json=desired.model_dump(mode="json"),
                     desired_hash=desired.desired_hash(),
                     phase=SyncPhase.STREAMING.value,
+                    lease_token="c" * 32,
+                    lease_expires_at=text("DATE_ADD(NOW(), INTERVAL 10 MINUTE)"),
+                )
+            )
+            task_primary_key = cast(
+                CursorResult[object],
+                task_result,
+            ).inserted_primary_key
+            assert task_primary_key is not None
+            task_id = int(task_primary_key[0])
+            await enqueue_value_refresh(session, desired, {"initial": True})
+
+        await MetadataIndexDispatcher().dispatch()
+        async with MySQLDatabase.session() as session:
+            cursor = await session.scalar(
+                select(metadata_index_outbox.c.last_primary_key).where(
+                    metadata_index_outbox.c.object_id == table_id
+                )
+            )
+        check_equal("首个 SCAN 批次提交稳定主键游标", cursor, [3])
+
+        await _dispatch_until(table_id, MetadataValueRefreshPhase.PUBLISH)
+        original_publish = MetadataValueFrequencyRepository.settle_publish
+        publish_failed = False
+
+        async def fail_publish_once(
+            repository: MetadataValueFrequencyRepository,
+            item: object,
+            document_ids: object,
+        ) -> None:
+            nonlocal publish_failed
+            if not publish_failed:
+                publish_failed = True
+                raise RuntimeError("simulated publish settle failure")
+            await original_publish(repository, item, document_ids)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            MetadataValueFrequencyRepository,
+            "settle_publish",
+            fail_publish_once,
+        )
+        await MetadataIndexDispatcher().dispatch()
+        monkeypatch.setattr(
+            MetadataValueFrequencyRepository,
+            "settle_publish",
+            original_publish,
+        )
+        first_units = await _dispatch_until(
+            table_id,
+            MetadataValueRefreshPhase.COMPLETE,
+        )
+        check_equal("发布结算中断确实发生", publish_failed, True)
+        check_equal("首次精确 Top-N", {
+            (row["column_id"], row["value_keyword"], row["frequency"])
+            for row in await _documents(table_id)
+        }, {
+            (region_id, "华东", 2),
+            (region_id, "华西", 1),
+            (status_id, "启用", 2),
+            (status_id, "停用", 1),
+        })
+        assert first_units > 1
+
+        assert task_id is not None
+        task = ClaimedSyncTask(
+            id=task_id,
+            desired=desired,
+            desired_hash=desired.desired_hash(),
+            phase=SyncPhase.STREAMING,
+            lease_token="c" * 32,
+            attempts=0,
+            snapshot=None,
+            captured=None,
+            applied=None,
+            last_backfill_key=None,
+        )
+
+        async def apply_event(event: SyncRowEvent) -> BufferedSyncEvent:
+            async with MySQLDatabase.session() as session:
+                result = await session.execute(
+                    insert(data_sync_event).values(
+                        task_id=task_id,
+                        source=event.source,
+                        binlog_file=event.coordinate.file,
+                        binlog_position=event.coordinate.position,
+                        row_index=event.coordinate.row_index,
+                        payload_json=event.model_dump(mode="json"),
+                    )
+                )
+                event_primary_key = cast(
+                    CursorResult[object],
+                    result,
+                ).inserted_primary_key
+                assert event_primary_key is not None
+                buffered = BufferedSyncEvent(
+                    id=int(event_primary_key[0]),
+                    event=event,
+                )
+                await apply_buffered_event(
+                    session,
+                    task,
+                    buffered,
+                    dw_database=app_config.data_sync.dw_database,
+                )
+                return buffered
+
+        insert_event = SyncRowEvent(
+            source=source,
+            source_schema=desired.source_schema,
+            source_table=desired.source_table,
+            coordinate=BinlogCoordinate(
+                file="mysql-bin.000001",
+                position=100,
+                row_index=0,
+            ),
+            operation=RowOperation.INSERT,
+            after={"id": 4, "region": "华南", "status": "启用"},
+        )
+        duplicate = await apply_event(insert_event)
+        async with MySQLDatabase.session() as session:
+            frequency_version = await session.scalar(
+                select(metadata_index_outbox.c.frequency_version).where(
+                    metadata_index_outbox.c.object_id == table_id
+                )
+            )
+            inserted_frequency = {
+                (row.value_text, int(row.frequency))
+                for row in await session.execute(
+                    select(
+                        metadata_value_frequency.c.value_text,
+                        metadata_value_frequency.c.frequency,
+                    ).where(
+                        metadata_value_frequency.c.table_id == table_id,
+                        metadata_value_frequency.c.frequency_version
+                        == frequency_version,
+                    )
+                )
+            }
+        check_equal("CDC INSERT 精确加一", inserted_frequency, {
+            ("华东", 2),
+            ("华西", 1),
+            ("华南", 1),
+            ("启用", 3),
+            ("停用", 1),
+        })
+        with pytest.raises(RuntimeError, match="事件确认失败"):
+            async with MySQLDatabase.session() as session:
+                await apply_buffered_event(
+                    session,
+                    task,
+                    duplicate,
+                    dw_database=app_config.data_sync.dw_database,
+                )
+
+        update_event = SyncRowEvent(
+            source=source,
+            source_schema=desired.source_schema,
+            source_table=desired.source_table,
+            coordinate=BinlogCoordinate(
+                file="mysql-bin.000001",
+                position=110,
+                row_index=0,
+            ),
+            operation=RowOperation.UPDATE,
+            before={"id": 4, "region": "华南", "status": "启用"},
+            after={"id": 4, "region": "华北", "status": "停用"},
+        )
+        await apply_event(update_event)
+        delete_event = SyncRowEvent(
+            source=source,
+            source_schema=desired.source_schema,
+            source_table=desired.source_table,
+            coordinate=BinlogCoordinate(
+                file="mysql-bin.000001",
+                position=120,
+                row_index=0,
+            ),
+            operation=RowOperation.DELETE,
+            before={"id": 4, "region": "华北", "status": "停用"},
+        )
+        await apply_event(delete_event)
+        await _dispatch_until(table_id, MetadataValueRefreshPhase.COMPLETE)
+        check_equal("CDC UPDATE/DELETE 与重复事件最终精确", {
+            (row["column_id"], row["value_keyword"], row["frequency"])
+            for row in await _documents(table_id)
+        }, {
+            (region_id, "华东", 2),
+            (region_id, "华西", 1),
+            (status_id, "启用", 2),
+            (status_id, "停用", 1),
+        })
+
+        async with MySQLDatabase.session() as session:
+            await session.execute(
+                text(
+                    f"DELETE FROM `{app_config.data_sync.dw_database}`."
+                    f"`{target_table}` WHERE id = 3"
                 )
             )
             await MetadataIndexOutboxRepository(session).enqueue(
@@ -150,110 +424,92 @@ async def test_value_refresh_resumes_across_claims_and_finalizes() -> None:
                         object_kind=MetadataObjectKind.TABLE,
                         object_id=table_id,
                         operation=MetadataIndexOperation.REFRESH,
-                        desired_version=refresh_version,
+                        desired_version="2" * 64,
+                        frequency_version="b" * 64,
                     )
                 ]
             )
-        await value_index.upsert_projections(old_projection())
-        await client.indices.refresh(
-            index=app_config.elasticsearch.metadata_value_index
-        )
 
-        first = await MetadataIndexDispatcher().dispatch()
-        async with MySQLDatabase.session() as session:
-            first_progress = await session.scalar(
-                select(metadata_index_outbox.c.progress_column_id).where(
-                    metadata_index_outbox.c.object_id == table_id
-                )
-            )
-        old_after_first = await client.count(
-            index=app_config.elasticsearch.metadata_value_index,
-            query={
-                "bool": {
-                    "filter": [
-                        {"term": {"table_id": table_id}},
-                        {"term": {"refresh_version": old_version}},
-                    ]
-                }
-            },
-        )
+        await _dispatch_until(table_id, MetadataValueRefreshPhase.CLEANUP)
+        original_cleanup = MetadataValueFrequencyRepository.settle_cleanup
+        cleanup_failed = False
 
-        second = await MetadataIndexDispatcher().dispatch()
-        async with MySQLDatabase.session() as session:
-            second_progress = await session.scalar(
-                select(metadata_index_outbox.c.progress_column_id).where(
-                    metadata_index_outbox.c.object_id == table_id
-                )
-            )
-        third = await MetadataIndexDispatcher().dispatch()
-        async with MySQLDatabase.session() as session:
-            pending = await session.scalar(
-                select(metadata_index_outbox.c.object_id).where(
-                    metadata_index_outbox.c.object_id == table_id
-                )
-            )
-        final = await client.search(
-            index=app_config.elasticsearch.metadata_value_index,
-            size=10,
-            query={"term": {"table_id": table_id}},
-        )
+        async def fail_cleanup_once(
+            repository: MetadataValueFrequencyRepository,
+            item: object,
+            document_ids: object,
+        ) -> None:
+            nonlocal cleanup_failed
+            if not cleanup_failed:
+                cleanup_failed = True
+                raise RuntimeError("simulated cleanup settle failure")
+            await original_cleanup(repository, item, document_ids)  # type: ignore[arg-type]
 
-        check_equal("前两次领取只推进字段", [first, second], [0, 0])
-        check_equal("首次领取持久化首字段", first_progress, region_id)
-        check_equal("部分完成不清理旧版本", old_after_first["count"], 1)
-        check_equal("第二次领取持久化末字段", second_progress, status_id)
-        check_equal("第三次领取完成最终清理", third, 1)
-        check_equal("最终确认删除 outbox", pending, None)
-        sources = [hit["_source"] for hit in final["hits"]["hits"]]
-        check_equal(
-            "最终只保留当前刷新代次",
-            {row["refresh_version"] for row in sources},
-            {refresh_version},
+        monkeypatch.setattr(
+            MetadataValueFrequencyRepository,
+            "settle_cleanup",
+            fail_cleanup_once,
         )
-        check_equal(
-            "最终索引收敛到两个字段的当前 Top-N",
-            {(row["column_id"], row["value_keyword"]) for row in sources},
-            {
-                (region_id, "华东"),
-                (region_id, "华西"),
-                (status_id, "启用"),
-                (status_id, "停用"),
-            },
+        await MetadataIndexDispatcher().dispatch()
+        monkeypatch.setattr(
+            MetadataValueFrequencyRepository,
+            "settle_cleanup",
+            original_cleanup,
         )
+        await _dispatch_until(table_id, MetadataValueRefreshPhase.COMPLETE)
+        check_equal("清理结算中断确实发生", cleanup_failed, True)
+        check_equal("最终索引只保留新精确集合", {
+            (row["column_id"], row["value_keyword"], row["frequency"])
+            for row in await _documents(table_id)
+        }, {
+            (region_id, "华东", 2),
+            (status_id, "启用", 2),
+        })
     finally:
-        try:
-            if mysql_ready:
-                async with MySQLDatabase.session() as session:
+        if index_ready:
+            await _delete_test_documents(table_id)
+        if mysql_ready:
+            async with MySQLDatabase.session() as session:
+                if task_id is not None:
                     await session.execute(
-                        delete(metadata_index_outbox).where(
-                            metadata_index_outbox.c.object_id == table_id
+                        delete(data_sync_event).where(
+                            data_sync_event.c.task_id == task_id
                         )
                     )
-                    await session.execute(
-                        delete(data_sync_task).where(data_sync_task.c.source == source)
+                await session.execute(
+                    delete(data_sync_key_owner).where(
+                        data_sync_key_owner.c.target_table == target_table
                     )
-                    await session.execute(
-                        delete(column_info).where(column_info.c.table_id == table_id)
+                )
+                await session.execute(
+                    delete(metadata_value_publication).where(
+                        metadata_value_publication.c.table_id == table_id
                     )
-                    await session.execute(
-                        delete(table_info).where(table_info.c.id == table_id)
+                )
+                await session.execute(
+                    delete(metadata_value_frequency).where(
+                        metadata_value_frequency.c.table_id == table_id
                     )
-                    await session.execute(
-                        text(
-                            "DROP TABLE IF EXISTS "
-                            f"`{app_config.data_sync.dw_database}`."
-                            f"`{target_table}`"
-                        )
+                )
+                await session.execute(
+                    delete(metadata_index_outbox).where(
+                        metadata_index_outbox.c.object_id == table_id
                     )
-        finally:
-            try:
-                if index_ready:
-                    await client.delete_by_query(
-                        index=app_config.elasticsearch.metadata_value_index,
-                        conflicts="proceed",
-                        refresh=True,
-                        query={"term": {"table_id": table_id}},
+                )
+                await session.execute(
+                    delete(data_sync_task).where(data_sync_task.c.source == source)
+                )
+                await session.execute(
+                    delete(column_info).where(column_info.c.table_id == table_id)
+                )
+                await session.execute(
+                    delete(table_info).where(table_info.c.id == table_id)
+                )
+                await session.execute(
+                    text(
+                        "DROP TABLE IF EXISTS "
+                        f"`{app_config.data_sync.dw_database}`.`{target_table}`"
                     )
-            finally:
-                await ElasticsearchClient.close()
-                await MySQLDatabase.close()
+                )
+        await ElasticsearchClient.close()
+        await MySQLDatabase.close()

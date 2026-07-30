@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "约束 CDC、数据库状态和 Elasticsearch 发布的跨层数据流"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "约束 SQLAlchemy Core、事务、索引、迁移与动态标识符"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "约束 Elasticsearch bulk、重试、幂等和外部副作用"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "约束可重试错误、状态持久化与失败恢复"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "约束测试层次、真实依赖集成测试和质量门禁"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "约束新模型、仓储、服务与测试代码放置"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范总入口及适用范围"}
+{"file": ".trellis/tasks/07-30-metadata-index-bounded-refresh/research/current-state.md", "reason": "当前 PR 实现、无界点和可复用事务事实"}
+{"file": ".trellis/tasks/07-30-metadata-index-bounded-refresh/research/design-options.md", "reason": "备选接口、取舍与最终组合依据"}
+{"file": ".trellis/tasks/07-30-metadata-index-bounded-refresh/research/design-review.md", "reason": "已关闭的设计阻塞项及实施时不可回退的契约"}
+{"file": "code_review.md", "reason": "仓库 AI 代码审查格式和当前 SQLAlchemy 审查约束"}

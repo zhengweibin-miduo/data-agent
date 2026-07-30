@@ -16,7 +16,11 @@ from data_agent.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.metadata_indexing.tables import metadata_index_outbox
+from data_agent.metadata_indexing.tables import (
+    metadata_index_outbox,
+    metadata_value_frequency,
+    metadata_value_publication,
+)
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (
     ColumnRole,
@@ -183,6 +187,16 @@ async def cleanup_schema(schema: PhysicalSchema) -> None:
                 )
             )
         if table_ids:
+            await session.execute(
+                delete(metadata_value_publication).where(
+                    metadata_value_publication.c.table_id.in_(table_ids)
+                )
+            )
+            await session.execute(
+                delete(metadata_value_frequency).where(
+                    metadata_value_frequency.c.table_id.in_(table_ids)
+                )
+            )
             await session.execute(
                 delete(table_info).where(table_info.c.id.in_(table_ids))
             )

@@ -44,6 +44,10 @@ class _FakeResult:
         """返回全部结果。"""
         return self._values
 
+    def one_or_none(self) -> Any | None:
+        """返回唯一映射或空。"""
+        return self._values[0] if self._values else None
+
 
 class _RecordingSession:
     """记录 SQL 并按顺序返回预置结果。"""
@@ -325,8 +329,8 @@ async def test_stale_write_preserves_an_existing_newer_generation() -> None:
     )
 
 
-async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
-    """新 desired version 覆盖时必须清理旧 worker 的执行权。"""
+async def test_enqueue_value_initializes_bounded_refresh_state() -> None:
+    """首次 VALUES 期望必须从 SCAN 和独立频次代次开始。"""
     session = _RecordingSession()
     repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
     await repository.enqueue(
@@ -337,49 +341,40 @@ async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
                 object_id="table-1",
                 operation=MetadataIndexOperation.REFRESH,
                 desired_version="n" * 64,
+                frequency_version="f" * 64,
             )
         ],
         debounce_seconds=5,
     )
 
-    rendered = _rendered(session.statements[0])
-    duplicate = rendered.split("ON DUPLICATE KEY UPDATE")[1]
+    rendered = _rendered(session.statements[-1])
     check_condition(
-        "新版本重置租约与失败状态",
+        "初始化持久化状态机",
         all(
-            field in duplicate
-            for field in (
-                "attempts",
-                "available_at",
-                "lease_token",
-                "lease_expires_at",
-                "last_error_type",
-                "progress_column_id",
-                "pending_desired_version",
-            )
+            field in rendered
+            for field in ("frequency_version", "phase", "index_generation")
         ),
-        actual=duplicate,
-        expected="冲突更新覆盖完整执行状态",
-    )
-    check_condition(
-        "连续变更保留最早刷新期限",
-        "least(data_sync.metadata_index_outbox.available_at" in duplicate.lower(),
-        actual=duplicate,
-        expected="available_at 使用既有期限与新 debounce 期限的较早值",
-    )
-    check_condition(
-        "执行中的刷新保留当前代次并记录最新代次",
-        "pending_desired_version" in duplicate
-        and "lease_token IS NOT NULL" in duplicate
-        and "progress_column_id IS NOT NULL" in duplicate,
-        actual=duplicate,
-        expected="活跃刷新把新版本写入 pending_desired_version",
+        actual=rendered,
+        expected="VALUES INSERT 包含频次代次、SCAN phase 和索引代次",
     )
 
 
-async def test_enqueue_new_version_replaces_dead_lettered_refresh() -> None:
-    """新代次必须替换无法继续推进的死信刷新并清空游标。"""
-    session = _RecordingSession()
+async def test_enqueue_active_value_records_latest_pending_version() -> None:
+    """活跃刷新只合并最新 pending desired/frequency，不夺取当前 lease。"""
+    session = _RecordingSession(
+        [
+            _FakeResult(
+                [
+                    {
+                        "desired_version": "old",
+                        "frequency_version": "old-frequency",
+                        "phase": "publish",
+                        "lease_token": "l" * 32,
+                    }
+                ]
+            )
+        ]
+    )
     repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
 
     await repository.enqueue(
@@ -390,19 +385,19 @@ async def test_enqueue_new_version_replaces_dead_lettered_refresh() -> None:
                 object_id="table-1",
                 operation=MetadataIndexOperation.REFRESH,
                 desired_version="new-version",
+                frequency_version="new-frequency",
             )
         ]
     )
 
-    duplicate = _rendered(session.statements[0]).split("ON DUPLICATE KEY UPDATE")[1]
+    rendered = _rendered(session.statements[-1])
     check_condition(
-        "死信刷新不再保留当前代次",
-        "attempts <" in duplicate
-        and "progress_column_id IS NOT NULL" in duplicate
-        and "attempts = CASE" in duplicate
-        and "progress_column_id = CASE" in duplicate,
-        actual=duplicate,
-        expected="continuing 条件排除死信，新版本走 replace_current 清理状态",
+        "活跃版本写入双 pending 字段",
+        "pending_desired_version" in rendered
+        and "pending_frequency_version" in rendered
+        and "lease_token" not in rendered.split(" SET ", 1)[-1],
+        actual=rendered,
+        expected="只更新 pending desired/frequency 和 available_at",
     )
 
 

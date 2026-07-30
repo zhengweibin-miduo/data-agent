@@ -9,6 +9,7 @@ from collections.abc import (
     Callable,
     Iterable,
     Iterator,
+    Sequence,
 )
 from typing import Any, cast
 
@@ -44,9 +45,15 @@ def _normalized_analyzer(config: dict[str, Any]) -> dict[str, object]:
     }
 
 
-def metadata_value_document_id(column_id: str, value: str) -> str:
-    """生成字段内规范值的稳定文档 ID。"""
-    return hashlib.sha256(f"{column_id}\0{value}".encode()).hexdigest()
+def metadata_value_document_id(
+    table_id: str,
+    column_id: str,
+    value_hash: str,
+) -> str:
+    """生成表、字段与规范值身份共同决定的稳定文档 ID。"""
+    return hashlib.sha256(
+        f"{table_id}\0{column_id}\0{value_hash}".encode()
+    ).hexdigest()
 
 
 class MetadataValueElasticsearchIndex:
@@ -140,30 +147,41 @@ class MetadataValueElasticsearchIndex:
             if response.get("errors"):
                 raise RuntimeError("Elasticsearch Meta 字段值 bulk 写入失败")
 
-    async def finalize_table(
+    async def upsert_batch(
         self,
-        table_id: str,
-        refresh_version: str,
-        heartbeat: Callable[[], Awaitable[None]] | None = None,
+        projections: list[MetadataValueProjection],
     ) -> None:
-        """最后一个字段进度持久化后清理表内旧刷新版本。"""
-        if heartbeat is not None:
-            await heartbeat()
-        cleanup = await self._client.delete_by_query(
-            index=self._index,
-            conflicts="proceed",
-            refresh=True,
-            query={
-                "bool": {
-                    "filter": [{"term": {"table_id": table_id}}],
-                    "must_not": [{"term": {"refresh_version": refresh_version}}],
-                }
-            },
-        )
-        if cleanup.get("failures") or cleanup.get("version_conflicts"):
-            raise RuntimeError("Elasticsearch Meta 字段值旧版本清理未完整完成")
-        if heartbeat is not None:
-            await heartbeat()
+        """写入一个已由状态机双预算限制的 UPSERT 批次。"""
+        chunks = list(_bulk_chunks(projections))
+        if len(chunks) > 1:
+            raise ValueError("字段值发布工作单元超过 Elasticsearch bulk 字节预算")
+        if not chunks:
+            return
+        response = await self._client.bulk(operations=chunks[0], refresh=False)
+        if response.get("errors"):
+            raise RuntimeError("Elasticsearch Meta 字段值 bulk 写入失败")
+
+    async def delete_documents(self, document_ids: Sequence[str]) -> None:
+        """按明确稳定 ID 有界删除字段值文档。"""
+        operations = [
+            {"delete": {"_index": self._index, "_id": document_id}}
+            for document_id in document_ids
+        ]
+        if not operations:
+            return
+        response = await self._client.bulk(operations=operations, refresh=False)
+        if response.get("errors"):
+            failures = [
+                item
+                for item in response.get("items", [])
+                if int(item.get("delete", {}).get("status", 500)) not in {200, 404}
+            ]
+            if failures:
+                raise RuntimeError("Elasticsearch Meta 字段值 bulk 删除失败")
+
+    async def refresh(self) -> None:
+        """在 COMPLETE 前刷新当前值索引可见性。"""
+        await self._client.indices.refresh(index=self._index)
 
     async def search(
         self,
@@ -292,7 +310,9 @@ def _bulk_pair(
             "index": {
                 "_index": app_config.elasticsearch.metadata_value_index,
                 "_id": metadata_value_document_id(
-                    projection.column_id, projection.value_keyword
+                    projection.table_id,
+                    projection.column_id,
+                    projection.value_hash,
                 ),
             }
         },
