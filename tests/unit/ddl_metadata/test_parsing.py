@@ -13,6 +13,7 @@ from sqlglot.errors import ParseError
 from data_agent.ddl_metadata import parsing
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.errors import DataAgentError
+from data_agent.identifiers import scope_fingerprint
 from data_agent.settings import app_config
 from tests.helpers.checks import (
     check_condition,
@@ -136,6 +137,26 @@ async def test_ddl_parser() -> None:
             for relationship in inline_reference.relationships
         ],
         [("parent", "id")],
+    )
+
+    changed_reference = await parse_ddl(
+        "test_source",
+        DDL.replace(
+            "REFERENCES dim_customer(customer_id)",
+            "REFERENCES pii_customer(id)",
+        ),
+    )
+    check_condition(
+        "仅改变外键目标会更新全局指纹",
+        changed_reference.schema_fingerprint != schema.schema_fingerprint,
+        expected="关系边参与 schema_fingerprint",
+    )
+    source_column_id = schema.tables[1].columns[1].id
+    check_condition(
+        "仅改变外键目标会更新字段作用域指纹",
+        scope_fingerprint(changed_reference, source_column_id)
+        != scope_fingerprint(schema, source_column_id),
+        expected="关系边参与字段作用域指纹",
     )
 
     reordered = await parse_ddl(

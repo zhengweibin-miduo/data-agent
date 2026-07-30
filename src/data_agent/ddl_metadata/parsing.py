@@ -364,8 +364,10 @@ def _parse_ddl_sync(
         create.sql(dialect="mysql", pretty=True) for create in creates
     )
     ddl_hash = hashlib.sha256(canonical_ddl.encode()).hexdigest()
+    relationships = _relationships(creates, tables)
     physical_json = json.dumps(
-        [
+        {
+            "tables": [
             {
                 "qualified_name": table.qualified_name,
                 "comment": table.comment,
@@ -381,7 +383,12 @@ def _parse_ddl_sync(
                 ],
             }
             for table in tables
-        ],
+            ],
+            "relationships": [
+                relationship.model_dump(mode="json")
+                for relationship in relationships
+            ],
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -393,7 +400,7 @@ def _parse_ddl_sync(
         ddl_hash=ddl_hash,
         schema_fingerprint=schema_fingerprint,
         tables=tables,
-        relationships=_relationships(creates, tables),
+        relationships=relationships,
     )
 
 

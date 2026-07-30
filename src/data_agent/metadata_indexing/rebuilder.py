@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+from data_agent.data_sync.locks import generation_lock_name
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
@@ -44,11 +45,18 @@ class MetadataIndexRebuilder:
                 "索引重建目标确认不匹配: "
                 f"Elasticsearch={expected[0]}, Qdrant={expected[1]}"
             )
-        # 步骤二：确认后只重建配置中的字段值索引和语义集合。
-        await MetadataValueElasticsearchIndex(
-            ElasticsearchClient.get_client()
-        ).recreate()
-        await MetadataQdrantIndex(QdrantClient.get_client()).recreate()
+        # 步骤二：先在全局重建锁内持久化恢复任务，再执行破坏性操作。
+        # dispatcher 同样取得此锁，因此任务不可能在 reset 完成前被消费。
+        rebuild_lock = generation_lock_name("metadata-index-rebuild", "all")
+        async with MySQLDatabase.advisory_locks(
+            {rebuild_lock},
+            timeout_seconds=app_config.data_sync.generation_lock_timeout_seconds,
+        ):
+            await self.enqueue()
+            await MetadataValueElasticsearchIndex(
+                ElasticsearchClient.get_client()
+            ).recreate()
+            await MetadataQdrantIndex(QdrantClient.get_client()).recreate()
 
     async def enqueue(self) -> MetadataRebuildResult:
         """扫描当前 Meta，投递全部语义对象和合格字段表刷新。"""

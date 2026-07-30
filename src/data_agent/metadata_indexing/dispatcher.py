@@ -41,8 +41,9 @@ class MetadataIndexDispatcher:
                 else f"metadata-semantic-{item.object_kind.value}"
             )
             lock = generation_lock_name(lock_scope, item.object_id)
+            rebuild_lock = generation_lock_name("metadata-index-rebuild", "all")
             async with MySQLDatabase.advisory_locks(
-                {lock},
+                {rebuild_lock, lock},
                 timeout_seconds=app_config.data_sync.generation_lock_timeout_seconds,
             ):
                 # 等锁期间期望状态可能已被替换；过期 worker 不得触碰外部索引。

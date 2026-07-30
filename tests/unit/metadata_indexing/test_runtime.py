@@ -15,6 +15,7 @@ from tests.helpers.checks import check_equal, check_exception, fail_check
 from data_agent.ddl_metadata.worker.lifecycle import is_fatal_index_error
 from data_agent.errors import DataAgentError
 from data_agent.metadata_indexing import dispatcher as dispatcher_module
+from data_agent.metadata_indexing import rebuilder as rebuilder_module
 from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 from data_agent.metadata_indexing.elasticsearch import (
     MetadataValueElasticsearchIndex,
@@ -24,17 +25,83 @@ from data_agent.metadata_indexing.models import (
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
+    MetadataRebuildResult,
     MetadataSemanticHit,
     MetadataSemanticProjection,
     MetadataValueProjection,
 )
 from data_agent.metadata_indexing.projections import MetadataProjectionRepository
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
+from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
 from data_agent.settings import AppSettings, app_config
 
 
 class _Session:
     """测试用 Session 占位符。"""
+
+
+async def test_destructive_rebuild_persists_recovery_before_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """破坏性重建必须先持久化恢复任务并隔离 dispatcher。"""
+    events: list[str] = []
+    lock_names: set[str] = set()
+
+    class FakeMySQLDatabase:
+        """记录重建锁并提供异步上下文。"""
+
+        @classmethod
+        def advisory_locks(
+            cls,
+            names: set[str],
+            *,
+            timeout_seconds: float,
+        ) -> _LockContext:
+            """记录锁名并返回测试上下文。"""
+            del cls, timeout_seconds
+            lock_names.update(names)
+            return _LockContext()
+
+    class FakeIndex:
+        """记录后端重建顺序。"""
+
+        def __init__(self, client: object) -> None:
+            """忽略测试客户端。"""
+            del client
+
+        async def recreate(self) -> None:
+            """记录一次外部重建。"""
+            events.append("reset")
+
+    class FakeClient:
+        """返回固定客户端占位符。"""
+
+        @classmethod
+        def get_client(cls) -> object:
+            """返回客户端占位符。"""
+            del cls
+            return object()
+
+    async def fake_enqueue(self: MetadataIndexRebuilder) -> MetadataRebuildResult:
+        """记录 durable enqueue 已先完成。"""
+        del self
+        events.append("enqueue")
+        return MetadataRebuildResult(semantic_objects=1, value_tables=1)
+
+    monkeypatch.setattr(rebuilder_module, "MySQLDatabase", FakeMySQLDatabase)
+    monkeypatch.setattr(rebuilder_module, "MetadataValueElasticsearchIndex", FakeIndex)
+    monkeypatch.setattr(rebuilder_module, "MetadataQdrantIndex", FakeIndex)
+    monkeypatch.setattr(rebuilder_module, "ElasticsearchClient", FakeClient)
+    monkeypatch.setattr(rebuilder_module, "QdrantClient", FakeClient)
+    monkeypatch.setattr(MetadataIndexRebuilder, "enqueue", fake_enqueue)
+
+    await MetadataIndexRebuilder().reset_indexes(
+        confirmed_es_index=app_config.elasticsearch.metadata_value_index,
+        confirmed_qdrant_collection=app_config.qdrant.metadata_collection,
+    )
+
+    check_equal("恢复任务先于两个后端 reset", events, ["enqueue", "reset", "reset"])
+    check_equal("重建持有全局隔离锁", len(lock_names), 1)
 
 
 class _SessionContext:

@@ -20,6 +20,7 @@ from data_agent.metadata_indexing.models import (
     MetadataObjectKind,
 )
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
+from data_agent.models.semantic import MetricMetadata
 
 
 class _FakeResult:
@@ -263,4 +264,53 @@ async def test_snapshot_desired_states_cover_all_operations() -> None:
         <= identities,
         actual=identities,
         expected="列与指标 DELETE desired state",
+    )
+
+
+async def test_semantic_versions_cover_related_projection_context() -> None:
+    """表和指标版本必须随关联字段语义变化。"""
+    schema = await parse_ddl(
+        "metadata_index",
+        "CREATE TABLE fact_order (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+    )
+    metadata = semantic_for(schema, fact=True)
+    metric = MetricMetadata(
+        id="metric-1",
+        name="订单金额",
+        fact_table_id=schema.tables[0].id,
+        definition="订单金额合计",
+        relevant_column_ids=[schema.tables[0].columns[1].id],
+        answer_question_ids=["q1"],
+    )
+    before = semantic_desired_states(schema, metadata, [metric])
+    changed_columns = list(metadata.columns)
+    changed_columns[1] = changed_columns[1].model_copy(
+        update={"description": "含税订单金额"}
+    )
+    after = semantic_desired_states(
+        schema,
+        metadata.model_copy(update={"columns": changed_columns}),
+        [metric],
+    )
+    before_versions = {
+        (item.object_kind, item.object_id): item.desired_version
+        for item in before
+        if item.target == MetadataIndexTarget.SEMANTIC
+    }
+    after_versions = {
+        (item.object_kind, item.object_id): item.desired_version
+        for item in after
+        if item.target == MetadataIndexTarget.SEMANTIC
+    }
+    check_condition(
+        "表版本覆盖字段语义",
+        before_versions[(MetadataObjectKind.TABLE, schema.tables[0].id)]
+        != after_versions[(MetadataObjectKind.TABLE, schema.tables[0].id)],
+        expected="字段描述变化生成新的表 desired_version",
+    )
+    check_condition(
+        "指标版本覆盖关联字段语义",
+        before_versions[(MetadataObjectKind.METRIC, metric.id)]
+        != after_versions[(MetadataObjectKind.METRIC, metric.id)],
+        expected="字段描述变化生成新的指标 desired_version",
     )

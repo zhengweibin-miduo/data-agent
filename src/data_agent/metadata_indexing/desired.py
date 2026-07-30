@@ -32,6 +32,13 @@ def semantic_desired_states(
     """为当前已接受快照生成幂等语义 upsert/delete 期望状态。"""
     semantic_tables = {item.table_id: item for item in metadata.tables}
     semantic_columns = {item.column_id: item for item in metadata.columns}
+    physical_tables = {table.id: table for table in schema.tables}
+    physical_columns = {
+        column.id: column for table in schema.tables for column in table.columns
+    }
+    table_by_column = {
+        column.id: table for table in schema.tables for column in table.columns
+    }
     objects: list[tuple[MetadataObjectKind, str, object]] = []
     for table in schema.tables:
         objects.append(
@@ -41,6 +48,15 @@ def semantic_desired_states(
                 {
                     "physical": table.model_dump(mode="json"),
                     "semantic": semantic_tables[table.id].model_dump(mode="json"),
+                    "columns": [
+                        {
+                            "physical": column.model_dump(mode="json"),
+                            "semantic": semantic_columns[column.id].model_dump(
+                                mode="json"
+                            ),
+                        }
+                        for column in table.columns
+                    ],
                 },
             )
         )
@@ -52,14 +68,34 @@ def semantic_desired_states(
                     "table_id": table.id,
                     "physical": column.model_dump(mode="json"),
                     "semantic": semantic_columns[column.id].model_dump(mode="json"),
+                    "table_semantic": semantic_tables[table.id].model_dump(
+                        mode="json"
+                    ),
+                    "table_physical": table.model_dump(mode="json"),
                 },
             )
             for column in table.columns
         )
-    objects.extend(
-        (MetadataObjectKind.METRIC, metric.id, metric.model_dump(mode="json"))
-        for metric in metrics
-    )
+    for metric in metrics:
+        related = []
+        for column_id in sorted(metric.relevant_column_ids):
+            column = physical_columns[column_id]
+            table = physical_tables[table_by_column[column_id].id]
+            related.append(
+                {
+                    "physical": column.model_dump(mode="json"),
+                    "semantic": semantic_columns[column_id].model_dump(mode="json"),
+                    "table_physical": table.model_dump(mode="json"),
+                    "table_semantic": semantic_tables[table.id].model_dump(mode="json"),
+                }
+            )
+        objects.append(
+            (
+                MetadataObjectKind.METRIC,
+                metric.id,
+                {"metric": metric.model_dump(mode="json"), "related": related},
+            )
+        )
     semantic = [
         MetadataIndexDesired(
             target=MetadataIndexTarget.SEMANTIC,
