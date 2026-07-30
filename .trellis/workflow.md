@@ -44,6 +44,7 @@ Every task has its own directory under `.trellis/tasks/{MM-DD-name}/` holding `t
 ```bash
 # Task lifecycle
 python ./.trellis/scripts/task.py create "<title>" [--slug <name>] [--parent <dir>]
+python ./.trellis/scripts/task.py create "<title>" --slug <name> --platform codex --base-branch <branch>  # Codex child bootstrap only
 python ./.trellis/scripts/task.py start <name>          # set active task (session-scoped when available)
 python ./.trellis/scripts/task.py current --source      # show active task and source
 python ./.trellis/scripts/task.py finish                # clear active task (triggers after_finish hooks)
@@ -169,7 +170,7 @@ Use a parent task when one user request contains several independently verifiabl
 
 Use child tasks for deliverables that can be planned, implemented, checked, and archived independently. Parent/child structure is not a dependency system: if one child must wait for another, write that ordering in the child `prd.md` / `implement.md` and keep each child's acceptance criteria testable.
 
-Create new children with `task.py create "<title>" --slug <name> --parent <parent-dir>`. Link existing tasks with `task.py add-subtask <parent> <child>`, and unlink mistakes with `task.py remove-subtask <parent> <child>`.
+After the platform-specific Phase 1.0 route supplies the child's worktree, bootstrap it with `task.py create "<title>" --slug <name> --parent <parent-dir>`. Link existing tasks with `task.py add-subtask <parent> <child>`, and unlink mistakes with `task.py remove-subtask <parent> <child>`.
 
 <!-- Per-turn breadcrumb: shown when there is no active task (before Phase 1) -->
 
@@ -177,7 +178,7 @@ Create new children with `task.py create "<title>" --slug <name> --parent <paren
 No active task. First classify the current turn and ask for task-creation consent before creating any Trellis task.
 Simple conversation / small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
 Complex task: ask the user if you can create a Trellis task and enter the planning phase. If the user says no, explain, clarify scope, or suggest a smaller split.
-After consent, create the rule-compliant task branch and `.trellis/worktrees/<MM-DD-task-slug>` worktree, continue the session there, and only then run `task.py create`.
+After consent, route by host. Codex main session: load `trellis-create-task`, call Codex `create_thread` with a project worktree environment, and let the child bootstrap Trellis there. Every non-Codex platform: create the rule-compliant branch and `.trellis/worktrees/<MM-DD-task-slug>` with the existing Trellis `git worktree add` flow, then run `task.py create` inside it.
 [/workflow-state:no_task]
 
 ### Phase 1: Plan
@@ -319,6 +320,25 @@ directly in the current shared worktree.** Every new Trellis task must first get
 its own rule-compliant branch and worktree, and task creation must run from
 inside that worktree.
 
+[codex-inline, codex-sub-agent]
+
+The Codex main session must load `trellis-create-task`. That skill resolves the
+saved Codex project and calls the host `create_thread` tool with
+`target.environment.type="worktree"`. The current main checkout must not run
+`git worktree add` or `task.py create`; the created Codex child verifies the
+host-supplied linked worktree, creates or switches to the final task branch
+inside it, and runs
+`task.py create --platform codex --base-branch <pr-base>`.
+
+Codex sub-agents report `invalid_context` for user-owned task creation. They may
+research or implement an existing task but must not call `create_thread`.
+Parent and child Trellis tasks each use the same main-session host delegation;
+never create a nested local worktree inside a Codex-managed worktree.
+
+[/codex-inline, codex-sub-agent]
+
+[Claude Code, Cursor, OpenCode, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Reasonix, Trae, Kilo, Antigravity, Devin]
+
 1. Inspect and preserve the current workspace, then confirm the PR target and
    branch start point according to `.agents/skills/git-pr-rules/SKILL.md`:
 
@@ -400,19 +420,16 @@ inside that worktree.
    ```bash
    git branch --show-current
    git rev-parse --show-toplevel
-   python ./.trellis/scripts/task.py create "<task title>" --slug <task-slug>
-   python ./.trellis/scripts/task.py set-branch <MM-DD-task-slug> "<task-branch>"
-   python ./.trellis/scripts/task.py set-base-branch <MM-DD-task-slug> "<pr-base>"
+   python ./.trellis/scripts/task.py create "<task title>" --slug <task-slug> --base-branch "<pr-base>"
    ```
 
    The two preflight outputs must exactly equal `<task-branch>` and
    `<repo-root>/.trellis/worktrees/<MM-DD-task-slug>` before `task.py create`
    runs, and `task.py create` must run only after the new worktree has its own
-   `.trellis/.developer`. Because the current CLI initializes `base_branch`
-   from the checked-out branch and leaves `branch` unset, the two metadata
-   commands are required:
-   `<pr-base>` is the confirmed PR target branch name, not a remote-qualified
-   start-point ref.
+   `.trellis/.developer`. The create command records the actual current branch,
+   canonical worktree root, explicit PR base, and
+   `meta.worktree_owner=trellis`. `<pr-base>` is the confirmed PR target branch
+   name, not a remote-qualified start-point ref.
 
 8. After task creation and metadata updates, verify all three locations again:
 
@@ -462,6 +479,8 @@ metadata between worktrees or create the child without `--parent`; either action
 breaks the bidirectional parent/child link. Do not start the parent just because
 children exist; start the child that owns the next independently verifiable
 deliverable.
+
+[/Claude Code, Cursor, OpenCode, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Reasonix, Trae, Kilo, Antigravity, Devin]
 
 Run only `create` here — do not also run `start`. `start` flips status to
 `in_progress`, which switches the breadcrumb to the implementation phase before

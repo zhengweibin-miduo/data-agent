@@ -55,6 +55,12 @@ from .task_utils import (
     resolve_task_dir,
     run_task_hooks,
 )
+from .worktree import (
+    WorktreeVerificationError,
+    resolve_task_creation_platform,
+    resolve_task_creation_policy,
+    verify_codex_host_worktree,
+)
 
 
 # =============================================================================
@@ -203,9 +209,49 @@ def _default_prd_content(title: str, description: str | None = None) -> str:
 def cmd_create(args: argparse.Namespace) -> int:
     """Create a new task."""
     repo_root = get_repo_root()
+    platform = resolve_task_creation_platform(getattr(args, "platform", None))
+    creation_policy = resolve_task_creation_policy(platform)
+    requested_base_branch = getattr(args, "base_branch", None)
 
     if not args.title:
         print(colored("Error: title is required", Colors.RED), file=sys.stderr)
+        return 1
+
+    if creation_policy == "codex_host_managed":
+        if not requested_base_branch:
+            print(
+                colored(
+                    "Error: Codex host-managed task creation requires "
+                    "--base-branch with the reviewed PR target.",
+                    Colors.RED,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            worktree_state = verify_codex_host_worktree(repo_root)
+        except WorktreeVerificationError as exc:
+            print(colored(f"Error: {exc}", Colors.RED), file=sys.stderr)
+            return 1
+        actual_worktree_root = worktree_state.current_root
+        worktree_owner = "codex"
+    else:
+        actual_worktree_root = repo_root.resolve(strict=False)
+        worktree_owner = "trellis"
+
+    # Record the checked-out branch before writing task files. A detached HEAD
+    # cannot satisfy the task metadata contract on either ownership path.
+    _, branch_out, branch_err = run_git(["branch", "--show-current"], cwd=repo_root)
+    current_branch = branch_out.strip()
+    if not current_branch:
+        detail = branch_err.strip() or "the checkout is detached"
+        print(
+            colored(
+                f"Error: cannot create task without an active Git branch: {detail}",
+                Colors.RED,
+            ),
+            file=sys.stderr,
+        )
         return 1
 
     # Validate --package (CLI source: fail-fast)
@@ -231,6 +277,21 @@ def cmd_create(args: argparse.Namespace) -> int:
         assignee = get_developer(repo_root)
         if not assignee:
             print(colored("Error: No developer set. Run init_developer.py first or use --assignee", Colors.RED), file=sys.stderr)
+            return 1
+
+    # A host-managed child must inherit a starting state that already contains
+    # its parent metadata; otherwise creation cannot establish both links.
+    if creation_policy == "codex_host_managed" and args.parent:
+        parent_dir = resolve_task_dir(args.parent, repo_root)
+        if not (parent_dir / FILE_TASK_JSON).is_file():
+            print(
+                colored(
+                    "Error: Codex host-managed child creation requires the "
+                    f"parent task.json in the selected starting state: {args.parent}",
+                    Colors.RED,
+                ),
+                file=sys.stderr,
+            )
             return 1
 
     ensure_tasks_dir(repo_root)
@@ -293,10 +354,6 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # Record current branch as base_branch (PR target)
-    _, branch_out, _ = run_git(["branch", "--show-current"], cwd=repo_root)
-    current_branch = branch_out.strip() or "main"
-
     description = (args.description or "").strip()
     if not description.strip():
         print(
@@ -307,7 +364,15 @@ def cmd_create(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    existing_data = read_json(task_json_path) if task_json_path.is_file() else None
+    preserved_data = existing_data if isinstance(existing_data, dict) else {}
+    preserved_meta = preserved_data.get("meta")
+    task_meta = dict(preserved_meta) if isinstance(preserved_meta, dict) else {}
+    task_meta["worktree_owner"] = worktree_owner
+    task_meta["task_creation_policy"] = creation_policy
+
     task_data = {
+        **preserved_data,
         "id": slug,
         "name": slug,
         "title": args.title,
@@ -321,9 +386,9 @@ def cmd_create(args: argparse.Namespace) -> int:
         "assignee": assignee,
         "createdAt": today,
         "completedAt": None,
-        "branch": None,
-        "base_branch": current_branch,
-        "worktree_path": None,
+        "branch": current_branch,
+        "base_branch": requested_base_branch or current_branch,
+        "worktree_path": str(actual_worktree_root),
         "commit": None,
         "pr_url": None,
         "subtasks": [],
@@ -331,7 +396,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         "parent": None,
         "relatedFiles": [],
         "notes": "",
-        "meta": {},
+        "meta": task_meta,
     }
 
     write_json(task_json_path, task_data)
@@ -409,6 +474,13 @@ def cmd_create(args: argparse.Namespace) -> int:
             pass
 
     print(colored(f"Created task: {dir_name}", Colors.GREEN), file=sys.stderr)
+    print(
+        colored(
+            f"Worktree owner: {worktree_owner} ({creation_policy})",
+            Colors.BLUE,
+        ),
+        file=sys.stderr,
+    )
     print("", file=sys.stderr)
     print(colored("Next steps:", Colors.BLUE), file=sys.stderr)
     print("  - Fill prd.md with requirements and acceptance criteria", file=sys.stderr)

@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Python and repository guideline index"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Python quality and validation contract"}
+{"file": ".trellis/tasks/07-30-adaptive-worktree-management/research/host-native-worktree-capabilities.md", "reason": "Codex host-tool capability boundary and delegation contract"}
+{"file": ".trellis/spec/backend/trellis-task-worktree.md", "reason": "Executable Codex and Trellis worktree ownership contract"}
