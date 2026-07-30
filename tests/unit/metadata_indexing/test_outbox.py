@@ -71,6 +71,30 @@ class _RecordingSession:
         return 1
 
 
+async def test_semantic_enqueue_assigns_inserted_version_without_empty_case() -> None:
+    """纯 semantic UPSERT 的版本赋值必须生成合法 MySQL SQL。"""
+    session = _RecordingSession()
+    await MetadataIndexOutboxRepository(cast(AsyncSession, session)).enqueue(
+        [
+            MetadataIndexDesired(
+                target=MetadataIndexTarget.SEMANTIC,
+                object_kind=MetadataObjectKind.TABLE,
+                object_id="table-1",
+                operation=MetadataIndexOperation.UPSERT,
+                desired_version="v" * 64,
+            )
+        ]
+    )
+
+    sql = str(session.statements[0].compile(dialect=mysql.dialect()))
+    check_condition(
+        "semantic UPSERT 不生成空 CASE",
+        "CASE ELSE" not in sql,
+        actual=sql,
+        expected="desired_version 直接赋值为 inserted alias",
+    )
+
+
 async def test_shared_eligibility_change_refreshes_every_peer_table() -> None:
     """共享目标任一字段资格变化必须刷新所有关联 Meta 表。"""
     profile = {

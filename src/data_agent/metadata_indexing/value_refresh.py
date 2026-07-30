@@ -165,9 +165,14 @@ async def prepare_frequency_mutation(
         )
         if row is None or row["frequency_version"] is None or row["phase"] is None:
             continue
-        plan = await MetadataProjectionRepository(session).value_projection_plan(
-            table_id
-        )
+        try:
+            plan = await MetadataProjectionRepository(session).value_projection_plan(
+                table_id
+            )
+        except ProjectionNotReadyError:
+            # PENDING_SCHEMA 阶段尚无稳定 DW 快照可维护；后续首次 SCAN 会从
+            # 物化后的全量行建立精确基线，不能让 CDC 事务被索引投影阻塞。
+            continue
         if plan is None or plan.desired.target_table != desired.target_table:
             continue
         states.append(

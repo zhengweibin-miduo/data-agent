@@ -230,14 +230,28 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
             task_id = int(task_primary_key[0])
             await enqueue_value_refresh(session, desired, {"initial": True})
 
-        await MetadataIndexDispatcher().dispatch()
-        async with MySQLDatabase.session() as session:
-            cursor = await session.scalar(
-                select(metadata_index_outbox.c.last_primary_key).where(
-                    metadata_index_outbox.c.object_id == table_id
+        cursor: dict[str, object] | None = None
+        for _ in range(40):
+            await MetadataIndexDispatcher().dispatch()
+            async with MySQLDatabase.session() as session:
+                cursor = await session.scalar(
+                    select(metadata_index_outbox.c.last_primary_key).where(
+                        metadata_index_outbox.c.object_id == table_id
+                    )
                 )
-            )
-        check_equal("首个 SCAN 批次提交稳定主键游标", cursor, [3])
+            if cursor is not None:
+                break
+        check_equal(
+            "首个 SCAN 批次提交 schema 绑定主键游标",
+            cursor,
+            {
+                "v": 1,
+                "schema_fingerprint": desired.schema_fingerprint,
+                "columns": ["id"],
+                "types": ["BIGINT"],
+                "values": [3],
+            },
+        )
 
         await _dispatch_until(table_id, MetadataValueRefreshPhase.PUBLISH)
         original_publish = MetadataValueFrequencyRepository.settle_publish

@@ -134,9 +134,7 @@ class MetadataIndexOutboxRepository:
                     # changed 表达式才能与行内旧版本比较。
                     (
                         "desired_version",
-                        case(
-                            else_=statement.inserted.desired_version,
-                        ),
+                        statement.inserted.desired_version,
                     ),
                 ]
             )
