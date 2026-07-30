@@ -21,6 +21,7 @@ from data_agent.settings import app_config
 _ANALYZER = "metadata_value_zh"
 _BULK_DOCUMENT_LIMIT = 500
 _BULK_BYTE_LIMIT = 5 * 1024 * 1024
+_REFRESH_VERSION_PAGE_SIZE = 500
 
 
 def _analyzer_config(tokenizer: str) -> dict[str, object]:
@@ -204,29 +205,38 @@ class MetadataValueElasticsearchIndex:
     async def current_refresh_versions(
         self, table_ids: set[str]
     ) -> dict[str, frozenset[str]]:
-        """读取每张表当前可见的有界刷新代次集合。"""
+        """分页读取每张表当前可见的完整刷新代次集合。"""
         if not table_ids:
             return {}
-        response = await self._client.search(
-            index=self._index,
-            size=0,
-            query={"terms": {"table_id": sorted(table_ids)}},
-            aggs={
-                "tables": {
-                    "terms": {"field": "table_id", "size": len(table_ids)},
-                    "aggs": {
-                        "versions": {"terms": {"field": "refresh_version", "size": 2}}
-                    },
-                }
-            },
-        )
-        versions: dict[str, frozenset[str]] = {}
-        for bucket in response["aggregations"]["tables"]["buckets"]:
-            version_buckets = bucket["versions"]["buckets"]
-            versions[str(bucket["key"])] = frozenset(
-                str(version["key"]) for version in version_buckets
+        collected: dict[str, set[str]] = {}
+        after: dict[str, object] | None = None
+        while True:
+            composite: dict[str, object] = {
+                "size": _REFRESH_VERSION_PAGE_SIZE,
+                "sources": [
+                    {"table_id": {"terms": {"field": "table_id"}}},
+                    {"refresh_version": {"terms": {"field": "refresh_version"}}},
+                ],
+            }
+            if after is not None:
+                composite["after"] = after
+            response = await self._client.search(
+                index=self._index,
+                size=0,
+                query={"terms": {"table_id": sorted(table_ids)}},
+                aggs={"versions": {"composite": composite}},
             )
-        return versions
+            aggregation = response["aggregations"]["versions"]
+            for bucket in aggregation["buckets"]:
+                key = bucket["key"]
+                collected.setdefault(str(key["table_id"]), set()).add(
+                    str(key["refresh_version"])
+                )
+            next_after = aggregation.get("after_key")
+            if not next_after:
+                break
+            after = cast(dict[str, object], next_after)
+        return {table_id: frozenset(values) for table_id, values in collected.items()}
 
 
 def _bulk_chunks(

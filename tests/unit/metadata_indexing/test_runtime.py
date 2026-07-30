@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from types import SimpleNamespace, TracebackType
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from elasticsearch import AsyncElasticsearch
@@ -159,6 +159,73 @@ def test_mixed_refresh_generations_preserve_visible_partial_hits() -> None:
         _refresh_generation_matches(visible, visible, [_value_projection("Shanghai")]),
         True,
     )
+
+
+@pytest.mark.asyncio
+async def test_visible_refresh_generations_include_every_composite_page() -> None:
+    """三代以上共存时必须分页收集全部可见刷新代次。"""
+
+    class FakeElasticsearch:
+        """返回两页 composite aggregation。"""
+
+        def __init__(self) -> None:
+            """初始化请求记录。"""
+            self.calls: list[dict[str, object]] = []
+
+        async def search(self, **kwargs: object) -> dict[str, object]:
+            """按 after key 返回刷新代次分页。"""
+            self.calls.append(kwargs)
+            composite = cast(
+                dict[str, object],
+                cast(dict[str, object], kwargs["aggs"])["versions"],
+            )["composite"]
+            after = cast(dict[str, object], composite).get("after")
+            if after is None:
+                return {
+                    "aggregations": {
+                        "versions": {
+                            "buckets": [
+                                {
+                                    "key": {
+                                        "table_id": "table-1",
+                                        "refresh_version": "v0",
+                                    }
+                                },
+                                {
+                                    "key": {
+                                        "table_id": "table-1",
+                                        "refresh_version": "v1",
+                                    }
+                                },
+                            ],
+                            "after_key": {
+                                "table_id": "table-1",
+                                "refresh_version": "v1",
+                            },
+                        }
+                    }
+                }
+            return {
+                "aggregations": {
+                    "versions": {
+                        "buckets": [
+                            {"key": {"table_id": "table-1", "refresh_version": "v2"}}
+                        ]
+                    }
+                }
+            }
+
+    client = FakeElasticsearch()
+    index = MetadataValueElasticsearchIndex(cast(Any, client))
+
+    versions = await index.current_refresh_versions({"table-1"})
+
+    check_equal(
+        "完整收集三代",
+        versions,
+        {"table-1": frozenset({"v0", "v1", "v2"})},
+    )
+    check_equal("读取两页", len(client.calls), 2)
 
 
 def test_incomplete_value_search_preserves_authoritative_candidates() -> None:
