@@ -145,8 +145,19 @@ def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:
     """零命中也必须通过查询前后代次判断并发刷新。"""
     check_equal(
         "零命中检测到新增可见代次",
-        _refresh_generation_matches({}, {"table-1": "v2"}, []),
+        _refresh_generation_matches({}, {"table-1": frozenset({"v2"})}, []),
         False,
+    )
+
+
+def test_mixed_refresh_generations_preserve_visible_partial_hits() -> None:
+    """稳定混合代次中的命中属于可见集合时必须保留。"""
+    visible = {"table-1": frozenset({"v1", "v2"})}
+
+    check_equal(
+        "混合代次命中仍有效",
+        _refresh_generation_matches(visible, visible, [_value_projection("Shanghai")]),
+        True,
     )
 
 

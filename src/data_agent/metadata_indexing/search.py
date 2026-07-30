@@ -40,13 +40,13 @@ def _value_candidate_limit() -> int:
 
 
 def _refresh_generation_matches(
-    before: dict[str, str],
-    after: dict[str, str],
+    before: dict[str, frozenset[str]],
+    after: dict[str, frozenset[str]],
     projections: list[MetadataValueProjection],
 ) -> bool:
-    """确认查询前后表级可见代次稳定，包含零命中场景。"""
+    """确认查询前后表级可见代次集合稳定，包含混合代次场景。"""
     return before == after and all(
-        after.get(projection.table_id) == projection.refresh_version
+        projection.refresh_version in after.get(projection.table_id, frozenset())
         for projection in projections
     )
 

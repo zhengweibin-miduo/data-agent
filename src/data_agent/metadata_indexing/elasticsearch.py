@@ -201,8 +201,10 @@ class MetadataValueElasticsearchIndex:
             for hit in response["hits"]["hits"]
         ]
 
-    async def current_refresh_versions(self, table_ids: set[str]) -> dict[str, str]:
-        """读取每张表当前唯一可见的刷新代次。"""
+    async def current_refresh_versions(
+        self, table_ids: set[str]
+    ) -> dict[str, frozenset[str]]:
+        """读取每张表当前可见的有界刷新代次集合。"""
         if not table_ids:
             return {}
         response = await self._client.search(
@@ -218,11 +220,12 @@ class MetadataValueElasticsearchIndex:
                 }
             },
         )
-        versions: dict[str, str] = {}
+        versions: dict[str, frozenset[str]] = {}
         for bucket in response["aggregations"]["tables"]["buckets"]:
             version_buckets = bucket["versions"]["buckets"]
-            if len(version_buckets) == 1:
-                versions[str(bucket["key"])] = str(version_buckets[0]["key"])
+            versions[str(bucket["key"])] = frozenset(
+                str(version["key"]) for version in version_buckets
+            )
         return versions
 
 

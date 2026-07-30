@@ -267,6 +267,7 @@ class MemoryRepository:
                             agent_memory.c.active_key,
                             agent_memory.c.content,
                             agent_memory.c.content_hash,
+                            agent_memory.c.content_version,
                             agent_memory.c.record_version,
                             agent_memory.c.status,
                         )
@@ -299,16 +300,29 @@ class MemoryRepository:
                 candidate.supersedes_uids = []
                 continue
             active_uids = {str(row["uid"]) for row in active_rows}
+            comparable_active_rows = [
+                row
+                for row in active_rows
+                if str(row["content_version"]) == candidate.content_version
+            ]
+            if (
+                active_rows
+                and not comparable_active_rows
+                and candidate.decision != MemoryDecision.DELETE
+            ):
+                # 旧内容契约不能参与新契约的等价性判断；直接替换活动版本，
+                # 避免严格解码旧 payload，也避免 ADD 争用现有活动槽。
+                candidate.decision = MemoryDecision.UPDATE
             same_content = any(
                 str(row["content_hash"]) == candidate.content_hash
-                for row in active_rows
+                for row in comparable_active_rows
             )
             same_meaning = any(
                 semantically_equivalent(
                     _decode_content(row["content"]),
                     candidate.content,
                 )
-                for row in active_rows
+                for row in comparable_active_rows
             )
             if candidate.decision == MemoryDecision.DELETE:
                 candidate.decision = decide_memory(
@@ -341,9 +355,12 @@ class MemoryRepository:
                 candidate.supersedes_uids = []
                 continue
             if candidate.decision in {MemoryDecision.UPDATE, MemoryDecision.MERGE}:
-                if candidate.decision == MemoryDecision.MERGE and active_rows:
+                if (
+                    candidate.decision == MemoryDecision.MERGE
+                    and comparable_active_rows
+                ):
                     merged_content = _merge_metric_content(
-                        _decode_content(active_rows[0]["content"]),
+                        _decode_content(comparable_active_rows[0]["content"]),
                         candidate.content,
                     )
                     if merged_content is not None:
@@ -351,7 +368,7 @@ class MemoryRepository:
                         merged_same_content_row = next(
                             (
                                 row
-                                for row in active_rows
+                                for row in comparable_active_rows
                                 if str(row["content_hash"]) == candidate.content_hash
                             ),
                             None,
