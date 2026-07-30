@@ -53,16 +53,16 @@ def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:
     )
 
 
-def test_shared_target_requires_every_peer_column_to_be_eligible() -> None:
-    """共享 DW 同名列存在敏感或跳过来源时不得聚合任何来源的值。"""
+def test_shared_target_requires_unambiguous_column_ownership() -> None:
+    """共享 DW 同名列即使全部合格也不得把跨来源值归给单一字段。"""
     safe = _safe_shared_column_names(
         {
             "region": {"source-a-region", "source-b-region"},
-            "status": {"source-a-status", "source-b-status"},
+            "status": {"source-a-status"},
         },
-        {"source-a-region", "source-a-status", "source-b-status"},
+        {"source-a-region", "source-b-region", "source-a-status"},
     )
-    check_equal("不同资格的共享字段被保守排除", safe, {"status"})
+    check_equal("多来源同名字段被保守排除", safe, {"status"})
 
 
 def test_memory_content_version_rejects_pre_value_index_records() -> None:

@@ -46,11 +46,11 @@ def _safe_shared_column_names(
     peer_column_ids_by_name: dict[str, set[str]],
     eligible_peer_ids: set[str],
 ) -> set[str]:
-    """仅保留每个共享来源字段均通过资格门禁的物理列名。"""
+    """仅保留来源归属唯一且通过资格门禁的物理列名。"""
     return {
         name
         for name, column_ids in peer_column_ids_by_name.items()
-        if column_ids and column_ids <= eligible_peer_ids
+        if len(column_ids) == 1 and column_ids <= eligible_peer_ids
     }
 
 
