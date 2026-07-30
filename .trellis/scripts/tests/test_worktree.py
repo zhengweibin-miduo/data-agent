@@ -187,8 +187,13 @@ class TaskMetadataTests(unittest.TestCase):
             with _working_directory(repository.linked):
                 result = cmd_create(self._args())
                 self.assertEqual(result, 0)
-                task_dirs = list((repository.linked / ".trellis" / "tasks").glob("*"))
-                task_dir = next(path for path in task_dirs if path.is_dir())
+                task_dir = next(
+                    path
+                    for path in (repository.linked / ".trellis" / "tasks").glob(
+                        "*-host-worktree-metadata"
+                    )
+                    if path.is_dir()
+                )
                 task_json = task_dir / "task.json"
                 data = json.loads(task_json.read_text(encoding="utf-8"))
                 self.assertEqual(data["branch"], "feature/test-worktree")
@@ -267,6 +272,20 @@ class TaskMetadataTests(unittest.TestCase):
                 self.assertEqual(result, 1)
                 self.assertFalse((repository.linked / ".trellis" / "tasks").exists())
 
+    def test_codex_child_without_parent_metadata_fails_before_creation(self) -> None:
+        """父任务未进入 starting state 时拒绝创建孤立 child。"""
+        with DisposableWorktree() as repository:
+            with _working_directory(repository.linked):
+                result = cmd_create(
+                    self._args(
+                        slug="orphan-child",
+                        parent="07-30-uncommitted-parent",
+                    )
+                )
+                self.assertEqual(result, 1)
+                tasks_dir = repository.linked / ".trellis" / "tasks"
+                self.assertFalse(tasks_dir.exists())
+
     def test_codex_verifier_never_invokes_worktree_add(self) -> None:
         """确保 Codex 校验过程只使用只读 Git 命令。"""
         with DisposableWorktree() as repository:
@@ -325,6 +344,14 @@ class CodexWorkflowContractTests(unittest.TestCase):
         self.assertIn('"type": "working-tree"', skill)
         self.assertIn('"type": "branch"', skill)
         self.assertIn("Do not pass `model` or `thinking`", skill)
+        self.assertIn(
+            "the selected `startingState` must contain the parent",
+            skill,
+        )
+        self.assertIn(
+            "verify the parent `task.json` exists before running",
+            skill,
+        )
         self.assertIn('::created-thread{threadId="<threadId>"}', skill)
         self.assertIn(
             '::created-thread{clientThreadId="<clientThreadId>"}',

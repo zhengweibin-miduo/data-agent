@@ -66,6 +66,9 @@ Codex host action is a model tool call, not a Python interface:
 - A Trellis-created worktree must never be labeled as Codex-managed.
 - A queued Codex task returns `clientThreadId`; it must not be passed to tools
   requiring a ready `threadId`.
+- A Codex child task's selected `startingState` must already contain its parent
+  task directory and `task.json`; child creation fails before writing files if
+  the parent metadata is absent.
 
 ### 4. Validation & Error Matrix
 
@@ -79,6 +82,7 @@ Codex host action is a model tool call, not a Python interface:
 | Non-Codex platform | Use the Trellis-managed Phase 1.0 flow |
 | Saved Codex project missing or ambiguous | Stop before `create_thread` |
 | Codex setup returns `clientThreadId` | Return the queued created-task directive |
+| Codex child source omits its parent `task.json` | Reject before creating child files |
 
 ### 5. Good/Base/Bad Cases
 
@@ -104,6 +108,8 @@ Codex host action is a model tool call, not a Python interface:
   `git worktree add` to non-Codex platforms.
 - Assert the Codex skill preserves the ready and queued created-task directive
   forms.
+- Assert a Codex child cannot be created from a state that omits its parent
+  metadata.
 
 ### 7. Wrong vs Correct
 

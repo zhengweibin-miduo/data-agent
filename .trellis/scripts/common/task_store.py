@@ -279,6 +279,21 @@ def cmd_create(args: argparse.Namespace) -> int:
             print(colored("Error: No developer set. Run init_developer.py first or use --assignee", Colors.RED), file=sys.stderr)
             return 1
 
+    # A host-managed child must inherit a starting state that already contains
+    # its parent metadata; otherwise creation cannot establish both links.
+    if creation_policy == "codex_host_managed" and args.parent:
+        parent_dir = resolve_task_dir(args.parent, repo_root)
+        if not (parent_dir / FILE_TASK_JSON).is_file():
+            print(
+                colored(
+                    "Error: Codex host-managed child creation requires the "
+                    f"parent task.json in the selected starting state: {args.parent}",
+                    Colors.RED,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+
     ensure_tasks_dir(repo_root)
 
     # Get current developer as creator

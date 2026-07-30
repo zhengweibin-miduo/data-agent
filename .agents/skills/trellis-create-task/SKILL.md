@@ -43,6 +43,14 @@ Before calling a host tool:
    are not copied. Use `{type: "working-tree"}` only when the user explicitly
    requires the current working-tree state as the source.
 
+For a child Trellis task, the selected `startingState` must contain the parent
+task directory and its `task.json`. Verify this against the exact branch start
+point before calling `create_thread`. If the parent metadata exists only as an
+uncommitted working-tree change, do not fall back to a branch that omits it:
+use the working-tree source only with the user's explicit approval, or obtain
+authorization to commit the parent metadata first. Otherwise stop before
+creating the child.
+
 Stop on an unresolved base, start point, branch/path conflict, or missing
 developer identity. Do not stash, discard, or move unrelated changes.
 
@@ -84,9 +92,10 @@ The prompt passed to the child task must include every item below:
 - instructions to validate the new task, verify `task.json` records the actual
   branch/worktree/base and `meta.worktree_owner=codex`, then remain in planning.
 
-For a child Trellis task, also include `--parent <parent-dir>` and require the
-same bidirectional parent/child validation. Do not create a child locally in the
-parent task's checkout.
+For a child Trellis task, also include `--parent <parent-dir>`, require the child
+to verify the parent `task.json` exists before running the bootstrap command,
+and require the same bidirectional parent/child validation. Do not create a
+child locally in the parent task's checkout.
 
 ## 4. Ask Codex To Create the Worktree Task
 
