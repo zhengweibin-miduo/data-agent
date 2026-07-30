@@ -224,10 +224,12 @@ def _mysql_order_value(value: object, data_type: str) -> ColumnElement[Any]:
     """把绑定值转换为与 MySQL ENUM/SET 列排序一致的数据库表达式。"""
     normalized = data_type.lstrip().upper()
     members = _literal_type_members(data_type)
-    bound = literal(encode_row_value(value))
     if normalized.startswith("ENUM(") and members:
+        bound = literal(value)
         return func.field(bound, *members)
     if normalized.startswith("SET(") and members:
+        encoded = encode_row_value(value)
+        bound = literal(encoded.get("$set") if isinstance(encoded, dict) else encoded)
         numeric = literal(0)
         for index, member in enumerate(members):
             numeric += case(
@@ -235,7 +237,9 @@ def _mysql_order_value(value: object, data_type: str) -> ColumnElement[Any]:
                 else_=0,
             )
         return numeric
-    return bound
+    # DECIMAL、时态与二进制等主键必须按 MySQL 原列类型绑定；游标信封的
+    # JSON 编码只用于持久化，不能参与数据库排序比较。
+    return literal(value)
 
 
 async def _row_is_counted(
@@ -304,15 +308,12 @@ async def apply_frequency_row_changes(
                     session, state, column_id, row
                 ):
                     delta[_stable_value_text(row[name], data_type)] += 1
-            for value_text, amount in sorted(delta.items()):
-                if amount:
-                    await repository.apply_delta(
-                        table_id=state.table_id,
-                        column_id=column_id,
-                        frequency_version=state.frequency_version,
-                        value_text=value_text,
-                        delta=amount,
-                    )
+            await repository.apply_deltas(
+                table_id=state.table_id,
+                column_id=column_id,
+                frequency_version=state.frequency_version,
+                deltas={value: amount for value, amount in delta.items() if amount},
+            )
 
 
 class MetadataValueFrequencyRepository:
@@ -365,72 +366,111 @@ class MetadataValueFrequencyRepository:
             for row in rows
             if row[name] is not None
         )
-        for value_text, frequency in sorted(counts.items()):
-            await self.apply_delta(
-                table_id=table_id,
-                column_id=column_id,
-                frequency_version=frequency_version,
-                value_text=value_text,
-                delta=frequency,
-            )
+        await self.apply_deltas(
+            table_id=table_id,
+            column_id=column_id,
+            frequency_version=frequency_version,
+            deltas=counts,
+        )
 
-    async def apply_delta(
+    async def apply_deltas(
         self,
         *,
         table_id: str,
         column_id: str,
         frequency_version: str,
-        value_text: str,
-        delta: int,
+        deltas: Mapping[str, int],
     ) -> None:
-        """锁定一个规范值并应用精确正负变化。"""
-        value_hash = _value_hash(value_text)
-        identity = (
-            metadata_value_frequency.c.table_id == table_id,
-            metadata_value_frequency.c.column_id == column_id,
-            metadata_value_frequency.c.frequency_version == frequency_version,
-            metadata_value_frequency.c.value_hash == value_hash,
-        )
-        row = (
+        """批量锁定并应用一个字段的规范值频次变化。"""
+        effective = {value: delta for value, delta in deltas.items() if delta}
+        if not effective:
+            return
+        hashes = {_value_hash(value): value for value in effective}
+        rows = (
             (
                 await self._session.execute(
                     select(metadata_value_frequency)
-                    .where(*identity)
+                    .where(
+                        metadata_value_frequency.c.table_id == table_id,
+                        metadata_value_frequency.c.column_id == column_id,
+                        metadata_value_frequency.c.frequency_version
+                        == frequency_version,
+                        metadata_value_frequency.c.value_hash.in_(hashes),
+                    )
                     .with_for_update()
                 )
             )
             .mappings()
-            .one_or_none()
+            .all()
         )
-        if row is None:
-            if delta < 0:
+        existing = {str(row["value_hash"]): row for row in rows}
+        for value_hash, value_text in hashes.items():
+            row = existing.get(value_hash)
+            delta = effective[value_text]
+            if row is None and delta < 0:
                 raise RuntimeError("字段值精确频次出现未应用事件导致的负数")
+            if row is not None:
+                if str(row["value_text"]) != value_text:
+                    raise RuntimeError("字段值哈希碰撞")
+                if int(row["frequency"]) + delta < 0:
+                    raise RuntimeError("字段值精确频次不能为负数")
+        positive = {
+            value_hash: value_text
+            for value_hash, value_text in hashes.items()
+            if effective[value_text] > 0
+        }
+        if positive:
+            statement = insert(metadata_value_frequency).values(
+                [
+                    {
+                        "table_id": table_id,
+                        "column_id": column_id,
+                        "frequency_version": frequency_version,
+                        "value_hash": value_hash,
+                        "value_text": value_text,
+                        "frequency": effective[value_text],
+                    }
+                    for value_hash, value_text in sorted(positive.items())
+                ]
+            )
             await self._session.execute(
-                insert(metadata_value_frequency).values(
-                    table_id=table_id,
-                    column_id=column_id,
-                    frequency_version=frequency_version,
-                    value_hash=value_hash,
-                    value_text=value_text,
-                    frequency=delta,
+                statement.on_duplicate_key_update(
+                    frequency=metadata_value_frequency.c.frequency
+                    + statement.inserted.frequency
                 )
             )
-            return
-        if str(row["value_text"]) != value_text:
-            raise RuntimeError("字段值哈希碰撞")
-        frequency = int(row["frequency"]) + delta
-        if frequency < 0:
-            raise RuntimeError("字段值精确频次不能为负数")
-        if frequency == 0:
-            await self._session.execute(
-                delete(metadata_value_frequency).where(*identity)
-            )
-        else:
+        negative = {
+            value_hash: effective[value_text]
+            for value_hash, value_text in hashes.items()
+            if effective[value_text] < 0
+        }
+        if negative:
             await self._session.execute(
                 update(metadata_value_frequency)
-                .where(*identity)
-                .values(frequency=frequency)
+                .where(
+                    metadata_value_frequency.c.table_id == table_id,
+                    metadata_value_frequency.c.column_id == column_id,
+                    metadata_value_frequency.c.frequency_version
+                    == frequency_version,
+                    metadata_value_frequency.c.value_hash.in_(negative),
+                )
+                .values(
+                    frequency=metadata_value_frequency.c.frequency
+                    + case(
+                        negative,
+                        value=metadata_value_frequency.c.value_hash,
+                    )
+                )
             )
+        await self._session.execute(
+            delete(metadata_value_frequency).where(
+                metadata_value_frequency.c.table_id == table_id,
+                metadata_value_frequency.c.column_id == column_id,
+                metadata_value_frequency.c.frequency_version == frequency_version,
+                metadata_value_frequency.c.value_hash.in_(hashes),
+                metadata_value_frequency.c.frequency == 0,
+            )
+        )
 
     async def materialize_top_n(
         self,
@@ -790,6 +830,10 @@ class MetadataValueRefresh:
             async with MySQLDatabase.session() as session:
                 outbox = MetadataIndexOutboxRepository(session)
                 if not await outbox.lock_authoritative(item):
+                    return
+                # 当前权威 plan 始终反映最新结构。先在锁内提升 pending 代次，
+                # 避免拿新 plan 解码旧 schema 的持久化游标而无限 defer。
+                if await outbox.promote_pending_value_state(item):
                     return
                 plan = await self._plan(session, item.object_id)
                 current = (

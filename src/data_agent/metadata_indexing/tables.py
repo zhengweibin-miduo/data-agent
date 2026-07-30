@@ -9,9 +9,9 @@ from sqlalchemy import (
     Integer,
     String,
     Table,
-    Text,
     func,
 )
+from sqlalchemy.dialects.mysql import LONGTEXT
 
 from data_agent.persistence.schema import metadata
 from data_agent.settings import app_config
@@ -61,7 +61,7 @@ metadata_value_frequency = Table(
     Column("column_id", String(128), primary_key=True),
     Column("frequency_version", String(64), primary_key=True),
     Column("value_hash", String(64), primary_key=True),
-    Column("value_text", Text, nullable=False),
+    Column("value_text", LONGTEXT, nullable=False),
     Column("frequency", BigInteger, nullable=False),
     Column(
         "updated_at",
@@ -89,7 +89,7 @@ metadata_value_publication = Table(
     Column("document_id", String(64), primary_key=True),
     Column("column_id", String(128), nullable=False),
     Column("value_hash", String(64), nullable=False),
-    Column("value_text", Text, nullable=False),
+    Column("value_text", LONGTEXT, nullable=False),
     Column("schema_fingerprint", String(64), nullable=False),
     Column("desired_membership_version", String(64), nullable=True),
     Column("desired_frequency", BigInteger, nullable=True),

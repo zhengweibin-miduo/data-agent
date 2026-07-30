@@ -177,7 +177,7 @@ class MetadataIndexOutboxRepository:
             return
         if current["desired_version"] == item.desired_version:
             return
-        active = (
+        active = int(current["attempts"]) < app_config.metadata_index.max_attempts and (
             current["lease_token"] is not None
             or current["phase"] != MetadataValueRefreshPhase.COMPLETE.value
         )
@@ -425,8 +425,8 @@ class MetadataIndexOutboxRepository:
             if same_frequency and row["phase"] == MetadataValueRefreshPhase.SCAN.value:
                 values.update(
                     phase=MetadataValueRefreshPhase.SCAN.value,
-                    progress_column_id=row["progress_column_id"],
-                    last_primary_key=row["last_primary_key"],
+                    progress_column_id=progress_column_id,
+                    last_primary_key=last_primary_key,
                 )
             else:
                 values.update(
@@ -454,6 +454,27 @@ class MetadataIndexOutboxRepository:
             .values(**values)
         )
         return isinstance(result, CursorResult) and bool(result.rowcount)
+
+    async def promote_pending_value_state(
+        self,
+        item: ClaimedMetadataIndexWork,
+    ) -> bool:
+        """在读取当前投影前提升等待中的 VALUES 代次。"""
+        pending = await self._session.scalar(
+            select(metadata_index_outbox.c.pending_desired_version)
+            .where(*self._authority(item))
+            .with_for_update()
+        )
+        if pending is None:
+            return False
+        await self.advance_value_state(
+            item,
+            phase=item.phase or MetadataValueRefreshPhase.SCAN,
+            progress_column_id=item.progress_column_id,
+            last_primary_key=item.last_primary_key,
+            bulk_cursor=item.bulk_cursor,
+        )
+        return True
 
     async def lock_authoritative(self, item: ClaimedMetadataIndexWork) -> bool:
         """锁定仍由当前 worker 持有的 VALUES 状态行。"""

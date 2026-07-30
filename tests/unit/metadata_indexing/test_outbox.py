@@ -230,12 +230,30 @@ async def test_frequency_version_is_independent_of_triggering_peer() -> None:
         def __iter__(self) -> Iterator[str]:
             return iter(["table-a", "table-b"])
 
+    class FakeRows:
+        def mappings(self) -> FakeRows:
+            return self
+
+        def __iter__(self) -> Iterator[dict[str, object]]:
+            return iter(
+                {
+                    "id": f"column-{source}",
+                    "table_id": f"table-{source}",
+                    "index_profile": {"decision": "index"},
+                }
+                for source in ("a", "b")
+            )
+
     class FakeSession:
         async def scalars(self, statement: object) -> FakeScalars | FakeTableScalars:
             rendered = str(statement)
             if "desired_json" in rendered:
                 return FakeScalars()
             return FakeTableScalars()
+
+        async def execute(self, statement: object) -> FakeRows:
+            del statement
+            return FakeRows()
 
     captured: list[list[MetadataIndexDesired]] = []
 
@@ -459,6 +477,7 @@ async def test_enqueue_active_value_records_latest_pending_version() -> None:
                         "frequency_version": "old-frequency",
                         "phase": "publish",
                         "lease_token": "l" * 32,
+                        "attempts": 0,
                     }
                 ]
             )

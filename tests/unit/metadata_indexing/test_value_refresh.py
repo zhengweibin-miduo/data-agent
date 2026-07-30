@@ -1,5 +1,7 @@
 """字段值精确频次与稳定发布身份契约。"""
 
+from datetime import date, datetime
+from decimal import Decimal
 from typing import cast
 
 import pytest
@@ -63,8 +65,11 @@ async def test_cdc_update_applies_old_minus_one_and_new_plus_one(
         def __init__(self, session: AsyncSession) -> None:
             del session
 
-        async def apply_delta(self, **kwargs: object) -> None:
-            calls.append((str(kwargs["value_text"]), int(str(kwargs["delta"]))))
+        async def apply_deltas(self, **kwargs: object) -> None:
+            calls.extend(
+                (str(value), int(amount))
+                for value, amount in cast(dict[str, int], kwargs["deltas"]).items()
+            )
 
     monkeypatch.setattr(
         value_refresh,
@@ -92,8 +97,11 @@ async def test_scan_cursor_only_applies_cdc_to_already_scanned_rows(
         def __init__(self, session: AsyncSession) -> None:
             del session
 
-        async def apply_delta(self, **kwargs: object) -> None:
-            calls.append((str(kwargs["value_text"]), int(str(kwargs["delta"]))))
+        async def apply_deltas(self, **kwargs: object) -> None:
+            calls.extend(
+                (str(value), int(amount))
+                for value, amount in cast(dict[str, int], kwargs["deltas"]).items()
+            )
 
     monkeypatch.setattr(
         value_refresh,
@@ -181,6 +189,25 @@ async def test_scan_cursor_uses_mysql_enum_and_set_order() -> None:
     ).lower()
     check_condition("ENUM 使用 MySQL FIELD 顺序", "field(" in rendered)
     check_condition("SET 使用 MySQL FIND_IN_SET 位序", "find_in_set(" in rendered)
+
+
+@pytest.mark.parametrize(
+    ("value", "data_type"),
+    [
+        (Decimal("12.50"), "DECIMAL(10,2)"),
+        (date(2026, 7, 30), "DATE"),
+        (datetime(2026, 7, 30, 12, 30), "DATETIME"),
+        (b"\x01\x02", "BINARY(2)"),
+    ],
+)
+def test_mysql_cursor_comparison_binds_native_primary_key_values(
+    value: object,
+    data_type: str,
+) -> None:
+    """非 ENUM/SET 主键必须以驱动可识别的原生类型参与 MySQL 排序。"""
+    expression = value_refresh._mysql_order_value(value, data_type)
+    parameters = expression.compile().params
+    check_equal("原生主键绑定值", list(parameters.values()), [value])
 
 
 def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:

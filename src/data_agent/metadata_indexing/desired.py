@@ -21,6 +21,40 @@ from data_agent.models.semantic import MetricMetadata, SemanticMetadata
 from data_agent.settings import app_config
 
 
+def _value_frequency_version(
+    target_table: str,
+    peers: list[DesiredSyncTable],
+    column_metadata: dict[str, dict[str, object]],
+) -> str:
+    """以共享目标的完整稳定契约生成唯一频次代次。"""
+    unique_peers = {peer.desired_hash(): peer for peer in peers}.values()
+    ordered_peers = sorted(unique_peers, key=lambda peer: peer.desired_hash())
+    eligibility = sorted(
+        (
+            {
+                "column_id": column.id,
+                "name": column.name,
+                "index_profile": column_metadata[column.id]["index_profile"],
+            }
+            for peer in ordered_peers
+            for column in peer.columns
+            if column.id in column_metadata
+        ),
+        key=lambda item: str(item["column_id"]),
+    )
+    return metadata_desired_version(
+        {
+            "target_table": target_table,
+            "peer_generations": sorted(
+                (peer.desired_hash(), peer.schema_fingerprint)
+                for peer in ordered_peers
+            ),
+            "field_eligibility": eligibility,
+            "projection_version": app_config.metadata_index.projection_version,
+        }
+    )
+
+
 def semantic_desired_states(
     schema: PhysicalSchema,
     metadata: SemanticMetadata,
@@ -207,35 +241,16 @@ async def shared_value_refresh_states(
     states: list[MetadataIndexDesired] = []
     for target_table in sorted(target_tables):
         target_peers = [peer for peer in peers if peer.target_table == target_table]
-        eligibility = sorted(
-            [
-                {
-                    "column_id": column.id,
-                    "name": column.name,
-                    "index_profile": column_metadata[column.id]["index_profile"],
-                }
-                for peer in target_peers
-                for column in peer.columns
-                if column.id in column_metadata
-            ],
-            key=lambda item: str(item["column_id"]),
-        )
         table_ids = {
             str(column_metadata[column.id]["table_id"])
             for peer in target_peers
             for column in peer.columns
             if column.id in column_metadata
         }
-        version = metadata_desired_version(
-            {
-                "target_table": target_table,
-                "peer_generations": sorted(
-                    (peer.desired_hash(), peer.schema_fingerprint)
-                    for peer in target_peers
-                ),
-                "field_eligibility": eligibility,
-                "projection_version": app_config.metadata_index.projection_version,
-            }
+        version = _value_frequency_version(
+            target_table,
+            target_peers,
+            column_metadata,
         )
         states.extend(
             MetadataIndexDesired(
@@ -266,24 +281,31 @@ async def enqueue_value_refresh(
     ).all()
     peers = [DesiredSyncTable.model_validate(payload) for payload in peer_payloads]
     column_ids = {column.id for item in [desired, *peers] for column in item.columns}
-    table_identifiers = set(
-        await session.scalars(
-            select(column_info.c.table_id).where(column_info.c.id.in_(column_ids))
+    rows = (
+        await session.execute(
+            select(
+                column_info.c.id,
+                column_info.c.table_id,
+                column_info.c.index_profile,
+            ).where(column_info.c.id.in_(column_ids))
         )
-    )
+    ).mappings()
+    column_metadata = {
+        str(row["id"]): {
+            "table_id": str(row["table_id"]),
+            "index_profile": row["index_profile"],
+        }
+        for row in rows
+    }
+    table_identifiers = {
+        str(item["table_id"]) for item in column_metadata.values()
+    }
     if not table_identifiers:
         raise RuntimeError("DW 字段未对应当前 Meta 表")
-    frequency_version = metadata_desired_version(
-        {
-            "peer_desired_hashes": sorted(
-                {peer.desired_hash() for peer in [desired, *peers]}
-            ),
-            "peer_schema_fingerprints": sorted(
-                {peer.schema_fingerprint for peer in [desired, *peers]}
-            ),
-            "target_table": desired.target_table,
-            "normalization_version": 1,
-        }
+    frequency_version = _value_frequency_version(
+        desired.target_table,
+        [desired, *peers],
+        column_metadata,
     )
     await MetadataIndexOutboxRepository(session).enqueue(
         [

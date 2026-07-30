@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS metadata_value_frequency
     column_id         VARCHAR(128) NOT NULL,
     frequency_version CHAR(64) NOT NULL,
     value_hash        CHAR(64) NOT NULL,
-    value_text        TEXT NOT NULL,
+    value_text        LONGTEXT NOT NULL,
     frequency         BIGINT UNSIGNED NOT NULL,
     updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                       ON UPDATE CURRENT_TIMESTAMP,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS metadata_value_publication
     document_id                CHAR(64) NOT NULL,
     column_id                  VARCHAR(128) NOT NULL,
     value_hash                 CHAR(64) NOT NULL,
-    value_text                 TEXT NOT NULL,
+    value_text                 LONGTEXT NOT NULL,
     schema_fingerprint         CHAR(64) NOT NULL,
     desired_membership_version CHAR(64) NULL,
     desired_frequency          BIGINT UNSIGNED NULL,
