@@ -1556,3 +1556,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 49: 修复 PR #71 CDC 集成测试 CI
+
+**Date**: 2026-07-30
+**Task**: 修复 PR #71 CDC 集成测试 CI
+**Branch**: `fix/stabilize-ci-20260730`
+
+### Summary
+
+基于最新 master 与 PR #71 head 定位重复 CI 失败，补齐两条 CDC 集成测试的 Meta/desired 同事务前置和 scoped cleanup；真实 MySQL 定向测试 2 passed，完整 CI 等价测试 331 passed、1 deselected。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e7975f0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
