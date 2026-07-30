@@ -254,6 +254,79 @@ while allowing the later step to continue when resolution fails; then use the
 same PAT to exclude resolved and explicitly blocked threads, and delegate every
 remaining active unresolved thread even if it was delegated previously.
 
+## Scenario: Publish Structured Codex Review Thread Replies
+
+### 1. Scope / Trigger
+
+- A delegated Codex task has classified an active review thread as fixed,
+  no-change, or blocked and needs to publish the result.
+- Codex must not construct a GitHub reply body or call reply/resolve mutations
+  directly.
+
+### 2. Signatures
+
+- CLI:
+  `.github/scripts/codex-review-thread-reply.js --thread-id <id> --outcome <fixed|no_change|blocked> ...`
+- Fixed fields: `thread-id`, `outcome`, `reason`, `fix`, `commit-sha`,
+  `test-command`, and `test-summary`.
+- No-change and blocked fields: `thread-id`, `outcome`, and `reason`.
+
+### 3. Contracts
+
+- Every caller-provided field is non-empty, single-line, and bounded.
+- Fixed replies require a 40-character lowercase commit SHA equal to the
+  current open PR head returned by `gh pr view`.
+- The formatter owns all Markdown and real newline characters; callers never
+  provide a body.
+- Literal `\n`, pytest progress, warning summaries, tracebacks, site-package
+  paths, pytest documentation links, and long log separators are rejected.
+- A hidden marker makes publication idempotent. An existing fixed/no-change
+  reply may resume resolution without posting a duplicate.
+- Resolved threads are skipped. Blocked replies never resolve a thread.
+
+### 4. Validation & Error Matrix
+
+- Invalid or missing outcome fields -> fail before any GitHub mutation.
+- Fixed SHA differs from the current PR head -> fail without a reply.
+- Thread is already resolved -> return `skipped_resolved`.
+- Matching marker exists on an unresolved fixed/no-change thread -> resolve
+  without another reply.
+- Reply mutation fails -> propagate the error and never call resolve.
+- Resolve fails after a successful reply -> leave the reply as an idempotent
+  recovery marker; the next identical invocation retries only resolve.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a fixed result publishes compact Markdown with the verified remote SHA,
+  one test command, and one summary, then resolves the thread.
+- Base: a blocked result publishes one reason and leaves the thread unresolved.
+- Bad: Codex passes raw pytest output or a body containing escaped newlines; the
+  CLI rejects it without changing GitHub state.
+
+### 6. Tests Required
+
+- The standalone Node self-check covers argument parsing, three outcomes,
+  formatting with real newlines, forbidden content, fixed SHA validation,
+  resolved-thread skipping, marker idempotency, reply-before-resolve ordering,
+  reply failure, and remote-head mismatch.
+- The delegation script self-check proves its prompt requires the CLI for every
+  thread outcome and forbids direct reply/resolve calls.
+- Run both Node self-checks and `git diff --check`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Let Codex interpolate escaped newlines, commit placeholders, or captured pytest
+output into a direct `gh api` mutation and resolve the thread regardless of the
+reply result.
+
+#### Correct
+
+Pass bounded structured fields to the repository CLI. Let it validate the
+current PR and thread, format Markdown, publish once, and resolve only after a
+successful fixed/no-change reply.
+
 ## Scenario: User-triggered Codex Conflict Resolution
 
 ### 1. Scope / Trigger
