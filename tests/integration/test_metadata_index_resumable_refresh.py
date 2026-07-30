@@ -4,7 +4,7 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, insert, select, text
+from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.engine import CursorResult
 
 from data_agent.data_sync.backfill import apply_buffered_event
@@ -26,9 +26,9 @@ from data_agent.ddl_metadata.persistence.tables import column_info, table_info
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.metadata_indexing.desired import enqueue_value_refresh
-from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 from data_agent.metadata_indexing.elasticsearch import MetadataValueElasticsearchIndex
 from data_agent.metadata_indexing.models import (
+    ClaimedMetadataIndexWork,
     MetadataIndexDesired,
     MetadataIndexOperation,
     MetadataIndexTarget,
@@ -43,6 +43,8 @@ from data_agent.metadata_indexing.tables import (
 )
 from data_agent.metadata_indexing.value_refresh import (
     MetadataValueFrequencyRepository,
+    MetadataValueRefresh,
+    ValueRefreshPersistenceError,
 )
 from data_agent.settings import app_config
 from tests.helpers.checks import check_equal
@@ -66,8 +68,54 @@ async def _dispatch_until(table_id: str, phase: MetadataValueRefreshPhase) -> in
         calls += 1
         if calls > 40:
             raise AssertionError(f"字段值刷新未收敛到 {phase.value}")
-        await MetadataIndexDispatcher().dispatch()
+        await _run_target_unit(table_id)
     return calls
+
+
+async def _run_target_unit(table_id: str) -> None:
+    """定向领取目标表，避免全套集成测试的其他 outbox 行影响执行顺序。"""
+    lease_token = uuid4().hex
+    async with MySQLDatabase.session() as session:
+        await session.execute(
+            update(metadata_index_outbox)
+            .where(
+                metadata_index_outbox.c.target
+                == MetadataIndexTarget.VALUES.value,
+                metadata_index_outbox.c.object_id == table_id,
+            )
+            .values(
+                lease_token=lease_token,
+                lease_expires_at=text("DATE_ADD(NOW(), INTERVAL 10 MINUTE)"),
+            )
+        )
+        row = (
+            (
+                await session.execute(
+                    select(metadata_index_outbox).where(
+                        metadata_index_outbox.c.target
+                        == MetadataIndexTarget.VALUES.value,
+                        metadata_index_outbox.c.object_id == table_id,
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+    item = ClaimedMetadataIndexWork(
+        target=row["target"],
+        object_kind=row["object_kind"],
+        object_id=row["object_id"],
+        operation=row["operation"],
+        desired_version=row["desired_version"],
+        frequency_version=row["frequency_version"],
+        lease_token=lease_token,
+        progress_column_id=row["progress_column_id"],
+        phase=row["phase"],
+        last_primary_key=row["last_primary_key"],
+        bulk_cursor=row["bulk_cursor"],
+        index_generation=row["index_generation"],
+    )
+    await MetadataValueRefresh().run_next_unit(item)
 
 
 async def _documents(table_id: str) -> list[dict[str, object]]:
@@ -232,7 +280,7 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
 
         cursor: dict[str, object] | None = None
         for _ in range(40):
-            await MetadataIndexDispatcher().dispatch()
+            await _run_target_unit(table_id)
             async with MySQLDatabase.session() as session:
                 cursor = await session.scalar(
                     select(metadata_index_outbox.c.last_primary_key).where(
@@ -273,7 +321,8 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
             "settle_publish",
             fail_publish_once,
         )
-        await MetadataIndexDispatcher().dispatch()
+        with pytest.raises(ValueRefreshPersistenceError):
+            await _run_target_unit(table_id)
         monkeypatch.setattr(
             MetadataValueFrequencyRepository,
             "settle_publish",
@@ -464,7 +513,8 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
             "settle_cleanup",
             fail_cleanup_once,
         )
-        await MetadataIndexDispatcher().dispatch()
+        with pytest.raises(ValueRefreshPersistenceError):
+            await _run_target_unit(table_id)
         monkeypatch.setattr(
             MetadataValueFrequencyRepository,
             "settle_cleanup",
