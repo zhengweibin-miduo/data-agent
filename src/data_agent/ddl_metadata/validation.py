@@ -58,6 +58,36 @@ def _set_issues(
     return issues
 
 
+def _value_index_evidence_by_column(schema: PhysicalSchema) -> dict[str, set[str]]:
+    """建立每个字段可引用的值索引证据作用域。"""
+    # 步骤一：当前字段与所属表始终属于字段自身上下文，并建立关系目标查找表。
+    allowed = {
+        column.id: {table.id, column.id}
+        for table in schema.tables
+        for column in table.columns
+    }
+    tables_by_name = {table.qualified_name: table for table in schema.tables}
+    # 步骤二：仅把当前字段直接引用的目标表列加入作用域，拒绝同模式无关对象。
+    for relationship in schema.relationships:
+        target_table = tables_by_name.get(relationship.target_table)
+        if target_table is None:
+            continue
+        target_column = next(
+            (
+                column
+                for column in target_table.columns
+                if column.name == relationship.target_column
+            ),
+            None,
+        )
+        evidence = allowed.get(relationship.source_column_id)
+        if evidence is not None:
+            evidence.add(target_table.id)
+            if target_column is not None:
+                evidence.add(target_column.id)
+    return allowed
+
+
 def validate_metadata(
     schema: PhysicalSchema,
     metadata: SemanticMetadata,
@@ -82,6 +112,7 @@ def validate_metadata(
     )
     # 步骤二：逐表校验置信度与证据引用，低置信度属于不可自动修复问题。
     known_evidence = expected_tables | expected_columns
+    value_index_evidence = _value_index_evidence_by_column(schema)
     for table in metadata.tables:
         if table.confidence < confidence_threshold:
             issues.append(
@@ -142,12 +173,14 @@ def validate_metadata(
                 )
             )
         profile = column.value_index
-        if not set(profile.evidence) <= known_evidence:
+        if not set(profile.evidence) <= value_index_evidence.get(
+            column.column_id, set()
+        ):
             issues.append(
                 ValidationIssue(
                     code="invalid_value_index_evidence",
                     path=f"columns.{column.column_id}.value_index.evidence",
-                    message="字段值索引证据必须引用当前物理对象 ID",
+                    message="字段值索引证据必须引用当前字段、所属表或直接外键目标",
                 )
             )
         if (

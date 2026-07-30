@@ -225,3 +225,65 @@ async def test_value_index_profile_uses_strict_three_state_gate() -> None:
             reason="",
             evidence=[],
         )
+
+
+async def test_value_index_evidence_is_scoped_to_column_context() -> None:
+    """值索引证据只允许当前字段上下文及其直接外键目标。"""
+    schema, metadata = await _valid_metadata()
+    customer_table = next(
+        table for table in schema.tables if table.name == "dim_customer"
+    )
+    order_table = next(table for table in schema.tables if table.name == "fact_order")
+    customer_id = next(
+        column.id for column in customer_table.columns if column.name == "id"
+    )
+    foreign_key = next(
+        column for column in metadata.columns if column.column_id in {
+            physical.id
+            for physical in order_table.columns
+            if physical.name == "customer_id"
+        }
+    )
+    unrelated = next(
+        column for column in metadata.columns if column.column_id in {
+            physical.id
+            for physical in order_table.columns
+            if physical.name == "amount"
+        }
+    )
+
+    related_profile = foreign_key.value_index.model_copy(
+        update={"evidence": [foreign_key.column_id, customer_table.id, customer_id]}
+    )
+    unrelated_profile = unrelated.value_index.model_copy(
+        update={"evidence": [customer_table.id]}
+    )
+    candidate = metadata.model_copy(
+        update={
+            "columns": [
+                column.model_copy(
+                    update={
+                        "value_index": (
+                            related_profile
+                            if column.column_id == foreign_key.column_id
+                            else unrelated_profile
+                        )
+                    }
+                )
+                if column.column_id in {foreign_key.column_id, unrelated.column_id}
+                else column
+                for column in metadata.columns
+            ]
+        }
+    )
+
+    issues = validate_metadata(schema, candidate)
+    check_equal(
+        "直接外键目标通过且无关对象被拒绝",
+        [
+            issue.path
+            for issue in issues
+            if issue.code == "invalid_value_index_evidence"
+        ],
+        [f"columns.{unrelated.column_id}.value_index.evidence"],
+    )
