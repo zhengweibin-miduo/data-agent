@@ -76,7 +76,7 @@ ${threadList}
 
 每条审查意见必须在原 thread 下分别回复，并根据处理结果 resolve 或保持 unresolved。Codex 完成任务后可以使用默认格式发布任务总结，但所有 GitHub 回复、提交信息和任务总结必须使用简体中文。
 
-代码标识符、文件路径、命令和原始错误信息可以保留英文。代码链接必须指向推送后的实际提交 SHA，不得引用任务开始时的 Expected head。禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出，只保留测试命令、通过数量及与本次修改直接相关的异常。对外回复中禁止出现 \`[裁决]\`、\`SHOULD_FIX\` 或同类内部分类标签。`;
+代码标识符、文件路径、命令和原始错误信息可以保留英文。代码链接必须指向推送后的实际提交 SHA，不得引用任务开始时的 Expected head。禁止粘贴测试进度条、warnings summary、堆栈或完整命令输出，只保留测试命令、通过数量及与本次修改直接相关的异常。`;
 }
 
 function delegationBody(reviewId, headSha, headRef, threads) {
@@ -375,7 +375,6 @@ async function selfTest() {
   assert.match(body, /^@codex fix$/m);
   assert.match(body, /修复此 PR 中所有有效且尚未解决的审查问题/);
   assert.match(body, /所有 GitHub 回复、提交信息和任务总结必须使用简体中文/);
-  assert.match(body, /对外回复中禁止出现 `\[裁决\]`、`SHOULD_FIX` 或同类内部分类标签/);
   assert.match(body, /已修复的 thread 使用以下结构[\s\S]*提交 `<实际提交 SHA>` 已修复/);
   assert.match(body, /提交 `<实际提交 SHA>` 已修复/);
   assert.match(body, /确认无需修改的 thread[\s\S]*无需修改：<具体判断依据>/);
