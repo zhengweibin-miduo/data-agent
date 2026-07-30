@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace, TracebackType
 from typing import cast
@@ -17,7 +18,10 @@ from data_agent.ddl_metadata.worker.lifecycle import is_fatal_index_error
 from data_agent.errors import DataAgentError
 from data_agent.metadata_indexing import dispatcher as dispatcher_module
 from data_agent.metadata_indexing import rebuilder as rebuilder_module
-from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
+from data_agent.metadata_indexing.dispatcher import (
+    LocalProjectionError,
+    MetadataIndexDispatcher,
+)
 from data_agent.metadata_indexing.elasticsearch import (
     MetadataValueElasticsearchIndex,
     _async_bulk_chunks,
@@ -409,6 +413,348 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
         "过期语义领取不得读取或修改外部投影",
         state["projection_reads"],
         projection_reads,
+    )
+
+
+async def test_value_refresh_advances_one_column_then_finalizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """两个字段必须跨三次领取推进，且最终领取才清理旧版本。"""
+    state: dict[str, object] = {
+        "depth": 0,
+        "progress": None,
+        "upserts": [],
+        "finalized": [],
+        "acknowledged": 0,
+        "renewals": 0,
+    }
+    base_item = ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-1",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="v" * 64,
+        lease_token="l" * 32,
+    )
+    columns = (
+        ("column-1", "region", "VARCHAR(64)"),
+        ("column-2", "status", "VARCHAR(64)"),
+    )
+
+    class FakeMySQLDatabase:
+        """为多次领取提供独立短事务与无状态命名锁。"""
+
+        @classmethod
+        def session(cls) -> _SessionContext:
+            """返回记录型事务上下文。"""
+            del cls
+            return _SessionContext(state)
+
+        @classmethod
+        def advisory_locks(
+            cls,
+            names: set[str],
+            *,
+            timeout_seconds: float,
+        ) -> _LockContext:
+            """模拟值索引 generation lock。"""
+            del cls, names, timeout_seconds
+            return _LockContext()
+
+    class FakeOutboxRepository:
+        """把字段游标保存在跨 dispatch 调用共享的测试状态中。"""
+
+        def __init__(self, session: _Session) -> None:
+            """接收测试 Session。"""
+            del session
+
+        async def claim(self) -> list[ClaimedMetadataIndexWork]:
+            """返回携带当前持久化游标的新领取。"""
+            if cast(int, state["acknowledged"]):
+                return []
+            return [
+                base_item.model_copy(
+                    update={"progress_column_id": state["progress"]}
+                )
+            ]
+
+        async def is_authoritative(self, item: ClaimedMetadataIndexWork) -> bool:
+            """模拟当前领取仍然有效。"""
+            del item
+            return True
+
+        async def renew_lease(self, item: ClaimedMetadataIndexWork) -> bool:
+            """模拟每个外部边界续租成功。"""
+            del item
+            state["renewals"] = cast(int, state["renewals"]) + 1
+            return True
+
+        async def advance_progress(
+            self,
+            item: ClaimedMetadataIndexWork,
+            column_id: str,
+        ) -> bool:
+            """保存本次唯一完成的字段。"""
+            del item
+            state["progress"] = column_id
+            return True
+
+        async def acknowledge(self, item: ClaimedMetadataIndexWork) -> bool:
+            """记录 finalize 后的表级确认。"""
+            del item
+            state["acknowledged"] = cast(int, state["acknowledged"]) + 1
+            return True
+
+        async def restore_reconciliation(
+            self,
+            item: ClaimedMetadataIndexWork,
+        ) -> bool:
+            """成功路径不应补发修复代次。"""
+            del item
+            return False
+
+        async def defer(
+            self,
+            item: ClaimedMetadataIndexWork,
+            seconds: int = 30,
+        ) -> bool:
+            """成功路径不应延后。"""
+            del item, seconds
+            return False
+
+        async def backoff(
+            self,
+            item: ClaimedMetadataIndexWork,
+            error_type: str,
+        ) -> bool:
+            """成功路径不应退避。"""
+            del item, error_type
+            return False
+
+    class FakeProjectionRepository:
+        """返回两个固定有序字段及各自一个值。"""
+
+        def __init__(self, session: _Session) -> None:
+            """接收测试 Session。"""
+            del session
+
+        async def value_projection_plan(self, table_id: str) -> SimpleNamespace:
+            """返回稳定字段顺序。"""
+            del table_id
+            return SimpleNamespace(columns=columns)
+
+        async def value_projection_batch(
+            self,
+            table_id: str,
+            refresh_version: str,
+            plan: object,
+            column: tuple[str, str, str],
+        ) -> list[MetadataValueProjection]:
+            """返回当前字段的单文档投影。"""
+            del plan
+            return [
+                MetadataValueProjection(
+                    column_id=column[0],
+                    table_id=table_id,
+                    value_text=column[1],
+                    value_keyword=column[1],
+                    frequency=1,
+                    refresh_version=refresh_version,
+                    schema_fingerprint="schema-1",
+                )
+            ]
+
+    class FakeValueIndex:
+        """记录逐字段写入与最终表级清理。"""
+
+        def __init__(self, client: object) -> None:
+            """接收测试客户端。"""
+            del client
+
+        async def upsert_projections(
+            self,
+            projections: AsyncIterator[MetadataValueProjection],
+            heartbeat: object = None,
+        ) -> None:
+            """消费当前字段投影并记录字段标识。"""
+            del heartbeat
+            async for projection in projections:
+                cast(list[str], state["upserts"]).append(projection.column_id)
+
+        async def finalize_table(
+            self,
+            table_id: str,
+            refresh_version: str,
+            heartbeat: object = None,
+        ) -> None:
+            """记录旧版本清理只执行一次。"""
+            del heartbeat
+            cast(list[tuple[str, str]], state["finalized"]).append(
+                (table_id, refresh_version)
+            )
+
+    class FakeElasticsearchClient:
+        """提供值索引构造所需占位客户端。"""
+
+        @classmethod
+        def get_client(cls) -> object:
+            """返回占位客户端。"""
+            del cls
+            return object()
+
+    monkeypatch.setattr(dispatcher_module, "MySQLDatabase", FakeMySQLDatabase)
+    monkeypatch.setattr(
+        dispatcher_module,
+        "MetadataIndexOutboxRepository",
+        FakeOutboxRepository,
+    )
+    monkeypatch.setattr(
+        dispatcher_module,
+        "MetadataProjectionRepository",
+        FakeProjectionRepository,
+    )
+    monkeypatch.setattr(
+        dispatcher_module,
+        "MetadataValueElasticsearchIndex",
+        FakeValueIndex,
+    )
+    monkeypatch.setattr(
+        dispatcher_module,
+        "ElasticsearchClient",
+        FakeElasticsearchClient,
+    )
+
+    dispatcher = MetadataIndexDispatcher()
+    counts = [await dispatcher.dispatch() for _ in range(3)]
+
+    check_equal("字段工作单元不提前确认表级任务", counts, [0, 0, 1])
+    check_equal("每个字段仅写入一次", state["upserts"], ["column-1", "column-2"])
+    check_equal("持久化游标停在最后字段", state["progress"], "column-2")
+    check_equal(
+        "最后字段游标落盘后的领取才清理旧版本",
+        state["finalized"],
+        [("table-1", "v" * 64)],
+    )
+    check_equal("最终清理后确认一次 outbox", state["acknowledged"], 1)
+    check_equal("每个字段写入前后均复核租约", state["renewals"], 6)
+
+
+async def test_value_refresh_cancellation_propagates_without_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """任务取消必须原样传播，由租约到期恢复，不能记作远程失败。"""
+    item = ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-1",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="v" * 64,
+        lease_token="l" * 32,
+        progress_column_id="column-1",
+    )
+
+    async def cancel(
+        self: MetadataIndexDispatcher,
+        work: ClaimedMetadataIndexWork,
+    ) -> bool:
+        del self, work
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(MetadataIndexDispatcher, "_synchronize_values", cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await MetadataIndexDispatcher()._synchronize(item)
+
+
+async def test_local_progress_failure_defers_without_remote_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """进度 CAS 的本地 MySQL 失败只延后任务，不增加远程失败次数。"""
+    state: dict[str, object] = {"depth": 0, "deferred": 0, "backoffs": 0}
+    item = ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-1",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="v" * 64,
+        lease_token="l" * 32,
+    )
+
+    class FakeMySQLDatabase:
+        """提供错误结算所需的短事务。"""
+
+        @classmethod
+        def session(cls) -> _SessionContext:
+            del cls
+            return _SessionContext(state)
+
+    class FakeOutboxRepository:
+        """记录本地失败使用 defer 而非 backoff。"""
+
+        def __init__(self, session: _Session) -> None:
+            del session
+
+        async def defer(self, work: ClaimedMetadataIndexWork) -> bool:
+            del work
+            state["deferred"] = cast(int, state["deferred"]) + 1
+            return True
+
+        async def backoff(
+            self,
+            work: ClaimedMetadataIndexWork,
+            error_type: str,
+        ) -> bool:
+            del work, error_type
+            state["backoffs"] = cast(int, state["backoffs"]) + 1
+            return True
+
+    async def fail_progress(
+        self: MetadataIndexDispatcher,
+        work: ClaimedMetadataIndexWork,
+    ) -> bool:
+        del self, work
+        raise LocalProjectionError
+
+    monkeypatch.setattr(dispatcher_module, "MySQLDatabase", FakeMySQLDatabase)
+    monkeypatch.setattr(
+        dispatcher_module,
+        "MetadataIndexOutboxRepository",
+        FakeOutboxRepository,
+    )
+    monkeypatch.setattr(MetadataIndexDispatcher, "_synchronize_values", fail_progress)
+
+    check_equal(
+        "本地进度失败未完成任务",
+        await MetadataIndexDispatcher()._synchronize(item),
+        False,
+    )
+    check_equal("本地进度失败无损延后", state["deferred"], 1)
+    check_equal("本地进度失败不消耗远程预算", state["backoffs"], 0)
+
+
+async def test_finalize_renews_lease_before_and_after_cleanup() -> None:
+    """旧版本清理完成后必须再次确认租约，迟到 worker 不得继续确认。"""
+    calls: list[str] = []
+
+    class FakeClient:
+        """记录 delete-by-query 与心跳顺序。"""
+
+        async def delete_by_query(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            calls.append("cleanup")
+            return {"failures": [], "version_conflicts": 0}
+
+    async def heartbeat() -> None:
+        calls.append("heartbeat")
+
+    await MetadataValueElasticsearchIndex(
+        cast(AsyncElasticsearch, FakeClient())
+    ).finalize_table("table-1", "v" * 64, heartbeat=heartbeat)
+
+    check_equal(
+        "最终清理前后均复核租约",
+        calls,
+        ["heartbeat", "cleanup", "heartbeat"],
     )
 
 

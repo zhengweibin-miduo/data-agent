@@ -126,20 +126,26 @@ class MetadataValueElasticsearchIndex:
             await self._client.indices.delete(index=self._index)
         await self.setup()
 
-    async def refresh_table(
+    async def upsert_projections(
         self,
-        table_id: str,
-        refresh_version: str,
         projections: AsyncIterable[MetadataValueProjection],
         heartbeat: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """批量覆盖当前 top-N，并清理表内旧刷新版本。"""
+        """按既有双预算幂等写入一批字段值投影。"""
         async for operations in _async_bulk_chunks(projections):
             if heartbeat is not None:
                 await heartbeat()
             response = await self._client.bulk(operations=operations, refresh=False)
             if response.get("errors"):
                 raise RuntimeError("Elasticsearch Meta 字段值 bulk 写入失败")
+
+    async def finalize_table(
+        self,
+        table_id: str,
+        refresh_version: str,
+        heartbeat: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """最后一个字段进度持久化后清理表内旧刷新版本。"""
         if heartbeat is not None:
             await heartbeat()
         cleanup = await self._client.delete_by_query(
@@ -155,6 +161,8 @@ class MetadataValueElasticsearchIndex:
         )
         if cleanup.get("failures") or cleanup.get("version_conflicts"):
             raise RuntimeError("Elasticsearch Meta 字段值旧版本清理未完整完成")
+        if heartbeat is not None:
+            await heartbeat()
 
     async def search(
         self,

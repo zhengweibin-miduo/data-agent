@@ -45,6 +45,11 @@ class ClaimedMetadataIndexWork(MetadataIndexDesired):
     """带租约令牌的已领取索引任务。"""
 
     lease_token: str = Field(min_length=32, max_length=32, description="领取令牌。")
+    progress_column_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="字段值刷新最后完成的字段标识。",
+    )
 
 
 class MetadataSemanticProjection(ContractModel):

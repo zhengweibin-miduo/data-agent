@@ -81,6 +81,7 @@ class MetadataIndexDispatcher:
     async def _synchronize(self, item: ClaimedMetadataIndexWork) -> bool:
         """处理一个目标，并按完整 desired identity 确认或退避。"""
         semantic_fingerprint: str | None = None
+        values_finalized = True
         try:
             if item.operation == MetadataIndexOperation.REBUILD:
                 await MetadataIndexRebuilder().rebuild_target(item.target)
@@ -89,7 +90,7 @@ class MetadataIndexDispatcher:
             elif item.target == MetadataIndexTarget.SEMANTIC:
                 semantic_fingerprint = await self._synchronize_semantic(item)
             else:
-                await self._synchronize_values(item)
+                values_finalized = await self._synchronize_values(item)
         except ProjectionNotReadyError:
             async with MySQLDatabase.session() as session:
                 await MetadataIndexOutboxRepository(session).defer(item)
@@ -113,6 +114,8 @@ class MetadataIndexDispatcher:
                     type(error).__name__,
                 )
             logger.warning("Meta 索引同步失败，当前项目已退避并等待自动重试")
+            return False
+        if not values_finalized:
             return False
         # 步骤三：语义写入先重读当前 Meta 指纹，再按 desired identity 结算。
         async with MySQLDatabase.session() as session:
@@ -172,8 +175,8 @@ class MetadataIndexDispatcher:
     async def _synchronize_values(
         self,
         item: ClaimedMetadataIndexWork,
-    ) -> None:
-        """从当前 DW 快照重算一张表的合格字段 top-N 值。"""
+    ) -> bool:
+        """处理游标后的一个字段，或在末字段已落盘后执行最终清理。"""
         if item.operation != MetadataIndexOperation.REFRESH:
             raise ValueError("字段值索引仅支持 refresh 期望状态")
         try:
@@ -192,32 +195,60 @@ class MetadataIndexDispatcher:
             if not renewed:
                 raise LeaseLostError("Meta 索引任务 lease 已失效")
 
-        async def projections() -> AsyncIterator[MetadataValueProjection]:
-            if plan is None:
-                return
-            for column in plan.columns:
-                await renew()
-                try:
-                    async with MySQLDatabase.session() as session:
-                        batch = await MetadataProjectionRepository(
-                            session
-                        ).value_projection_batch(
-                            item.object_id,
-                            item.desired_version,
-                            plan,
-                            column,
-                        )
-                except Exception as error:
-                    raise LocalProjectionError from error
-                await renew()
-                for projection in batch:
-                    yield projection
+        columns = () if plan is None else plan.columns
+        column_ids = [column[0] for column in columns]
+        if item.progress_column_id is None:
+            cursor_index = -1
+        else:
+            try:
+                cursor_index = column_ids.index(item.progress_column_id)
+            except ValueError:
+                cursor_index = -1
+        next_index = cursor_index + 1
+        index = MetadataValueElasticsearchIndex(ElasticsearchClient.get_client())
+        if next_index >= len(columns):
+            await index.finalize_table(
+                item.object_id,
+                item.desired_version,
+                heartbeat=renew,
+            )
+            return True
 
-        await MetadataValueElasticsearchIndex(
-            ElasticsearchClient.get_client()
-        ).refresh_table(
-            item.object_id,
-            item.desired_version,
-            projections(),
-            heartbeat=renew,
-        )
+        assert plan is not None
+        column = columns[next_index]
+        await renew()
+        try:
+            async with MySQLDatabase.session() as session:
+                batch = await MetadataProjectionRepository(
+                    session
+                ).value_projection_batch(
+                    item.object_id,
+                    item.desired_version,
+                    plan,
+                    column,
+                )
+        except Exception as error:
+            raise LocalProjectionError from error
+        await renew()
+
+        async def projections() -> AsyncIterator[MetadataValueProjection]:
+            for projection in batch:
+                yield projection
+
+        await index.upsert_projections(projections(), heartbeat=renew)
+        await renew()
+        try:
+            async with MySQLDatabase.session() as session:
+                repository = MetadataIndexOutboxRepository(session)
+                advanced = await repository.advance_progress(item, column[0])
+                if not advanced:
+                    await repository.restore_reconciliation(item)
+        except Exception as error:
+            # Elasticsearch 文档 ID 与刷新版本均幂等；游标落盘失败应重放
+            # 当前字段，而不是误计为远程索引失败并消耗 dead-letter 预算。
+            raise LocalProjectionError from error
+        if not advanced:
+            logger.warning(
+                "Meta 字段值刷新进度已被更新，本次迟到写入不予确认并确保后续重新收敛"
+            )
+        return False

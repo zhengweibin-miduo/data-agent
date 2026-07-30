@@ -126,6 +126,100 @@ dispatcher logs the backlog size — silence must not be mistaken for success.
 Only remote-call failures increment `attempts`; lease expiry and superseded
 settlements must not.
 
+## Scenario: Resumable Metadata Value Refresh
+
+### 1. Scope / Trigger
+
+Use this contract when a derived-index refresh can exceed one worker execution
+because it scans several fields or sends several remote batches. Extending the
+job timeout is not recovery: cancellation and process exit still lose volatile
+progress.
+
+### 2. Signatures
+
+```python
+await MetadataIndexOutboxRepository(session).advance_progress(
+    claimed_work,
+    column_id,
+) -> bool
+await MetadataValueElasticsearchIndex.upsert_projections(projections, heartbeat)
+await MetadataValueElasticsearchIndex.finalize_table(
+    table_id,
+    refresh_version,
+    heartbeat,
+)
+```
+
+`data_sync.metadata_index_outbox.progress_column_id VARCHAR(128) NULL` stores
+the last fully written field for `target=values, operation=refresh`.
+
+### 3. Contracts
+
+- Eligible fields are processed in stable `column_info.id` order, one field per
+  claimed execution. A missing cursor starts at the first field; an unknown
+  cursor conservatively restarts there.
+- `advance_progress` matches the full desired identity plus `lease_token`, then
+  stores the field ID and releases the lease in the same short transaction.
+- A new `desired_version` atomically clears progress, retry error, and lease
+  state. Re-enqueueing the same version preserves progress.
+- Elasticsearch field writes are idempotent by stable document ID and refresh
+  version. MySQL progress failure after a write replays that field without
+  consuming the remote-service retry budget.
+- Old refresh versions are deleted only on a later claim after the last field
+  cursor is durable. Search remains incomplete while the outbox row exists.
+- Renew the lease both before and after every remote write or cleanup. A stale
+  worker may have produced a harmless old projection, but it must not advance
+  progress or acknowledge the outbox.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Worker is cancelled before cursor commit | Lease expires; replay current field |
+| Bulk succeeds but progress transaction fails | Defer without incrementing `attempts`; replay idempotently |
+| Desired version changes during field write | Post-write lease check fails; do not advance old progress |
+| Final cleanup fails | Keep last-field cursor and outbox; retry cleanup with remote back-off |
+| Lease changes during final cleanup | Do not acknowledge; the current desired state runs again |
+| Cursor is absent from the current plan | Restart from the first stable field |
+| No eligible fields remain | Finalize immediately so old documents are removed |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a wide table advances one durable field per claim and eventually
+  finalizes even when total work exceeds the worker timeout.
+- Base: cancellation replays at most the current field; repeated writes are
+  idempotent and completed fields are not recomputed.
+- Bad: one claim loops over every field, stores progress only in memory, or
+  deletes old versions before the last field cursor commits.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/unit/metadata_indexing/test_outbox.py
+uv run pytest tests/unit/metadata_indexing/test_runtime.py
+uv run pytest tests/integration/test_metadata_index_resumable_refresh.py
+```
+
+Tests assert full-authority progress CAS, new-version cursor reset, one-field
+advancement, cancellation propagation, local failure without remote retry
+consumption, lease checks around cleanup, and final removal of old versions.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: cancellation restarts the whole table and cleanup is coupled to bulk.
+await index.refresh_table(table_id, version, all_field_projections())
+
+# Correct: persist each completed field; finalize only when a later claim has
+# no remaining field.
+if next_column is not None:
+    await index.upsert_projections(current_field_projections(), heartbeat=renew)
+    await renew()
+    await repository.advance_progress(work, next_column.id)
+else:
+    await index.finalize_table(table_id, version, heartbeat=renew)
+```
+
 ### Re-verify a lockless scan under lock before acting on it
 
 A cursor scan that runs without locks (`scan_active`) may return rows that a

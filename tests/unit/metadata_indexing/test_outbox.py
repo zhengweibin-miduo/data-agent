@@ -189,12 +189,14 @@ def _work(token: str = "a" * 32) -> ClaimedMetadataIndexWork:
 async def test_claim_uses_database_clock_and_excludes_dead_letters() -> None:
     """领取必须短锁、数据库时钟租约并过滤死信。"""
     row = _work().model_dump(mode="json", exclude={"lease_token"})
+    row["progress_column_id"] = "column-0"
     session = _RecordingSession([_FakeResult([row]), _FakeResult()])
     repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
 
     claimed = await repository.claim(1)
 
     check_equal("领取一条工作", len(claimed), 1)
+    check_equal("领取携带持久化字段游标", claimed[0].progress_column_id, "column-0")
     selected = _rendered(session.statements[0])
     leased = _rendered(session.statements[1])
     check_condition(
@@ -234,6 +236,37 @@ async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
             actual=rendered,
             expected="WHERE 同时匹配操作、版本和租约令牌",
         )
+
+
+async def test_advance_progress_uses_full_authority_and_releases_lease() -> None:
+    """字段进度只能由当前完整领取身份保存，并立即允许下一次领取。"""
+    session = _RecordingSession([_FakeResult(rowcount=0)])
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+
+    check_equal(
+        "迟到字段进度未命中",
+        await repository.advance_progress(_work(), "column-2"),
+        False,
+    )
+
+    rendered = _rendered(session.statements[0])
+    check_condition(
+        "字段进度完整 CAS 并释放租约",
+        all(
+            field in rendered
+            for field in (
+                "operation",
+                "desired_version",
+                "lease_token",
+                "progress_column_id",
+                "available_at=now()",
+                "lease_token=%s",
+                "lease_expires_at=%s",
+            )
+        ),
+        actual=rendered,
+        expected="UPDATE 匹配完整领取身份、保存字段游标并清空租约",
+    )
 
 
 async def test_lease_renewal_requires_current_unexpired_generation() -> None:
@@ -310,6 +343,7 @@ async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
                 "lease_token",
                 "lease_expires_at",
                 "last_error_type",
+                "progress_column_id",
             )
         ),
         actual=duplicate,

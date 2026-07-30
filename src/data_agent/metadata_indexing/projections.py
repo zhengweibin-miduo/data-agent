@@ -239,7 +239,9 @@ class MetadataProjectionRepository:
                         column_info.c.id,
                         column_info.c.name,
                         column_info.c.index_profile,
-                    ).where(column_info.c.table_id == table_id)
+                    )
+                    .where(column_info.c.table_id == table_id)
+                    .order_by(column_info.c.id)
                 )
             )
             .mappings()

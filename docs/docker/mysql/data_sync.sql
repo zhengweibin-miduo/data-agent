@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS metadata_index_outbox
     object_id          VARCHAR(128) NOT NULL COMMENT 'Meta 对象或值刷新表标识',
     operation          VARCHAR(16) NOT NULL COMMENT 'upsert、delete 或 refresh 期望操作',
     desired_version    CHAR(64) NOT NULL COMMENT '合并期望状态版本',
+    progress_column_id VARCHAR(128) NULL COMMENT 'values 刷新最后完成的字段标识',
     attempts           INT NOT NULL DEFAULT 0 COMMENT '远程失败次数',
     available_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下次允许领取时间',
     lease_token        CHAR(32) NULL COMMENT '当前领取令牌',

@@ -97,6 +97,13 @@ class MetadataIndexOutboxRepository:
                             else_=metadata_index_outbox.c.last_error_type,
                         ),
                     ),
+                    (
+                        "progress_column_id",
+                        case(
+                            (changed, None),
+                            else_=metadata_index_outbox.c.progress_column_id,
+                        ),
+                    ),
                     # MySQL 从左到右计算赋值；版本列必须最后覆盖，前面的
                     # changed 表达式才能与行内旧版本比较。
                     ("desired_version", statement.inserted.desired_version),
@@ -156,6 +163,7 @@ class MetadataIndexOutboxRepository:
                     operation=row["operation"],
                     desired_version=row["desired_version"],
                     lease_token=token,
+                    progress_column_id=row["progress_column_id"],
                 )
             )
         return claimed
@@ -206,6 +214,25 @@ class MetadataIndexOutboxRepository:
         """仅确认仍由当前 worker 持有的完整期望状态。"""
         result = await self._session.execute(
             delete(metadata_index_outbox).where(*self._authority(item))
+        )
+        return isinstance(result, CursorResult) and bool(result.rowcount)
+
+    async def advance_progress(
+        self,
+        item: ClaimedMetadataIndexWork,
+        column_id: str,
+    ) -> bool:
+        """按完整领取身份保存已完成字段并立即释放租约。"""
+        result = await self._session.execute(
+            update(metadata_index_outbox)
+            .where(*self._authority(item))
+            .values(
+                progress_column_id=column_id,
+                available_at=func.now(),
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type=None,
+            )
         )
         return isinstance(result, CursorResult) and bool(result.rowcount)
 
