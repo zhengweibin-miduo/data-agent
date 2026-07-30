@@ -1,6 +1,7 @@
 """Elasticsearch Meta 字段值投影。"""
 
 import hashlib
+import json
 from typing import Any, cast
 
 from elasticsearch import AsyncElasticsearch
@@ -10,6 +11,8 @@ from data_agent.metadata_indexing.models import MetadataValueProjection
 from data_agent.settings import app_config
 
 _ANALYZER = "metadata_value_zh"
+_BULK_DOCUMENT_LIMIT = 500
+_BULK_BYTE_LIMIT = 5 * 1024 * 1024
 
 
 def metadata_value_document_id(column_id: str, value: str) -> str:
@@ -102,29 +105,14 @@ class MetadataValueElasticsearchIndex:
         projections: list[MetadataValueProjection],
     ) -> None:
         """批量覆盖当前 top-N，并清理表内旧刷新版本。"""
-        if projections:
-            operations: list[dict[str, object]] = []
-            for projection in projections:
-                operations.extend(
-                    [
-                        {
-                            "index": {
-                                "_index": self._index,
-                                "_id": metadata_value_document_id(
-                                    projection.column_id, projection.value_keyword
-                                ),
-                            }
-                        },
-                        projection.model_dump(mode="json"),
-                    ]
-                )
+        for operations in _bulk_chunks(projections):
             response = await self._client.bulk(operations=operations, refresh=False)
             if response.get("errors"):
                 raise RuntimeError("Elasticsearch Meta 字段值 bulk 写入失败")
-        await self._client.delete_by_query(
+        cleanup = await self._client.delete_by_query(
             index=self._index,
             conflicts="proceed",
-            refresh=False,
+            refresh=True,
             query={
                 "bool": {
                     "filter": [{"term": {"table_id": table_id}}],
@@ -132,6 +120,8 @@ class MetadataValueElasticsearchIndex:
                 }
             },
         )
+        if cleanup.get("failures") or cleanup.get("version_conflicts"):
+            raise RuntimeError("Elasticsearch Meta 字段值旧版本清理未完整完成")
 
     async def search(
         self,
@@ -160,3 +150,43 @@ class MetadataValueElasticsearchIndex:
             MetadataValueProjection.model_validate(hit["_source"])
             for hit in response["hits"]["hits"]
         ]
+
+
+def _bulk_chunks(
+    projections: list[MetadataValueProjection],
+) -> list[list[dict[str, object]]]:
+    """按文档数和 NDJSON 字节双预算构造 bulk 分块。"""
+    chunks: list[list[dict[str, object]]] = []
+    current: list[dict[str, object]] = []
+    current_bytes = 0
+    for projection in projections:
+        pair: list[dict[str, object]] = [
+            {
+                "index": {
+                    "_index": app_config.elasticsearch.metadata_value_index,
+                    "_id": metadata_value_document_id(
+                        projection.column_id, projection.value_keyword
+                    ),
+                }
+            },
+            projection.model_dump(mode="json"),
+        ]
+        pair_bytes = sum(
+            len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode())
+            + 1
+            for item in pair
+        )
+        if pair_bytes > _BULK_BYTE_LIMIT:
+            raise ValueError("单个 Meta 字段值超过 Elasticsearch bulk 字节上限")
+        if current and (
+            len(current) // 2 >= _BULK_DOCUMENT_LIMIT
+            or current_bytes + pair_bytes > _BULK_BYTE_LIMIT
+        ):
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.extend(pair)
+        current_bytes += pair_bytes
+    if current:
+        chunks.append(current)
+    return chunks

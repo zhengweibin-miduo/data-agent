@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_agent.data_sync.models import DesiredSyncTable
+from data_agent.data_sync.tables import data_sync_task
 from data_agent.ddl_metadata.persistence.tables import column_info
 from data_agent.metadata_indexing.models import (
     MetadataIndexDesired,
@@ -75,6 +76,18 @@ def semantic_desired_states(
         )
         for kind, object_id, payload in objects
     ]
+    eligibility_by_table = {
+        table.id: [
+            {
+                "column_id": column.id,
+                "index_profile": semantic_columns[column.id].value_index.model_dump(
+                    mode="json"
+                ),
+            }
+            for column in table.columns
+        ]
+        for table in schema.tables
+    }
     semantic.extend(
         MetadataIndexDesired(
             target=MetadataIndexTarget.SEMANTIC,
@@ -106,6 +119,7 @@ def semantic_desired_states(
                 {
                     "schema_fingerprint": schema.schema_fingerprint,
                     "table_id": table.id,
+                    "field_eligibility": eligibility_by_table[table.id],
                     "projection_version": app_config.metadata_index.projection_version,
                 }
             ),
@@ -121,12 +135,23 @@ async def enqueue_value_refresh(
     version_payload: object,
 ) -> None:
     """在当前 DW 事务中合并一条表级字段值刷新。"""
-    table_identifier = await session.scalar(
-        select(column_info.c.table_id).where(
-            column_info.c.id == desired.columns[0].id
+    peer_payloads = (
+        await session.scalars(
+            select(data_sync_task.c.desired_json).where(
+                data_sync_task.c.target_table == desired.target_table
+            )
+        )
+    ).all()
+    peers = [DesiredSyncTable.model_validate(payload) for payload in peer_payloads]
+    column_ids = {
+        column.id for item in [desired, *peers] for column in item.columns
+    }
+    table_identifiers = set(
+        await session.scalars(
+            select(column_info.c.table_id).where(column_info.c.id.in_(column_ids))
         )
     )
-    if table_identifier is None:
+    if not table_identifiers:
         raise RuntimeError("DW 字段未对应当前 Meta 表")
     await MetadataIndexOutboxRepository(session).enqueue(
         [
@@ -139,9 +164,11 @@ async def enqueue_value_refresh(
                     {
                         "desired_hash": desired.desired_hash(),
                         "position": version_payload,
+                        "target_table": desired.target_table,
                     }
                 ),
             )
+            for table_identifier in sorted(table_identifiers)
         ],
         debounce_seconds=app_config.metadata_index.debounce_seconds,
     )

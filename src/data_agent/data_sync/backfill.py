@@ -89,7 +89,11 @@ async def apply_backfill_batch(
     last_key = tuple(values[-1][name] for name in task.desired.primary_key)
     if not await repository.record_backfill_cursor(task, last_key):
         raise RuntimeError("回填批次完成后同步任务租约已失效")
-    await enqueue_value_refresh(session, task.desired, {"backfill_key": last_key})
+    await enqueue_value_refresh(
+        session,
+        task.desired,
+        {"backfill_key": [encode_row_value(value) for value in last_key]},
+    )
     return last_key
 
 

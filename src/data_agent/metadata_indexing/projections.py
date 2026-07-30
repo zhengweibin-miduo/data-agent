@@ -26,6 +26,10 @@ from data_agent.models.semantic import ColumnValueIndexProfile
 from data_agent.settings import app_config
 
 
+class ProjectionNotReadyError(RuntimeError):
+    """权威 DW 投影尚未物化，任务应无损延后。"""
+
+
 def _search_text(*parts: object) -> str:
     """把名称、别名、描述和上下文规范化为单一检索文本。"""
     values: list[str] = []
@@ -219,7 +223,9 @@ class MetadataProjectionRepository:
         resolved = await self.desired_table_for_columns({item[0] for item in eligible})
         if resolved is None:
             return []
-        desired, _ = resolved
+        desired, phase = resolved
+        if phase == SyncPhase.PENDING_SCHEMA:
+            raise ProjectionNotReadyError("DW 表尚未完成结构物化")
         quote = mysql_dialect().identifier_preparer.quote
         qualified = (
             f"{quote(app_config.data_sync.dw_database)}.{quote(desired.target_table)}"
@@ -305,7 +311,7 @@ class MetadataProjectionRepository:
                 select(data_sync_task.c.desired_json, data_sync_task.c.phase)
             )
         ).all()
-        matches: dict[str, list[tuple[str, SyncPhase]]] = {
+        matches: dict[str, list[tuple[str, SyncPhase, str]]] = {
             column_id: [] for column_id in eligible
         }
         for payload, phase in task_rows:
@@ -313,7 +319,11 @@ class MetadataProjectionRepository:
             for column in desired.columns:
                 if column.id in matches:
                     matches[column.id].append(
-                        (desired.schema_fingerprint, SyncPhase(str(phase)))
+                        (
+                            desired.schema_fingerprint,
+                            SyncPhase(str(phase)),
+                            desired.target_table,
+                        )
                     )
         resolved = {
             column_id: (eligible[column_id], task_matches[0][0])
@@ -339,6 +349,20 @@ class MetadataProjectionRepository:
                 if len(task_matches) == 1
             )
         )
+        target_tables = {
+            task_matches[0][2]
+            for task_matches in matches.values()
+            if len(task_matches) == 1
+        }
+        if complete and target_tables:
+            peer_phases = []
+            for payload, phase in task_rows:
+                peer = DesiredSyncTable.model_validate(payload)
+                if peer.target_table in target_tables:
+                    peer_phases.append(SyncPhase(str(phase)))
+            complete = bool(peer_phases) and all(
+                phase == SyncPhase.STREAMING for phase in peer_phases
+            )
         return resolved, complete
 
     def authoritative_value_candidates(
@@ -432,21 +456,32 @@ class MetadataProjectionRepository:
                         )
                     )
             else:
-                row = (
+                rows = (
                     await self._session.execute(
                         select(
                             metric_info.c.name,
                             metric_info.c.description,
-                        ).where(metric_info.c.id == object_id)
+                            column_metric.c.column_id,
+                        )
+                        .outerjoin(
+                            column_metric,
+                            column_metric.c.metric_id == metric_info.c.id,
+                        )
+                        .where(metric_info.c.id == object_id)
                     )
-                ).one_or_none()
-                if row:
+                ).all()
+                if rows:
                     candidates.append(
                         MetadataCandidate(
                             kind=kind,
                             object_id=object_id,
-                            name=str(row.name),
-                            description=str(row.description or ""),
+                            name=str(rows[0].name),
+                            description=str(rows[0].description or ""),
+                            related_column_ids=sorted(
+                                str(row.column_id)
+                                for row in rows
+                                if row.column_id is not None
+                            ),
                         )
                     )
         return candidates

@@ -1,5 +1,7 @@
 """从 Meta 与 DW 重新投递项目专用派生索引。"""
 
+from uuid import uuid4
+
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
@@ -51,6 +53,7 @@ class MetadataIndexRebuilder:
     async def enqueue(self) -> MetadataRebuildResult:
         """扫描当前 Meta，投递全部语义对象和合格字段表刷新。"""
         # 步骤一：在一个事务中扫描权威身份并合并重建 desired state。
+        rebuild_generation = uuid4().hex
         async with MySQLDatabase.session() as session:
             projections = MetadataProjectionRepository(session)
             identities = await projections.semantic_identities()
@@ -64,6 +67,7 @@ class MetadataIndexRebuilder:
                     desired_version=metadata_desired_version(
                         {
                             "rebuild": True,
+                            "rebuild_generation": rebuild_generation,
                             "projection_version": (
                                 app_config.metadata_index.projection_version
                             ),
@@ -83,6 +87,7 @@ class MetadataIndexRebuilder:
                     desired_version=metadata_desired_version(
                         {
                             "rebuild": True,
+                            "rebuild_generation": rebuild_generation,
                             "projection_version": (
                                 app_config.metadata_index.projection_version
                             ),

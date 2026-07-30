@@ -14,7 +14,10 @@ from data_agent.metadata_indexing.models import (
     MetadataIndexOperation,
     MetadataIndexTarget,
 )
-from data_agent.metadata_indexing.projections import MetadataProjectionRepository
+from data_agent.metadata_indexing.projections import (
+    MetadataProjectionRepository,
+    ProjectionNotReadyError,
+)
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
 
@@ -54,6 +57,11 @@ class MetadataIndexDispatcher:
                 semantic_fingerprint = await self._synchronize_semantic(item)
             else:
                 await self._synchronize_values(item)
+        except ProjectionNotReadyError:
+            async with MySQLDatabase.session() as session:
+                await MetadataIndexOutboxRepository(session).defer(item)
+            logger.info("Meta 字段值投影等待 DW 表完成物化")
+            return False
         except Exception as error:
             # 步骤二：失败只退避本项，异常内容不进入持久化状态。
             async with MySQLDatabase.session() as session:

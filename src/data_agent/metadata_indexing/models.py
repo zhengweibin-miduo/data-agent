@@ -79,6 +79,10 @@ class MetadataCandidate(ContractModel):
     table_id: str | None = Field(default=None, description="所属表标识。")
     name: str = Field(description="权威对象名称。")
     description: str = Field(description="权威对象描述。")
+    related_column_ids: list[str] = Field(
+        default_factory=list,
+        description="指标关联的权威字段标识；非指标候选为空。",
+    )
 
 
 class MetadataValueCandidate(ContractModel):

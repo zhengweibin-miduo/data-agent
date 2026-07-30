@@ -206,6 +206,20 @@ class MetadataIndexOutboxRepository:
         )
         return isinstance(result, CursorResult) and bool(result.rowcount)
 
+    async def defer(self, item: ClaimedMetadataIndexWork, seconds: int = 30) -> bool:
+        """无损释放尚未物化投影的租约，不消耗失败预算。"""
+        result = await self._session.execute(
+            update(metadata_index_outbox)
+            .where(*self._authority(item))
+            .values(
+                available_at=func.timestampadd(text("SECOND"), seconds, func.now()),
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type=None,
+            )
+        )
+        return isinstance(result, CursorResult) and bool(result.rowcount)
+
     async def pending_value_tables(self, table_ids: set[str]) -> set[str]:
         """读取仍存在值刷新期望状态的表标识。"""
         if not table_ids:

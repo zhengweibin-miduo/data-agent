@@ -156,7 +156,7 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
     value_refresh.assert_awaited_once_with(
         session,
         task.desired,
-        {"backfill_key": (3,)},
+        {"backfill_key": [3]},
     )
 
 
