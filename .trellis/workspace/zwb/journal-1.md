@@ -1523,3 +1523,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 48: 建立 Meta 语义与字段值索引
+
+**Date**: 2026-07-30
+**Task**: 建立 Meta 语义与字段值索引
+**Branch**: `feature/metadata-semantic-value-index-20260730`
+
+### Summary
+
+实现 LLM 字段索引三态决策、Meta/Qdrant/Elasticsearch 投影、持久化 outbox、DW 增量刷新、内部检索和安全重建；Ruff、Pyright、compileall 与 290 个非集成测试通过，真实服务集成因 Docker 未运行未执行。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c247d61` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
