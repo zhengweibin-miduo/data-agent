@@ -629,6 +629,62 @@ class MetadataValueFrequencyRepository:
             )
         )
 
+    async def delete_stale_frequency_batch(
+        self,
+        item: ClaimedMetadataIndexWork,
+    ) -> int:
+        """删除一个有界批次的旧频次代次，并以已删除行数表示进度。"""
+        if item.frequency_version is None:
+            raise ValueError("字段值刷新缺少 frequency_version")
+        pending_frequency_version = await self._session.scalar(
+            select(metadata_index_outbox.c.pending_frequency_version).where(
+                metadata_index_outbox.c.target == item.target.value,
+                metadata_index_outbox.c.object_kind == item.object_kind.value,
+                metadata_index_outbox.c.object_id == item.object_id,
+                metadata_index_outbox.c.desired_version == item.desired_version,
+                metadata_index_outbox.c.lease_token == item.lease_token,
+            )
+        )
+        retained_versions = [item.frequency_version]
+        if pending_frequency_version is not None:
+            retained_versions.append(str(pending_frequency_version))
+        identity_columns = (
+            metadata_value_frequency.c.table_id,
+            metadata_value_frequency.c.column_id,
+            metadata_value_frequency.c.frequency_version,
+            metadata_value_frequency.c.value_hash,
+        )
+        rows = (
+            (
+                await self._session.execute(
+                    select(*identity_columns)
+                    .where(
+                        metadata_value_frequency.c.table_id == item.object_id,
+                        metadata_value_frequency.c.frequency_version.not_in(
+                            retained_versions
+                        ),
+                    )
+                    .order_by(
+                        metadata_value_frequency.c.frequency_version,
+                        metadata_value_frequency.c.column_id,
+                        metadata_value_frequency.c.value_hash,
+                    )
+                    .limit(app_config.metadata_index.value_scan_batch_size)
+                    .with_for_update()
+                )
+            )
+            .tuples()
+            .all()
+        )
+        if not rows:
+            return 0
+        await self._session.execute(
+            delete(metadata_value_frequency).where(
+                tuple_(*identity_columns).in_(rows)
+            )
+        )
+        return len(rows)
+
 
 class MetadataValueRefresh:
     """每次调用只执行一个有界、可恢复的字段值工作单元。"""
@@ -814,6 +870,21 @@ class MetadataValueRefresh:
                     session
                 ).prepare_cleanup(item)
                 if not document_ids:
+                    deleted = await MetadataValueFrequencyRepository(
+                        session
+                    ).delete_stale_frequency_batch(item)
+                    if deleted:
+                        await outbox.advance_value_state(
+                            item,
+                            phase=MetadataValueRefreshPhase.CLEANUP,
+                            bulk_cursor={
+                                "phase": MetadataValueRefreshPhase.CLEANUP.value,
+                                "desired_version": item.desired_version,
+                                "frequency_version": item.frequency_version,
+                                "deleted_frequency_rows": deleted,
+                            },
+                        )
+                        return
                     complete = True
         except Exception as error:
             raise ValueRefreshPersistenceError from error

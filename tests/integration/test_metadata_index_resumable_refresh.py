@@ -529,6 +529,21 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
             (region_id, "华东", 2),
             (status_id, "启用", 2),
         })
+        async with MySQLDatabase.session() as session:
+            remaining_frequency_versions = set(
+                (
+                    await session.execute(
+                        select(metadata_value_frequency.c.frequency_version)
+                        .where(metadata_value_frequency.c.table_id == table_id)
+                        .distinct()
+                    )
+                ).scalars()
+            )
+        check_equal(
+            "完成前回收旧频次代次",
+            remaining_frequency_versions,
+            {"b" * 64},
+        )
     finally:
         if index_ready:
             await _delete_test_documents(table_id)
