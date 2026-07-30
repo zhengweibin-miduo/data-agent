@@ -1589,3 +1589,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 50: 修复元数据索引长刷新无法收敛
+
+**Date**: 2026-07-30
+**Task**: 修复元数据索引长刷新无法收敛
+**Branch**: `fix/metadata-index-resumable-refresh-20260730`
+
+### Summary
+
+为 metadata_index_outbox 增加持久化字段游标，字段值索引按字段跨领取推进，最后独立清理旧版本；补齐租约竞态、取消恢复及真实 MySQL+Elasticsearch 集成验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `38a9b22` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

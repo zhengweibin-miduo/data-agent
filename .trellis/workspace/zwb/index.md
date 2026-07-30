@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 49
+- **Total Sessions**: 50
 - **Last Active**: 2026-07-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1591 | Active |
+| `journal-1.md` | ~1624 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 50 | 2026-07-30 | 修复元数据索引长刷新无法收敛 | `38a9b22` | `fix/metadata-index-resumable-refresh-20260730` |
 | 49 | 2026-07-30 | 修复 PR #71 CDC 集成测试 CI | `e7975f0` | `fix/stabilize-ci-20260730` |
 | 48 | 2026-07-30 | 建立 Meta 语义与字段值索引 | `c247d61` | `feature/metadata-semantic-value-index-20260730` |
 | 47 | 2026-07-30 | 修复 PR 66 的 JSON 空值与 DDL 串行化 | `74e466c`, `c3c80f5`, `bbe6118` | `fix/json-null-ddl-serialization-20260729` |
