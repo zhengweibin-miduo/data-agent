@@ -112,6 +112,7 @@ def test_set_value_text_is_stable_business_value() -> None:
 def test_bit_value_text_is_numeric_business_value() -> None:
     """MySQL BIT 投影必须按字段类型转换为可查询的十进制业务值。"""
     check_equal("BIT bytes 转十进制", _stable_value_text(b"\x05", "BIT(8)"), "5")
+    check_equal("bare BIT bytes 转十进制", _stable_value_text(b"\x01", "BIT"), "1")
 
 
 def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:

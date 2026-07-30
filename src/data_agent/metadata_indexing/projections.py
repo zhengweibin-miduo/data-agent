@@ -43,7 +43,7 @@ class ValueProjectionPlan:
 
 def _stable_value_text(value: object, data_type: str | None = None) -> str:
     """把特殊 MySQL 值转换为跨进程稳定的可检索业务文本。"""
-    if data_type and data_type.upper().startswith("BIT(") and isinstance(value, bytes):
+    if data_type and data_type.upper().startswith("BIT") and isinstance(value, bytes):
         return str(int.from_bytes(value, byteorder="big", signed=False))
     encoded = encode_row_value(value)
     if isinstance(encoded, dict):
