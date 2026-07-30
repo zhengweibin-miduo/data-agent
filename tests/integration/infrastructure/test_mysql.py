@@ -2,12 +2,16 @@
 
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from data_agent.infrastructure.mysql import MySQLDatabase
+from data_agent.infrastructure.mysql import (
+    AdvisoryLockUnavailableError,
+    MySQLDatabase,
+)
 from tests.helpers.checks import (
     check_condition,
     check_equal,
@@ -345,6 +349,37 @@ async def _test_mysql_client_integration() -> None:
         await MySQLDatabase.close()
 
 
+async def _test_advisory_lock_survives_business_commit() -> None:
+    """真实命名锁必须跨独立业务 Session 提交并在退出后可重新获取。"""
+    MySQLDatabase.initialize()
+    lock_name = f"data-sync-integration:{uuid4().hex}"
+    try:
+        # 步骤一：专用 owner 连接持锁时，独立业务 Session 正常提交不释放该锁。
+        async with MySQLDatabase.advisory_locks([lock_name], timeout_seconds=1):
+            async with MySQLDatabase.session() as session:
+                check_equal(
+                    "命名锁持有期间业务 Session 可提交",
+                    await session.scalar(text("SELECT 1")),
+                    1,
+                )
+            with pytest.raises(AdvisoryLockUnavailableError):
+                async with MySQLDatabase.advisory_locks(
+                    [lock_name],
+                    timeout_seconds=0,
+                ):
+                    fail_check(
+                        "同名 generation 锁竞争",
+                        actual="第二个 owner 进入临界区",
+                        expected="第二个 owner 立即收到锁竞争异常",
+                    )
+
+        # 步骤二：外层退出已可靠释放 owner 锁，同名 owner 可以再次取得。
+        async with MySQLDatabase.advisory_locks([lock_name], timeout_seconds=1):
+            pass
+    finally:
+        await MySQLDatabase.close()
+
+
 @pytest.mark.integration
 async def test_mysql_database_configuration() -> None:
     """运行不依赖 MySQL 服务的数据库生命周期测试。"""
@@ -356,3 +391,4 @@ async def test_mysql_database_configuration() -> None:
 async def test_mysql_client() -> None:
     """运行真实 MySQL 集成测试。"""
     await _test_mysql_client_integration()
+    await _test_advisory_lock_survives_business_commit()

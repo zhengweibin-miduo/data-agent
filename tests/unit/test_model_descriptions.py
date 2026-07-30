@@ -1,5 +1,6 @@
 """共享 Pydantic 领域模型字段说明检查。"""
 
+from data_agent.answer_readiness import models as answer_readiness_models
 from data_agent.conversation import models as conversation_models
 from data_agent.models import jobs, memory, physical, semantic
 from data_agent.models.base import ContractModel
@@ -8,7 +9,14 @@ from tests.helpers.checks import check_condition, check_equal
 
 def _model_classes() -> list[type[ContractModel]]:
     """收集领域模型模块中的所有契约模型。"""
-    modules = (conversation_models, jobs, memory, physical, semantic)
+    modules = (
+        answer_readiness_models,
+        conversation_models,
+        jobs,
+        memory,
+        physical,
+        semantic,
+    )
     classes: set[type[ContractModel]] = set()
     for module in modules:
         classes.update(

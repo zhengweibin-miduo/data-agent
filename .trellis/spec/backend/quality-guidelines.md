@@ -325,6 +325,27 @@ missing objects but cannot upgrade an incompatible memory schema; developers
 must use a disposable volume or separately approved exact-target reprovisioning.
 Meta tables must never be included in that destructive scope.
 
+For DW/CDC changes, also apply or verify `data_sync.sql` and `source_demo.sql`
+in a disposable environment, then run:
+
+```powershell
+uv run pytest tests/unit/data_sync
+uv run pytest tests/integration/data_sync
+docker compose -f docs/docker/docker-compose.yml config
+```
+
+For answer-readiness changes, run deterministic classifier/tool/service tests
+and the live read-only task-state check:
+
+```powershell
+uv run pytest tests/unit/answer_readiness
+uv run pytest tests/integration/answer_readiness
+```
+
+The replica account stays read-only; integration fixtures mutate `source_demo`
+through the local application account. Never recreate or delete the developer's
+shared volume merely to rerun entrypoint scripts.
+
 No CI test contacts a live LLM. The LLM infrastructure test mocks the
 capability probe; the real worker startup probe is a separate deployment check.
 
@@ -379,6 +400,16 @@ arguments), which is separate work.
   flight. Fixed sleeps and polling are not acceptable evidence.
 - For graph/worker work, prove interrupt/resume revision safety and that a
   persistence retry does not repeat completed model calls.
+- For DW/CDC work, prove safe DDL idempotency, composite-PK keyset continuation,
+  ROW INSERT/UPDATE/DELETE convergence, captured/applied coordinate separation,
+  cross-source collision without overwrite, lease retry/dead state, and
+  bootstrap/Core schema parity.
+- For answer readiness, prove one intent repair, catalog enforcement, no-wait
+  database bypass, source-scoped versus all-source semantics, `streaming`-only
+  readiness, bounded tool output, and zero task mutation.
+- Verify source credentials and business row images do not enter API contracts,
+  LLM/Redis state, logs, or test output; the replication account must not receive
+  source DDL/DML privileges.
 - For SSE/Redis Stream work, prove framing, initial authoritative snapshots,
   reconnect cursor behavior, waiting-input continuation, terminal closure,
   safe post-response errors, disconnect cleanup, TTL, and approximate

@@ -2,9 +2,15 @@
 
 from pathlib import Path
 
+import pytest
 from pydantic import ValidationError
 
-from data_agent.settings import AppSettings, SettingsModel, app_config
+from data_agent.settings import (
+    AppSettings,
+    DataSyncSourceSettings,
+    SettingsModel,
+    app_config,
+)
 from tests.helpers.checks import (
     check_condition,
     check_equal,
@@ -37,6 +43,18 @@ def _collect_settings_descriptions(
             missing.extend(nested_missing)
             descriptions.extend(nested_descriptions)
     return missing, descriptions
+
+
+def test_invalid_source_url_does_not_expose_credentials() -> None:
+    """无效源 URL 的校验错误不得回显复制凭证。"""
+    secret_url = "postgresql://replica:super-secret@db.example/source"
+
+    with pytest.raises(ValidationError) as error:
+        DataSyncSourceSettings(url=secret_url, server_id=1)
+
+    message = str(error.value)
+    assert "replica" not in message
+    assert "super-secret" not in message
 
 
 def test_default_app_config_loads_expected_values() -> None:
@@ -73,6 +91,21 @@ def test_default_app_config_loads_expected_values() -> None:
         "data_agent",
     )
     check_equal(
+        "test_default_app_config_loads_expected_values 同步控制数据库",
+        app_config.data_sync.database,
+        "data_sync",
+    )
+    check_equal(
+        "test_default_app_config_loads_expected_values DW 数据库",
+        app_config.data_sync.dw_database,
+        "dw",
+    )
+    check_equal(
+        "test_default_app_config_loads_expected_values generation 锁等待秒数",
+        app_config.data_sync.generation_lock_timeout_seconds,
+        10,
+    )
+    check_equal(
         "test_default_app_config_loads_expected_values API 监听地址",
         app_config.api.host,
         "127.0.0.1",
@@ -103,6 +136,28 @@ def test_default_app_config_loads_expected_values() -> None:
         app_config.redis.event_stream_max_events,
         256,
     )
+
+
+def test_data_sync_source_rejects_synchronous_mysql_driver() -> None:
+    """CDC 查询引擎只接受项目安装的 asyncmy 异步 dialect。"""
+    payload = app_config.model_dump(mode="json")
+    payload["data_sync"]["sources"]["source_demo"]["url"] = (
+        "mysql+pymysql://user:password@localhost/business"
+    )
+    try:
+        AppSettings.model_validate(payload)
+    except ValidationError as error:
+        check_condition(
+            "同步 MySQL driver 被明确拒绝",
+            "mysql+asyncmy" in str(error),
+            actual=str(error),
+        )
+    else:
+        fail_check(
+            "同步 MySQL driver 被拒绝",
+            actual="mysql+pymysql",
+            expected="mysql+asyncmy",
+        )
     check_condition(
         "test_default_app_config_loads_expected_values 结构化输出方式",
         app_config.llm.structured_output_method in {"json_schema", "function_calling"},
@@ -238,3 +293,27 @@ def test_source_lease_must_cover_execution_and_waiting_sum() -> None:
         AppSettings.model_validate(payload).memory.source_lease_seconds,
         worker_timeout + waiting_timeout,
     )
+
+
+def test_data_sync_rejects_duplicate_sources_and_database_collisions() -> None:
+    """命名源与控制、业务数据库边界必须保持唯一。"""
+    for label in ("来源名称忽略大小写重复", "复制客户端编号重复", "数据库名称冲突"):
+        payload = app_config.model_dump(mode="json")
+        source = dict(payload["data_sync"]["sources"]["source_demo"])
+        if label == "来源名称忽略大小写重复":
+            source["server_id"] = int(source["server_id"]) + 1
+            payload["data_sync"]["sources"]["SOURCE_DEMO"] = source
+        elif label == "复制客户端编号重复":
+            payload["data_sync"]["sources"]["source_other"] = source
+        else:
+            payload["data_sync"]["database"] = payload["data_sync"]["dw_database"]
+        try:
+            AppSettings.model_validate(payload)
+        except ValidationError as error:
+            check_exception(f"{label} 捕获校验错误", error, ValidationError)
+        else:
+            fail_check(
+                label,
+                actual=payload["data_sync"],
+                expected="配置校验拒绝重复边界",
+            )

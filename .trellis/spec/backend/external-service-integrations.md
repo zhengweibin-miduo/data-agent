@@ -20,6 +20,7 @@ across major versions:
 | `AsyncQdrantClient` | `timeout` |
 | `AsyncInferenceClient` (TEI) | `timeout` |
 | `ChatOpenAI` | `timeout`, `max_retries` |
+| `MySQLSourceClient` | `connect_timeout_seconds`, `read_timeout_seconds` |
 | `AsyncRedisSaver` (LangGraph checkpoint) | `connection_args`: `socket_timeout`, `socket_connect_timeout`, `health_check_interval` |
 | arq queue pool (`infrastructure/job_queue.py`) | `socket_timeout`, `socket_connect_timeout`, `health_check_interval`, bounded `retry` |
 
@@ -426,6 +427,119 @@ if client is not None:
     await client.dispose()
 ```
 
+## Scenario: Named MySQL ROW Binlog Sources
+
+### 1. Scope / Trigger
+
+Use this contract when changing named business-source configuration, source
+backfill queries, Binlog capability checks/decoding, or the dedicated CDC
+process.
+
+### 2. Signatures
+
+```python
+await MySQLSourceClient.check_capabilities() -> None
+await MySQLSourceClient.current_coordinate() -> BinlogCoordinate
+await MySQLSourceClient.capture(
+    source_schema, source_table, start, limit
+) -> BinlogCaptureResult
+decode_rows_event(raw_event, source, coordinate) -> list[SyncRowEvent]
+await MySQLSourceClient.close() -> None
+data-agent-cdc
+```
+
+### 3. Contracts
+
+- `data_sync.sources.<name>.url` is a server-only MySQL URL with a database;
+  `server_id` is positive and unique across configured sources.
+- Credentials never enter API models, LLM input, Redis, row events, or logs.
+- The source account requires source `SELECT`, `REPLICATION SLAVE`, and
+  `REPLICATION CLIENT`; it does not receive source DDL/DML privileges.
+- Startup rejects sources without global `binlog_format=ROW` and
+  `binlog_row_image=FULL`.
+- SQLAlchemy handles bounded keyset reads. `mysql-replication` runs in
+  `asyncio.to_thread`, uses nonblocking bounded capture, filters the accepted
+  schema/table, freezes table shape for that stream, and fetches column names
+  from schema metadata when the Binlog omits them.
+- One ROW change becomes one typed `SyncRowEvent`; supported values use the
+  reversible JSON encoding in `data_sync.models`. Never log row images.
+- The project pins `mysql-replication==1.0.16`. Its ROW decoder maps both a JSON
+  column's SQL `NULL` and binary JSON literal `null` to Python `None`, so the
+  distinction must be captured before lazy `event.rows` decoding loses the null
+  bitmap. `decode_rows_event()` installs an instance-local adapter on the exact
+  `_RowsEvent__read_values_name(self, column, null_bitmap,
+  null_bitmap_index, is_partial, cols_bitmap, unsigned, i)` boundary before the
+  first rows access. Only a present JSON column with its null bit set receives
+  the private SQL-null sentinel; every other value delegates to the dependency's
+  original decoder. The sentinel never crosses the canonical event boundary.
+- `data-agent-cdc` is a separate process, not an arq job. Startup checks every
+  source; shutdown closes all source engines and then `MySQLDatabase`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| URL is not MySQL or lacks a database | Configuration validation fails |
+| Source name is invalid/duplicate or `server_id` repeats | Configuration validation fails |
+| ROW/FULL capability is absent | CDC startup fails before claiming tasks |
+| Unknown ROW event type/value encoding | Reject; do not silently coerce |
+| Locked private ROW decoder is missing or its signature changes | Fail fast before capture; do not silently collapse JSON null provenance |
+| JSON column null bitmap is set | Encode the durable field as ordinary `None`, producing SQL `NULL` on DW replay |
+| JSON binary payload is literal `null` | Encode the durable field as `{"$json": "null"}`, preserving JSON literal null on DW replay |
+| Connection/read timeout | Classify for bounded task retry |
+| Event belongs to another schema/table/source | Reject before DW DML |
+| Capture contains multiple rows in one event | Persist the complete event; do not truncate its rows |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a read-only replication account supplies named columns and bounded
+  INSERT/UPDATE/DELETE events from the persisted coordinate while preserving
+  JSON SQL `NULL` provenance.
+- Base: an empty capture advances only to the stream's safe tail.
+- Bad: run the stream in arq, grant writes to the replication user, capture all
+  tables, infer JSON null provenance after rows are decoded, log row payloads,
+  or rely on dependency timeout defaults.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/unit/data_sync/test_binlog.py
+uv run pytest tests/integration/data_sync/test_cdc_pipeline.py
+docker compose -f docs/docker/docker-compose.yml config
+```
+
+The unit test pins the complete private decoder signature and asserts INSERT,
+UPDATE before/after, and DELETE null behavior before and after canonical
+encoding. The live test asserts ROW/FULL capability, named-column decoding,
+hard DELETE, offset convergence, read-only replica use, and distinct SQL `NULL`
+versus JSON literal `null` after durable replay into DW; fixture writes use a
+separate local application connection.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: fixture or runtime writes through the replication credential.
+await source.engine.execute(text("UPDATE source_demo.fact SET ..."))
+
+# Correct: source is read-only; CDC only reads and emits typed events.
+captured = await source.capture(
+    source_schema=desired.source_schema,
+    source_table=desired.source_table,
+    start=task.captured,
+    limit=remaining,
+)
+```
+
+```python
+# Wrong: both sources are already Python None after ordinary dependency decode.
+encoded = encode_row_value(value, json_value=True)
+
+# Correct: inspect the JSON column null bitmap inside the locked decoder
+# boundary, then encode only the private SQL-null sentinel as SQL NULL.
+_install_json_sql_null_adapter(event)
+rows = event.rows
+```
+
 ## Scenario: Redis Job State and LangGraph Checkpoints
 
 ### 1. Scope / Trigger
@@ -627,6 +741,30 @@ result = json.loads(await model.ainvoke(prompt))
 # Correct: capability is checked at startup and every response is typed.
 structured = model.with_structured_output(ResponseModel, method=method)
 result = await structured.ainvoke(messages)
+```
+
+## Scenario: Internal Answer Readiness Tool
+
+The reusable `answer_readiness` boundary classifies a bounded question against
+a caller-supplied target catalog before any future business answer. It reuses
+`LLMClient` structured output and never creates a second model client.
+
+The typed result contains `requires_sync_completion`, a deduplicated dependency
+list, and a bounded internal reason. Targets and sources must belong to the
+catalog. One invalid result receives one structured repair; a second invalid
+result fails closed. A no-wait result bypasses MySQL. A wait result invokes the
+async `check_dw_data_readiness` `StructuredTool`, whose returned payload is
+exactly `{"ready": bool}`.
+
+This module is not a general agent runner and does not add an HTTP or
+Conversation entrypoint. The model never receives task IDs, phases, leases,
+credentials, Binlog coordinates, row payloads, retries, or raw errors.
+
+Required checks:
+
+```powershell
+uv run pytest tests/unit/answer_readiness
+uv run pytest tests/integration/answer_readiness
 ```
 
 ## Scenario: Conversation Memory Extraction

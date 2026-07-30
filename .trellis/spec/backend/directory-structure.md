@@ -62,6 +62,20 @@ src/data_agent/
 │   ├── mysql_tables.py
 │   ├── repository.py
 │   └── service.py
+├── answer_readiness/
+│   ├── classifier.py
+│   ├── models.py
+│   ├── service.py
+│   └── tool.py
+├── data_sync/
+│   ├── backfill.py
+│   ├── binlog.py
+│   ├── models.py
+│   ├── repository.py
+│   ├── schema_sync.py
+│   ├── service.py
+│   ├── tables.py
+│   └── worker.py
 └── ddl_metadata/
     ├── api/
     │   ├── job_events.py
@@ -114,6 +128,11 @@ under `docs/docker/`.
   idempotency, bounded context, and the leased conversation-memory extraction
   outbox. It reuses the authoritative memory package instead of defining a
   second memory stack.
+- `data_agent.answer_readiness` owns typed question-dependency classification,
+  the bounded readiness tool, and deterministic answer gating. It is reusable
+  internal code and does not own an HTTP or Conversation entrypoint.
+- `data_agent.data_sync` owns desired-state CDC tasks, DW schema/backfill/event
+  application, source adapters, and its dedicated process.
 - `data_agent.models` owns Pydantic contracts shared across HTTP, workflow,
   persistence, Conversation, and long-term memory.
 - `data_agent.memory` owns deterministic memory rules, application use cases,
@@ -163,6 +182,9 @@ under `docs/docker/`.
 main/application
   -> conversation + ddl_metadata/api/router + memory/application
   -> infrastructure lifecycle
+
+future answer caller
+  -> answer_readiness -> data_sync/repository + infrastructure/llm_client
 
 worker/settings
   -> worker/job_runner + worker/maintenance + worker/lifecycle

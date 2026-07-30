@@ -1,0 +1,117 @@
+"""data_sync 控制面 SQLAlchemy Core 表定义。"""
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    func,
+)
+
+from data_agent.persistence.schema import metadata
+from data_agent.settings import app_config
+
+data_sync_task = Table(
+    "data_sync_task",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("source", String(128, collation="utf8mb4_0900_bin"), nullable=False),
+    Column("source_schema", String(64, collation="utf8mb4_0900_bin"), nullable=False),
+    Column("source_table", String(64, collation="utf8mb4_0900_bin"), nullable=False),
+    Column("target_table", String(64, collation="utf8mb4_0900_bin"), nullable=False),
+    Column("desired_json", JSON, nullable=False),
+    Column("desired_hash", String(64), nullable=False),
+    Column("phase", String(32), nullable=False, server_default="pending_schema"),
+    Column("snapshot_file", String(255), nullable=True),
+    Column("snapshot_position", BigInteger, nullable=True),
+    Column("captured_file", String(255), nullable=True),
+    Column("captured_position", BigInteger, nullable=True),
+    Column("captured_row_index", Integer, nullable=True),
+    Column("applied_file", String(255), nullable=True),
+    Column("applied_position", BigInteger, nullable=True),
+    Column("applied_row_index", Integer, nullable=True),
+    Column("last_backfill_key", JSON, nullable=True),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("available_at", DateTime, nullable=False, server_default=func.now()),
+    Column("lease_token", String(32), nullable=True),
+    Column("lease_expires_at", DateTime, nullable=True),
+    Column("worker_heartbeat_at", DateTime, nullable=True),
+    Column("last_error_type", String(128), nullable=True),
+    Column("created_at", DateTime, nullable=False, server_default=func.now()),
+    Column(
+        "updated_at",
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+    UniqueConstraint(
+        "source",
+        "source_schema",
+        "source_table",
+        "target_table",
+        name="uq_data_sync_task_identity",
+    ),
+    UniqueConstraint(
+        "source",
+        "target_table",
+        name="uq_data_sync_task_source_target",
+    ),
+    Index("idx_data_sync_task_claim", "phase", "available_at", "lease_expires_at"),
+    schema=app_config.data_sync.database,
+)
+
+data_sync_event = Table(
+    "data_sync_event",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("task_id", BigInteger, nullable=False),
+    Column("source", String(128, collation="utf8mb4_0900_bin"), nullable=False),
+    Column("binlog_file", String(255), nullable=False),
+    Column("binlog_position", BigInteger, nullable=False),
+    Column("row_index", Integer, nullable=False),
+    Column("payload_json", JSON, nullable=False),
+    Column("acknowledged_at", DateTime, nullable=True),
+    Column("created_at", DateTime, nullable=False, server_default=func.now()),
+    UniqueConstraint(
+        "source",
+        "binlog_file",
+        "binlog_position",
+        "row_index",
+        name="uq_data_sync_event_coordinate",
+    ),
+    Index(
+        "idx_data_sync_event_replay",
+        "task_id",
+        "acknowledged_at",
+        "id",
+    ),
+    schema=app_config.data_sync.database,
+)
+
+data_sync_key_owner = Table(
+    "data_sync_key_owner",
+    metadata,
+    Column("target_table", String(64, collation="utf8mb4_0900_bin"), primary_key=True),
+    Column("primary_key_hash", String(64), primary_key=True),
+    Column("primary_key_json", Text, nullable=False),
+    Column("source", String(128, collation="utf8mb4_0900_bin"), nullable=False),
+    Column("deleted", Boolean, nullable=False, server_default="0"),
+    Column("created_at", DateTime, nullable=False, server_default=func.now()),
+    Column(
+        "updated_at",
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+    Index("idx_data_sync_key_owner_source", "source", "target_table"),
+    schema=app_config.data_sync.database,
+)

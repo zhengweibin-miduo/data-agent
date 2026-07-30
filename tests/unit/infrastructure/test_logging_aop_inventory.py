@@ -8,6 +8,7 @@ _PROJECT_ROOT = Path(__file__).parents[3]
 _SOURCE_ROOT = _PROJECT_ROOT / "src" / "data_agent"
 _AOP_SEAMS = {
     Path("application.py"),
+    Path("data_sync/worker.py"),
     Path("ddl_metadata/worker/settings.py"),
     Path("ddl_metadata/workflow/graph.py"),
     Path("logging.py"),

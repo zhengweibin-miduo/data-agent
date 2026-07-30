@@ -117,7 +117,8 @@ async def test_metric_questions_are_evidence_not_memory_rows() -> None:
     """指标问答只随最终指标保存，不独立提升为长期记忆。"""
     schema = await parse_ddl(
         "unit_metric_memory",
-        "CREATE TABLE fact_order (amount DECIMAL(18,2))",
+        "CREATE TABLE fact_order "
+        "(order_id BIGINT PRIMARY KEY, amount DECIMAL(18,2))",
     )
     questions, answers, metrics = metric_bundle(schema)
     candidates = build_accepted_memories(

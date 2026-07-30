@@ -1,6 +1,7 @@
 """应用配置模型及全局配置实例。"""
 
 import os
+import re
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
@@ -22,7 +23,7 @@ from data_agent.errors import DataAgentError
 class SettingsModel(BaseModel):
     """配置模型基类，禁止传入未定义的配置字段。"""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class FileLoggingSettings(SettingsModel):
@@ -130,6 +131,125 @@ class MySQLSettings(SettingsModel):
     """MySQL 连接配置。"""
 
     url: str = Field(description="SQLAlchemy asyncmy 使用的 MySQL 连接地址。")
+
+
+class DataSyncSourceSettings(SettingsModel):
+    """命名 MySQL 业务数据源配置。"""
+
+    url: str = Field(description="仅在服务端使用的源 MySQL 连接地址。")
+    server_id: int = Field(
+        gt=0,
+        le=4_294_967_295,
+        description="读取该数据源 Binlog 时使用的唯一复制客户端编号。",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def validate_mysql_url(cls, value: str) -> str:
+        """校验源连接使用受支持的异步 MySQL 驱动且包含数据库名。"""
+        url = make_url(value)
+        if url.drivername != "mysql+asyncmy" or url.database is None:
+            raise ValueError(
+                "data_sync.sources.*.url 必须是包含数据库名的 mysql+asyncmy 地址"
+            )
+        return value
+
+
+class DataSyncSettings(SettingsModel):
+    """DW 结构与 MySQL Binlog 数据同步配置。"""
+
+    database: str = Field(
+        default="data_sync",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="保存同步任务、事件、位点和冲突状态的 MySQL 数据库名称。",
+    )
+    dw_database: str = Field(
+        default="dw",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="保存同步后业务行数据的 DW MySQL 数据库名称。",
+    )
+    sources: dict[str, DataSyncSourceSettings] = Field(
+        min_length=1,
+        description="按 DDL source 键选择的命名 MySQL 业务数据源。",
+    )
+    claim_lease_seconds: int = Field(
+        gt=0,
+        description="同步任务单次领取在数据库中保持有效的秒数。",
+    )
+    generation_lock_timeout_seconds: int = Field(
+        gt=0,
+        le=300,
+        description="发布或执行同一 DW generation 前等待共享命名锁的最大秒数。",
+    )
+    retry_base_seconds: int = Field(
+        gt=0,
+        description="同步任务首次失败后的退避秒数。",
+    )
+    retry_max_seconds: int = Field(
+        gt=0,
+        description="同步任务指数退避允许达到的最大秒数。",
+    )
+    max_attempts: int = Field(
+        gt=0,
+        description="同步任务转入死信状态前允许的最大失败次数。",
+    )
+    backfill_batch_size: int = Field(
+        gt=0,
+        le=10_000,
+        description="历史回填按主键每批最多读取和写入的业务行数。",
+    )
+    backfill_interval_seconds: float = Field(
+        ge=0,
+        le=60,
+        description="历史回填相邻批次之间主动暂停的秒数。",
+    )
+    event_buffer_limit: int = Field(
+        gt=0,
+        le=1_000_000,
+        description="单个同步任务允许暂存的未确认 Binlog 行事件上限。",
+    )
+    event_cleanup_batch_size: int = Field(
+        gt=0,
+        le=10_000,
+        description="每次清理已确认 Binlog 暂存事件的最大数量。",
+    )
+    poll_interval_seconds: float = Field(
+        gt=0,
+        le=60,
+        description="专用 CDC 进程在没有可执行任务时的轮询间隔秒数。",
+    )
+    source_connect_timeout_seconds: int = Field(
+        gt=0,
+        description="建立源 MySQL 或 Binlog 连接允许等待的秒数。",
+    )
+    source_read_timeout_seconds: int = Field(
+        gt=0,
+        description="源 MySQL 查询或 Binlog 读取允许等待响应的秒数。",
+    )
+
+    @field_validator("sources")
+    @classmethod
+    def validate_sources(
+        cls,
+        sources: dict[str, DataSyncSourceSettings],
+    ) -> dict[str, DataSyncSourceSettings]:
+        """校验来源键和复制客户端编号在忽略大小写后唯一。"""
+        source_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+        normalized: set[str] = set()
+        server_ids: set[int] = set()
+        for name, source in sources.items():
+            folded = name.casefold()
+            if not source_pattern.fullmatch(name) or folded in normalized:
+                raise ValueError("data_sync.sources 的来源名称无效或重复")
+            if source.server_id in server_ids:
+                raise ValueError("data_sync.sources 的 server_id 必须唯一")
+            normalized.add(folded)
+            server_ids.add(source.server_id)
+        return sources
 
 
 class APISettings(SettingsModel):
@@ -348,6 +468,7 @@ class AppSettings(SettingsModel):
     )
     tei: TEISettings = Field(description="Text Embeddings Inference 向量化服务配置。")
     mysql: MySQLSettings = Field(description="MySQL 持久化连接配置。")
+    data_sync: DataSyncSettings = Field(description="DW 结构与 Binlog 数据同步配置。")
     api: APISettings = Field(description="本地 HTTP API 配置。")
     redis: RedisSettings = Field(description="Redis、任务队列和恢复配置。")
     llm: LLMSettings = Field(description="OpenAI 兼容模型调用配置。")
@@ -368,12 +489,21 @@ class AppSettings(SettingsModel):
             raise ValueError(
                 "memory.source_lease_seconds 不能短于 worker 超时与等待超时之和"
             )
-        # 步骤二：确认连接地址含 Meta 默认库，并让权威记忆使用不同数据库。
+        # 步骤二：确认连接地址含 Meta 默认库，并让三个应用数据库彼此独立。
         mysql_database = make_url(self.mysql.url).database
         if mysql_database is None:
             raise ValueError("mysql.url 必须包含默认 Meta 数据库")
-        if mysql_database.casefold() == self.memory.database.casefold():
-            raise ValueError("memory.database 不能与 mysql.url 的默认数据库相同")
+        databases = (
+            mysql_database,
+            self.memory.database,
+            self.data_sync.database,
+            self.data_sync.dw_database,
+        )
+        if len({database.casefold() for database in databases}) != len(databases):
+            raise ValueError(
+                "mysql 默认库、memory.database、data_sync.database 和 "
+                "data_sync.dw_database 必须彼此不同"
+            )
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")

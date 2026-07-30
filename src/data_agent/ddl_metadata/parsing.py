@@ -49,15 +49,15 @@ def _table_comment(create: exp.Create) -> str | None:
 
 def _constraint_column_names(
     schema: exp.Schema,
-) -> tuple[set[str], set[str]]:
+) -> tuple[list[str], set[str]]:
     """提取表级主键与外键列名。"""
-    primary_keys: set[str] = set()
+    primary_keys: list[str] = []
     foreign_keys: set[str] = set()
     for item in schema.expressions:
         expressions = item.expressions if isinstance(item, exp.Constraint) else [item]
         for constraint in expressions:
             if isinstance(constraint, exp.PrimaryKey):
-                primary_keys.update(
+                primary_keys.extend(
                     identifier.name.casefold()
                     for identifier in constraint.expressions
                     if isinstance(identifier, exp.Identifier)
@@ -84,6 +84,16 @@ def _inline_role(
     return None
 
 
+def _column_nullable(column: exp.ColumnDef, *, primary_key: bool) -> bool:
+    """根据 AST 约束确定列是否允许空值。"""
+    if primary_key:
+        return False
+    return not any(
+        isinstance(constraint.kind, exp.NotNullColumnConstraint)
+        for constraint in column.constraints
+    )
+
+
 def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     """把单个 CREATE TABLE AST 转为物理表。"""
     # 步骤一：先确定完整表身份并生成稳定 ID，同时汇总表级约束；后续列解析才能把
@@ -104,6 +114,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     )
     identifier = table_id(source, qualified_name.casefold())
     table_primary, table_foreign = _constraint_column_names(schema)
+    table_primary_set = set(table_primary)
     # 步骤二：逐列执行名称去重、角色优先级和类型完整性校验，再投影为物理列模型。
     columns: list[PhysicalColumn] = []
     seen_columns: set[str] = set()
@@ -120,7 +131,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
             )
         seen_columns.add(normalized_name)
         role = _inline_role(item)
-        if normalized_name in table_primary:
+        if normalized_name in table_primary_set:
             role = "primary_key"
         elif normalized_name in table_foreign and role != "primary_key":
             role = "foreign_key"
@@ -137,6 +148,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
                 name=column_name,
                 data_type=data_type.sql(dialect="mysql"),
                 comment=_column_comment(item),
+                nullable=_column_nullable(item, primary_key=role == "primary_key"),
                 structural_role=role,
             )
         )
@@ -147,7 +159,7 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
             "parse_ddl",
             f"表 {qualified_name} 未定义列",
         )
-    unknown_keys = (table_primary | table_foreign) - seen_columns
+    unknown_keys = (table_primary_set | table_foreign) - seen_columns
     if unknown_keys:
         raise DataAgentError(
             "unknown_constraint_column",
@@ -162,6 +174,19 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
         qualified_name=qualified_name,
         comment=_table_comment(create),
         columns=columns,
+        primary_key=(
+            [
+                column.name
+                for name in table_primary
+                for column in columns
+                if column.name.casefold() == name
+            ]
+            or [
+                column.name
+                for column in columns
+                if column.structural_role == "primary_key"
+            ]
+        ),
     )
 
 
@@ -239,6 +264,23 @@ def _parse_ddl_sync(
                 "limit": str(limits.max_columns),
             },
         )
+    missing_primary_key = next(
+        (
+            table.qualified_name
+            for table in tables
+            if not any(
+                column.structural_role == "primary_key" for column in table.columns
+            )
+        ),
+        None,
+    )
+    if missing_primary_key is not None:
+        raise DataAgentError(
+            "missing_primary_key",
+            "parse_ddl",
+            f"表 {missing_primary_key} 必须声明主键才能同步到 DW",
+            details={"table": missing_primary_key},
+        )
 
     # 步骤四：DDL 哈希描述规范化语句文本；Schema 指纹只描述物理表列投影。
     # 两者分离，使格式变化与真实结构变化拥有不同的稳定判定依据。
@@ -256,6 +298,7 @@ def _parse_ddl_sync(
                         "name": column.name,
                         "type": column.data_type,
                         "comment": column.comment,
+                        "nullable": column.nullable,
                         "role": column.structural_role,
                     }
                     for column in table.columns

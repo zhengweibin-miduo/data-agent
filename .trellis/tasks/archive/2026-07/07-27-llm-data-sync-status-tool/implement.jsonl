@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Place the reusable readiness domain without creating a new public answer entrypoint or duplicating data_sync state."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Reuse the final schema-qualified data_sync task contract and add a strictly read-only readiness query."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Reuse the managed LLM client and define a bounded LangChain-compatible internal tool contract."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Fail closed after one intent repair and keep internal synchronization state out of user responses."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Prevent credentials, business rows, progress details, and internal control state from entering user-visible output."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Apply typed model descriptions, deterministic fake-LLM tests, live MySQL markers, and full repository checks."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace question intent, dependency identity, readiness lookup, deterministic routing, and safe response boundaries."}

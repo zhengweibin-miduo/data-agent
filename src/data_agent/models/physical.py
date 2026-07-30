@@ -14,6 +14,7 @@ class PhysicalColumn(ContractModel):
     name: str = Field(description="对象名称。")
     data_type: str = Field(description="数据类型。")
     comment: str | None = Field(default=None, description="对象注释。")
+    nullable: bool = Field(default=True, description="字段是否允许保存空值。")
     structural_role: Literal["primary_key", "foreign_key"] | None = Field(
         default=None, description="结构角色。"
     )
@@ -28,6 +29,10 @@ class PhysicalTable(ContractModel):
     qualified_name: str = Field(description="限定名称。")
     comment: str | None = Field(default=None, description="对象注释。")
     columns: list[PhysicalColumn] = Field(description="列列表。")
+    primary_key: list[str] = Field(
+        default_factory=list,
+        description="按 DDL 声明顺序排列的主键字段名称。",
+    )
 
 
 class PhysicalSchema(ContractModel):

@@ -1,0 +1,9 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端全范围质量清单"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库事务、DDL 与锁正确性"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Binlog reversible codec 与依赖边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "锁竞争与失败分类检查"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "完整质量门禁和测试规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "端到端 null 与 generation 数据流复核"}
+{"file": ".trellis/tasks/07-29-resolve-json-null-ddl-lock/research/json-null-boundary.md", "reason": "核验 SQL NULL 与 JSON null 区分证据"}
+{"file": ".trellis/tasks/07-29-resolve-json-null-ddl-lock/research/generation-lock-boundary.md", "reason": "核验共享锁覆盖完整竞态窗口"}

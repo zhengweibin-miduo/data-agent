@@ -112,6 +112,16 @@ async def test_ddl_parser() -> None:
         64,
     )
 
+    reordered = await parse_ddl(
+        "test_source",
+        "CREATE TABLE composite (a BIGINT, b BIGINT, PRIMARY KEY (b, a))",
+    )
+    check_equal(
+        "复合主键保留声明顺序",
+        reordered.tables[0].primary_key,
+        ["b", "a"],
+    )
+
     await _assert_rejected("ALTER TABLE x ADD y INT", "unsupported_statement")
     await _assert_rejected("CREATE VIEW x AS SELECT 1", "unsupported_statement")
     await _assert_rejected("CREATE TABLE x (", "malformed_ddl")
@@ -122,6 +132,10 @@ async def test_ddl_parser() -> None:
     await _assert_rejected(
         "CREATE TABLE x (a INT); CREATE TABLE X (a INT)",
         "duplicate_table",
+    )
+    await _assert_rejected(
+        "CREATE TABLE x (a INT)",
+        "missing_primary_key",
     )
 
     tiny_limits = app_config.api.model_copy(

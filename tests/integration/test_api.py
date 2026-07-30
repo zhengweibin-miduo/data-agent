@@ -256,7 +256,9 @@ async def test_memory_api() -> None:
         "CREATE TABLE dim_api (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
     metadata = semantic_for(schema, fact=False)
-    await MetadataSnapshotService().persist(schema, metadata, [], [], [])
+    await MetadataSnapshotService({schema.source: "source_demo"}).persist(
+        schema, metadata, [], [], []
+    )
     target = SemanticDecisionContent(
         table=metadata.tables[0],
     )

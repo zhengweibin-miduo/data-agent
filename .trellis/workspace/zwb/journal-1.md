@@ -1390,7 +1390,41 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 44: 修复 Codex thread 解析令牌
+## Session 44: 多数据源 CDC 与问答就绪门禁
+
+**Date**: 2026-07-28
+**Task**: 多数据源 CDC 与问答就绪门禁
+**Branch**: `feature/llm-data-sync-status-tool-20260727`
+
+### Summary
+
+实现多数据源 CDC 同步到 DW，并增加独立意图识别、只读同步就绪工具与确定性回答门禁；完成测试、规范更新和任务归档。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `db0e426` | (see git log) |
+| `f15628f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 45: 修复 Codex thread 解析令牌
 
 **Date**: 2026-07-29
 **Task**: 修复 Codex thread 解析令牌
@@ -1423,7 +1457,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 45: 修复 Codex 未完成审查线程重新委派
+## Session 46: 修复 Codex 未完成审查线程重新委派
 
 **Date**: 2026-07-29
 **Task**: 修复 Codex 未完成审查线程重新委派
@@ -1442,6 +1476,41 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 | Hash | Message |
 |------|---------|
 | `52775c6` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 47: 修复 PR 66 的 JSON 空值与 DDL 串行化
+
+**Date**: 2026-07-30
+**Task**: 修复 PR 66 的 JSON 空值与 DDL 串行化
+**Branch**: `fix/json-null-ddl-serialization-20260729`
+
+### Summary
+
+区分 CDC 中 JSON SQL NULL 与 literal null；以共享 MySQL generation advisory lock 串行化 accepted snapshot 发布和不可逆 DDL；补齐生命周期测试、规范并解决两个审查 thread。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74e466c` | (see git log) |
+| `c3c80f5` | (see git log) |
+| `bbe6118` | (see git log) |
 
 ### Testing
 

@@ -68,6 +68,15 @@ jobs:
       - name: Initialize application memory database
         run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_agent.sql
 
+      - name: Initialize data sync database
+        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_sync.sql
+
+      - name: Initialize data sync source database
+        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/source_demo.sql
+
+      - name: Initialize data warehouse database
+        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/dw.sql
+
       - name: Configure Redis durability
         run: |
           docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET appendonly yes

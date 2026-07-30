@@ -14,11 +14,15 @@ The DDL metadata feature uses SQLAlchemy Core table definitions in
 definitions under `conversation/mysql_tables.py`. All three import the single
 `MetaData` owner from `data_agent/persistence/schema.py`. The project
 deliberately does not add ORM entities or a migration framework.
-`MetadataRepository` owns the four Meta snapshot tables; `MemoryRepository`
+`MetadataRepository` owns the four Meta snapshot tables; `DataSyncRepository`
+owns schema-qualified tasks, Binlog event buffers, offsets, leases, retries,
+and DW key ownership in `data_sync`; `MemoryRepository`
 owns authoritative records, append-only events, typed links, and browser
 mutations; `MemoryIndexOutboxRepository` owns derived-index desired state,
 claiming, retry, acknowledgement, projections, and rebuild scans. The Meta
-tables use the default database in `mysql.url`; all four memory tables are
+tables use the default database in `mysql.url`; data-sync control tables use
+`data_sync.database`, DW business rows use `data_sync.dw_database`, and all
+four memory tables are
 schema-qualified to `memory.database` (`data_agent` by default). They still
 share one engine and caller-owned Session so MySQL commits both InnoDB
 databases and record-plus-outbox changes atomically.
@@ -286,14 +290,200 @@ async with MySQLDatabase.session() as session:
     await memory_repository.persist(session, candidates)
 ```
 
+## Scenario: Asynchronous DW Materialization and CDC State
+
+### 1. Scope / Trigger
+
+Use this contract when changing accepted-snapshot handoff, DW DDL, historical
+backfill, Binlog replay, source collision handling, or `data_sync` persistence.
+
+### 2. Signatures
+
+```python
+await DataSyncRepository(session).upsert_desired(desired_tables) -> None
+MySQLDatabase.advisory_locks(names, timeout_seconds=10) -> AsyncIterator[None]
+generation_lock_name(dw_database, target_table) -> str
+await DWSchemaSynchronizer(session, database="dw").synchronize(
+    desired,
+    check_authority=authority_callback,
+) -> None
+await apply_backfill_batch(session, task, rows, dw_database="dw")
+await apply_buffered_event(session, task, event, dw_database="dw") -> None
+```
+
+### 3. Contracts
+
+- `meta` stores definitions, `dw` stores business rows, and `data_sync` stores
+  only tasks, leases, retries, Binlog coordinates/events, backfill cursors, and
+  `(target_table, primary_key) -> source` ownership.
+- Accepted Meta rows and `data_sync` desired state commit in the same managed
+  MySQL Session. DDL Job success does not wait for DW work.
+- A task identity is unique by source, source schema/table, and target table;
+  `(source, target_table)` is also unique so concurrent snapshots cannot map two
+  physical tables from one named source onto the same DW table. Claims use
+  database-clock leases and compare desired hash plus lease token when settling.
+- DW evolution permits create table, add column, and safe type widening only.
+  Destructive or ambiguous differences pause work without altering Meta.
+- Initial load records a Binlog coordinate, persists later ROW events, reads
+  source rows by bounded simple/composite-PK keyset, replays the buffer, then
+  enters streaming. If the durable event buffer fills before the historical
+  scan completes, the worker applies a bounded persisted event before reading
+  the next current source batch and retains the completed primary-key cursor;
+  it must neither leave a full buffer parked in `backfilling` nor repeatedly
+  discard the baseline under sustained writes.
+- Per-target DW schema locks serialize inspection and additive DDL. Lock
+  contention is normal scheduling pressure: release the task lease and delay
+  the same phase without incrementing its failure attempts or moving it toward
+  `dead`.
+- Accepted-snapshot publishers and DDL workers share one generation advisory
+  lock derived from the binary `(dw_database, target_table)` identity. A
+  publisher acquires every target lock in deterministic UTF-8 byte order before
+  opening its managed transaction and releases them only after commit or
+  rollback. A worker holds the same lock across its DDL Session, schema-lock
+  acquisition, same-Session authority checks, auto-commit DDL, phase settlement,
+  and managed Session commit. The global order is `generation -> schema ->
+  task`; no path may acquire those resources in reverse.
+- `MySQLDatabase.advisory_locks()` owns locks on one dedicated engine
+  connection, independent of the protected business Session. It releases
+  acquired locks in reverse order. A partial acquisition releases the earlier
+  locks; a release failure invalidates the owner connection so a connection
+  carrying an advisory lock cannot return to the pool. If an accepted-snapshot
+  transaction has already committed, a subsequent release failure is an
+  operational warning and must not reverse the authoritative snapshot or mark
+  its DDL Job failed. The YAML key
+  `data_sync.generation_lock_timeout_seconds` is an integer in `1..300`.
+- The DDL Session uses `READ COMMITTED` and one `DataSyncRepository` for every
+  authority check and final phase settlement. The schema synchronizer checks
+  authority once after acquiring the schema lock and again immediately before
+  every DDL statement. A zero-row settlement is lease loss, not success.
+- `mysql-replication==1.0.16` lazily decodes ROW values through the private
+  `_RowsEvent__read_values_name(self, column, null_bitmap,
+  null_bitmap_index, is_partial, cols_bitmap, unsigned, i)` boundary. Before
+  first access to `event.rows`, the capture adapter must preserve JSON-column
+  SQL `NULL` with a private in-process sentinel while delegating all other
+  values to the locked dependency. Durable encoding maps that sentinel to
+  ordinary `None` and maps binary JSON literal `null` to
+  `{"$json": "null"}`. Never infer the distinction from the decoded Python
+  value alone because both sources otherwise decode to `None`.
+- Target DML, key ownership, event acknowledgement, and applied-coordinate
+  advancement share one MySQL transaction. Captured and applied coordinates are
+  separate. When a streaming capture persists new events, the same transaction
+  advances the captured coordinate and changes the task to `replaying`, so
+  readiness can never observe a committed backlog with a streaming phase.
+- The first source to write a target primary key owns it permanently, including
+  after DELETE. Another source conflicts before DW DML and cannot advance the
+  event. Historical backfill claims and verifies a whole bounded batch of key
+  owners with a constant number of database statements before its bulk upsert;
+  it must not perform ownership I/O once per row. Type-aware primary-key
+  identity normalization is shared by source backfill values, CDC values, and
+  DW provenance scans; container-backed MySQL types such as `BIT` and `SET`
+  must encode identically in every path. Accepted tables reject `ENUM`, `SET`,
+  `FLOAT`, and `DOUBLE` primary keys because keyset ordering or MySQL numeric
+  equivalence cannot be represented reliably by the durable cursor and
+  ownership document. Non-key `ENUM` and `SET` declarations retain their full
+  validated type text rather than an arbitrary per-column 255-character cap.
+- Answer readiness uses `DataSyncRepository.read_readiness_phases()` as a
+  separate read-only boundary. It selects only `phase` and the dedicated
+  `worker_heartbeat_at`, takes no lock, and does not claim, renew, settle,
+  retry, or update a task. Only worker settlement and lease renewal refresh
+  that heartbeat; snapshot handoff may update `updated_at` but must not refresh
+  liveness. A source-scoped dependency must match exactly one task; an unscoped
+  dependency requires every matching task to be `streaming`. Missing or
+  ambiguous matches are not ready.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Accepted table has no primary key | Reject before Meta or desired-state writes |
+| Primary key uses `ENUM`, `SET`, `FLOAT`, or `DOUBLE` | Reject before Meta or desired-state writes |
+| Missing target table/column or safe widening | Apply idempotently |
+| Drop, rename, narrowing, PK drift, or incompatible type | Pause with a safe deterministic error |
+| Backfill batch fails | Roll back DW rows, ownership, and cursor |
+| Binlog event fails | Roll back DW DML, acknowledgement, and applied coordinate |
+| Cross-source primary-key collision | Preserve existing DW row and enter `conflict` |
+| Lease expires or desired hash changes | Stale settlement updates zero rows |
+| Publisher or worker cannot acquire a generation lock in time | Retry/reschedule without publishing partial state or consuming the worker failure budget |
+| Generation-lock acquisition stops after some targets | Release every previously acquired lock in reverse order |
+| Advisory- or schema-lock release fails | Invalidate the owner connection before it can return to the pool |
+| DDL worker loses authority after acquiring the schema lock | Release locks and execute no later DDL or phase settlement |
+| Locked `mysql-replication` private decoder signature changes | Fail fast at import/startup; do not silently collapse JSON SQL `NULL` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Meta plus desired state commits, the worker creates DW structure,
+  keyset-backfills, preserves JSON null provenance, replays buffered ROW events,
+  and reaches streaming while publisher/worker generation changes serialize.
+- Base: replaying identical desired state or a duplicate event is idempotent;
+  generation-lock contention only delays the same phase.
+- Bad: put cursors in `dw`, business rows in `data_sync`, hold a transaction
+  while reading the source, check authority in a second Session before
+  auto-commit DDL, or advance the applied coordinate before DW commit.
+
+### 6. Tests Required
+
+```powershell
+uv run pytest tests/unit/data_sync
+uv run pytest tests/integration/data_sync
+uv run pytest tests/integration/answer_readiness
+```
+
+Tests assert DDL idempotency and widening rules, composite-PK continuation,
+INSERT/UPDATE/DELETE convergence, captured/applied offset separation,
+cross-source collision without overwrite, retry/dead-letter state, and scoped
+cleanup. Advisory-lock tests assert deterministic acquisition, reverse release,
+partial-acquisition cleanup, active-exception preservation, and owner-connection
+invalidation. ROW-decoder tests pin the private dependency signature and cover
+SQL `NULL` versus JSON literal `null` for INSERT, UPDATE before/after images, and
+DELETE. A live MySQL ROW/FULL integration test must carry both null forms through
+capture, durable event storage, replay, and DW assertions using `IS NULL` and
+`JSON_TYPE`.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: a separate commit can publish Meta without recoverable desired state.
+await metadata_repository.synchronize(snapshot)
+await data_sync_repository.upsert_desired(desired)
+
+# Correct: one accepted-snapshot transaction owns both writes.
+async with MySQLDatabase.session() as session:
+    await MetadataRepository(session).synchronize(...)
+    await DataSyncRepository(session).upsert_desired(desired)
+```
+
+```python
+# Wrong: the publisher can commit a newer generation after this check and
+# before the worker's auto-commit DDL.
+if await authority_repository.has_authority(task):
+    await ddl_session.execute(ddl)
+
+# Correct: publisher and worker share the same outer generation lock; the
+# worker rechecks authority inside the schema lock with its DDL Session.
+async with MySQLDatabase.advisory_locks(
+    [generation_lock_name(dw_database, target_table)],
+    timeout_seconds=settings.generation_lock_timeout_seconds,
+):
+    async with MySQLDatabase.session() as ddl_session:
+        repository = DataSyncRepository(ddl_session)
+        await DWSchemaSynchronizer(ddl_session, database=dw_database).synchronize(
+            desired,
+            check_authority=lambda: repository.has_authority(task),
+        )
+        await repository.settle_phase(task, SyncPhase.BUFFERING)
+```
+
 ## Schema and Migrations
 
 No migration tool or migration directory exists. Local MySQL bootstrap
-initializes the `dw`, `meta`, and application `data_agent` databases from
+initializes `data_agent`, `data_sync`, `dw`, `meta`, and the local
+`source_demo` database from
 `docs/docker/mysql/`. `meta.sql` contains only `table_info`, `column_info`,
 `metric_info`, and `column_metric`; `data_agent.sql` defines the fresh
 conversation schema plus `agent_memory`, `agent_memory_event`,
-`agent_memory_link`, and `memory_index_outbox`. SQLAlchemy Core definitions must
+`agent_memory_link`, and `memory_index_outbox`. `data_sync.sql` owns the three
+CDC control tables; `source_demo.sql` owns only the local source database and
+replication-user grants. SQLAlchemy Core definitions must
 remain compatible with those bootstrap schemas. Integration fixtures may call
 `metadata.create_all()` using the default `meta` connection because the memory
 tables are schema-qualified, but they are not a production migration
@@ -318,8 +508,8 @@ volumes:
   - ./mysql:/docker-entrypoint-initdb.d:ro
 ```
 
-The current script order is lexical: `data_agent.sql`, `dw.sql`, then
-`meta.sql`.
+The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
+`dw.sql`, `meta.sql`, then `source_demo.sql`.
 
 ### 3. Contracts
 
@@ -328,9 +518,12 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Execution boundary: the official `mysql:8.4` entrypoint processes the scripts
   only when `/var/lib/mysql` is uninitialized.
 - Persistence: normal restarts reuse `mysql_data` and do not rerun the scripts.
-- Identity: `MYSQL_USER=data_agent`; every bootstrap `GRANT` must target
-  `'data_agent'@'%'` unless Compose is changed in the same task.
-- Databases: the bootstrap scripts create `data_agent`, `dw`, and `meta`;
+- Identity: `MYSQL_USER=data_agent`; application grants target
+  `'data_agent'@'%'`. The local source additionally creates
+  `'data_agent_replica'@'%'` with `SELECT`, `REPLICATION SLAVE`, and
+  `REPLICATION CLIENT` only.
+- Databases: the bootstrap scripts create `data_agent`, `data_sync`, `dw`,
+  `meta`, and `source_demo`;
   Compose does not set `MYSQL_DATABASE`.
 - Documentation: every bootstrap `CREATE TABLE` has a Chinese table-level
   `COMMENT`, and every business column has a Chinese column-level `COMMENT`.
@@ -339,7 +532,10 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Ownership: `meta.sql` owns exactly the four Meta tables. `data_agent.sql` uses
   InnoDB and owns the application conversation tables plus exactly four
   long-term-memory lifecycle tables; it does not manage retired memory
-  contracts.
+  contracts. `data_sync.sql` owns only `data_sync_task`, `data_sync_event`, and
+  `data_sync_key_owner`; `source_demo.sql` owns no application control tables.
+- Binlog: local Compose enables a nonzero server ID, ROW format, FULL row image,
+  a named binary log, and bounded retention.
 - Existing volume: entrypoint scripts do not rerun. Applying `data_agent.sql`
   explicitly can create missing objects but cannot upgrade an incompatible old
   memory schema. Reprovision only the exact confirmed application-memory
@@ -349,9 +545,9 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 
 | Condition | Expected result |
 |-----------|-----------------|
-| Empty `mysql_data` | Execute `data_agent.sql`, `dw.sql`, then `meta.sql` |
+| Empty `mysql_data` | Execute all five scripts in lexical order |
 | Initialized `mysql_data` | Skip bootstrap scripts and preserve data |
-| Missing init-directory mount | Start MySQL without creating the three local databases |
+| Missing init-directory mount | Start MySQL without creating the five local databases |
 | `GRANT` user differs from `MYSQL_USER` and does not exist | Initialization fails at `GRANT` |
 | A table or business column lacks a Chinese `COMMENT` | Static bootstrap review fails before merge |
 | Compose cannot resolve `./mysql` | `docker compose config` or startup reports the invalid mount |
@@ -359,7 +555,8 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 
 ### 5. Good / Base / Bad Cases
 
-- Good: an empty disposable volume creates `data_agent`, `dw`, and `meta`; the
+- Good: an empty disposable volume creates `data_agent`, `data_sync`, `dw`,
+  `meta`, and `source_demo`; the
   application user can access each owned schema, Meta contains only its four
   business tables, and database inspection exposes Chinese table and column
   meanings.
@@ -374,8 +571,8 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
 - Run `docker compose -f docs/docker/docker-compose.yml config` and assert that
   both `/var/lib/mysql` and the read-only `/docker-entrypoint-initdb.d` mount
   are present.
-- Search all files under `docs/docker/mysql/` and assert that bootstrap grants
-  target `'data_agent'@'%'` and do not reference stale users.
+- Assert application grants target `'data_agent'@'%'`; the replica account has
+  source `SELECT` plus replication privileges and no source DDL/DML grants.
 - Statically assert that every bootstrap table and business column carries a
   non-empty Chinese `COMMENT`; compare SQL tokens with comments removed when a
   comment-only task must prove that no schema or seed-data behavior changed.
@@ -384,7 +581,7 @@ The current script order is lexical: `data_agent.sql`, `dw.sql`, then
   `schema=memory.database` and a forced memory-side constraint failure rolls
   back preceding Meta writes.
 - When Docker is available and initialization behavior changes, use a
-  disposable project/volume to assert that `data_agent`, `dw`, and `meta`
+  disposable project/volume to assert that all five local databases
   exist after the first healthy startup. Never delete the developer's shared
   `mysql_data` volume for this check.
 
@@ -499,3 +696,51 @@ targets.
 - Do not place application memory tables in Meta or use a second
   engine/Session; qualify them to `memory.database` on the existing
   transaction.
+- Keep source-query, replication, and DW MySQL sessions in UTC so `TIMESTAMP`
+  values retain one absolute-time interpretation across backfill and CDC.
+- Require the DW MySQL server to report `@@lower_case_table_names = 0`. The
+  data-sync worker rejects case-insensitive modes at startup because tasks,
+  schema locks, and ownership use binary target-table identities.
+- Persist captured CDC rows and generation-reset deletes with bounded bulk
+  statements; the surrounding service transaction owns their coordinates,
+  task-state transitions, and ownership tombstones atomically.
+- Bound captured-event bulk inserts by both row count and serialized payload
+  bytes. A single event that exceeds the byte budget must fail explicitly
+  rather than constructing an oversized MySQL packet.
+- Run the complete DW-row/ownership provenance scan through one independent
+  `REPEATABLE READ` Session. The DDL authority Session remains `READ COMMITTED`
+  so it can observe lease heartbeats; mixing both concerns in that Session can
+  either compare different peer-DML snapshots or hide a renewed lease.
+- Treat `NOT NULL -> NULL` as a safe shared-column relaxation. A nullable peer
+  published after the target table was created must converge by `MODIFY
+  COLUMN`, not remain permanently paused because it arrived later.
+- When saturated CDC events are drained during backfill, commit each event in
+  its own bounded transaction and renew the task lease between transactions;
+  do not run an independent heartbeat against a task row already locked by the
+  current application transaction.
+- End the independent provenance consistent-read transaction before issuing
+  `ALTER TABLE` from the authority Session; otherwise the snapshot's metadata
+  read lock can block the DDL that its own caller is awaiting.
+- A CDC delete or primary-key old image may tombstone and delete only an
+  ownership row already held by that source. A missing ownership is an
+  idempotent no-op and must never be claimed by a delete event.
+- Persist historical-backfill throttling through the task's `available_at`
+  deadline. Never sleep inside the serial dispatcher after releasing a task
+  lease.
+- Reject sources whose global `binlog_row_value_options` contains
+  `PARTIAL_JSON` until partial-update row events are explicitly decoded and
+  replayed; do not advance a coordinate across filtered JSON updates.
+- Require synchronized source tables to use InnoDB and source servers to use
+  `lower_case_table_names=0`. Non-transaction statement boundaries and
+  case-folded table identities are outside the current replay contract.
+- Hold a source-side advisory lock for each configured replication `server_id`
+  for the worker lifetime. A second worker with the same source replication
+  identity must fail closed instead of interrupting an active dump client.
+- Keep the durable event-buffer limit separate from the in-memory capture
+  budget. Each capture is bounded by both 1,000 events and 1 MiB of serialized
+  payload, and historical DW upserts use the same 1 MiB payload budget.
+- Normalize explicit zero fractional-second precision for `DATETIME`,
+  `TIMESTAMP`, and `TIME` to MySQL's introspected default form.
+- A data-sync generation hash describes the physical table contract. Metric
+  dependency metadata and the global schema fingerprint remain durable
+  control-plane data but do not reset CDC coordinates or historical backfill.
