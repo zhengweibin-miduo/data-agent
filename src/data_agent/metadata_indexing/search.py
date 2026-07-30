@@ -42,14 +42,14 @@ class MetadataSearchService:
         bounded_limit = _bounded_limit(limit)
         # 步骤一：Qdrant 只提供有序对象身份，不提供权威业务内容。
         vector = await TEIEmbeddingClient.get_client().aembed_query(query)
-        identities = await MetadataQdrantIndex(
-            QdrantClient.get_client()
-        ).search(query, vector, kinds, bounded_limit)
+        identities = await MetadataQdrantIndex(QdrantClient.get_client()).search(
+            query, vector, kinds, bounded_limit
+        )
         # 步骤二：从 Meta 回读当前对象；存在 pending desired state 的候选不可用。
         async with MySQLDatabase.session() as session:
-            return await MetadataProjectionRepository(
-                session
-            ).authoritative_candidates(identities)
+            return await MetadataProjectionRepository(session).authoritative_candidates(
+                identities
+            )
 
     async def search_values(
         self,
@@ -65,15 +65,14 @@ class MetadataSearchService:
         bounded_limit = _bounded_limit(limit)
         # 步骤一：先从 Meta 与 data_sync 解析当前合格字段范围。
         async with MySQLDatabase.session() as session:
-            scope, _ = await MetadataProjectionRepository(
-                session
-            ).resolve_value_scope(column_ids)
+            scope, _ = await MetadataProjectionRepository(session).resolve_value_scope(
+                column_ids
+            )
         if not scope:
             return MetadataValueSearchResult(values=[], complete=False)
         # 步骤二：Elasticsearch 只在解析后的字段范围内提供候选值。
-        projections = await MetadataValueElasticsearchIndex(
-            ElasticsearchClient.get_client()
-        ).search(query, set(scope), bounded_limit)
+        value_index = MetadataValueElasticsearchIndex(ElasticsearchClient.get_client())
+        projections = await value_index.search(query, set(scope), bounded_limit)
         # 步骤三：外部调用后重新解析权威范围，拒绝并发结构变更产生的旧命中。
         async with MySQLDatabase.session() as session:
             repository = MetadataProjectionRepository(session)
@@ -82,4 +81,14 @@ class MetadataSearchService:
                 projections,
                 current_scope,
             )
+        current_versions = await value_index.current_refresh_versions(
+            {table_id for table_id, _ in current_scope.values()}
+        )
+        generation_matches = all(
+            current_versions.get(projection.table_id) == projection.refresh_version
+            for projection in projections
+        )
+        if not generation_matches:
+            values = []
+            complete = False
         return MetadataValueSearchResult(values=values, complete=complete)

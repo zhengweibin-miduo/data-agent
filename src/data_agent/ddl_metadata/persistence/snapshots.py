@@ -19,7 +19,16 @@ from data_agent.infrastructure.mysql import (
 from data_agent.memory.domain.candidates import MemoryVersions, build_accepted_memories
 from data_agent.memory.mysql.repository import MemoryRepository
 from data_agent.metadata_indexing.desired import semantic_desired_states
-from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
+from data_agent.metadata_indexing.models import (
+    MetadataIndexDesired,
+    MetadataIndexOperation,
+    MetadataIndexTarget,
+    MetadataObjectKind,
+)
+from data_agent.metadata_indexing.repository import (
+    MetadataIndexOutboxRepository,
+    metadata_desired_version,
+)
 from data_agent.models.memory import MemoryCandidate
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (
@@ -105,16 +114,15 @@ class MetadataSnapshotService:
             # 步骤四：先持有本次全部 target generation locks，再开启唯一发布事务。
             async with MySQLDatabase.advisory_locks(
                 generation_locks,
-                timeout_seconds=(
-                    app_config.data_sync.generation_lock_timeout_seconds
-                ),
+                timeout_seconds=(app_config.data_sync.generation_lock_timeout_seconds),
             ):
                 # 步骤五：事务提交或回滚完成后，外层上下文才会释放 generation locks。
                 async with MySQLDatabase.session() as session:
                     metadata_repository = MetadataRepository(session)
-                    previous_columns, previous_metrics = (
-                        await metadata_repository.semantic_scope_before_sync(schema)
-                    )
+                    (
+                        previous_columns,
+                        previous_metrics,
+                    ) = await metadata_repository.semantic_scope_before_sync(schema)
                     # 步骤六：计算本次提交范围内可能受结构变化影响的记忆键。
                     expiration_memory_keys = (
                         await metadata_repository.fingerprint_expiration_memory_keys(
@@ -132,25 +140,46 @@ class MetadataSnapshotService:
                     # 步骤八：同步严格受本次提交表约束的 Meta 快照及其关联清理。
                     await metadata_repository.synchronize(schema, metadata, metrics)
                     current_columns = {
-                        column.id
-                        for table in schema.tables
-                        for column in table.columns
+                        column.id for table in schema.tables for column in table.columns
                     }
                     surviving_metrics = await metadata_repository.existing_object_ids(
                         set(), set(), previous_metrics
                     )
+                    current_metric_ids = {metric.id for metric in metrics}
+                    shared_metrics_to_refresh = (
+                        previous_metrics & surviving_metrics
+                    ) - current_metric_ids
                     # 步骤九：在同一事务发布 durable generation handoff。
                     sync_repository = DataSyncRepository(session)
                     await sync_repository.upsert_desired(desired_tables)
                     # 步骤十：在相同权威事务中发布 Meta 语义索引期望状态。
-                    await MetadataIndexOutboxRepository(session).enqueue(
-                        semantic_desired_states(
-                            schema,
-                            metadata,
-                            metrics,
-                            removed_columns=previous_columns - current_columns,
-                            removed_metrics=previous_metrics - surviving_metrics,
+                    semantic_states = semantic_desired_states(
+                        schema,
+                        metadata,
+                        metrics,
+                        removed_columns=previous_columns - current_columns,
+                        removed_metrics=previous_metrics - surviving_metrics,
+                    )
+                    semantic_states.extend(
+                        MetadataIndexDesired(
+                            target=MetadataIndexTarget.SEMANTIC,
+                            object_kind=MetadataObjectKind.METRIC,
+                            object_id=metric_id,
+                            operation=MetadataIndexOperation.UPSERT,
+                            desired_version=metadata_desired_version(
+                                {
+                                    "shared_metric": metric_id,
+                                    "snapshot": schema.schema_fingerprint,
+                                    "projection_version": (
+                                        app_config.metadata_index.projection_version
+                                    ),
+                                }
+                            ),
                         )
+                        for metric_id in sorted(shared_metrics_to_refresh)
+                    )
+                    await MetadataIndexOutboxRepository(session).enqueue(
+                        semantic_states
                     )
                     # 步骤十一：最后写入权威记忆、审计事件、关系和双索引 outbox。
                     await memory_repository.upsert_candidates(accepted)

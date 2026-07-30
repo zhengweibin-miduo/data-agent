@@ -83,6 +83,18 @@ class MetadataCandidate(ContractModel):
         default_factory=list,
         description="指标关联的权威字段标识；非指标候选为空。",
     )
+    score: float = Field(ge=0, description="融合检索相关度分数。")
+    matched_text: str = Field(description="产生召回的有界语义投影文本。")
+
+
+class MetadataSemanticHit(ContractModel):
+    """Qdrant 返回的非权威语义召回信息。"""
+
+    kind: MetadataObjectKind
+    object_id: str
+    schema_fingerprint: str
+    score: float = Field(ge=0)
+    matched_text: str
 
 
 class MetadataValueCandidate(ContractModel):

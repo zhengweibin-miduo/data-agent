@@ -121,8 +121,8 @@ async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
         )
 
 
-async def test_stale_write_forces_a_new_reconciliation_generation() -> None:
-    """迟到外部写入必须撤销并发租约并强制发布新收敛版本。"""
+async def test_stale_write_preserves_an_existing_newer_generation() -> None:
+    """迟到外部写入只在 outbox 缺失时补回，不得覆盖并发新版本。"""
     session = _RecordingSession([_FakeResult(rowcount=1)])
     repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
 
@@ -132,21 +132,12 @@ async def test_stale_write_forces_a_new_reconciliation_generation() -> None:
     rendered = _rendered(session.statements[0])
     duplicate = rendered.split("ON DUPLICATE KEY UPDATE")[1]
     check_condition(
-        "补回覆盖为新的无租约收敛版本",
+        "补回保留并发期望版本",
         MetadataIndexOperation.UPSERT.value in rendered
-        and all(
-            field in duplicate
-            for field in (
-                "desired_version",
-                "attempts",
-                "available_at",
-                "lease_token",
-                "lease_expires_at",
-                "last_error_type",
-            )
-        ),
+        and "desired_version = data_sync.metadata_index_outbox.desired_version"
+        in duplicate,
         actual=duplicate,
-        expected="冲突更新强制发布新版本并清除旧执行权",
+        expected="冲突时保留既有 desired_version",
     )
 
 

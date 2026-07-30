@@ -56,22 +56,43 @@ class MetadataIndexOutboxRepository:
         available = func.timestampadd(text("SECOND"), debounce_seconds, func.now())
         await self._session.execute(
             statement.on_duplicate_key_update(
-                operation=statement.inserted.operation,
-                desired_version=statement.inserted.desired_version,
-                attempts=case((changed, 0), else_=metadata_index_outbox.c.attempts),
-                available_at=case(
-                    (changed, available),
-                    else_=metadata_index_outbox.c.available_at,
-                ),
-                lease_token=case(
-                    (changed, None), else_=metadata_index_outbox.c.lease_token
-                ),
-                lease_expires_at=case(
-                    (changed, None), else_=metadata_index_outbox.c.lease_expires_at
-                ),
-                last_error_type=case(
-                    (changed, None), else_=metadata_index_outbox.c.last_error_type
-                ),
+                [
+                    ("operation", statement.inserted.operation),
+                    (
+                        "attempts",
+                        case((changed, 0), else_=metadata_index_outbox.c.attempts),
+                    ),
+                    (
+                        "available_at",
+                        case(
+                            (changed, available),
+                            else_=metadata_index_outbox.c.available_at,
+                        ),
+                    ),
+                    (
+                        "lease_token",
+                        case(
+                            (changed, None), else_=metadata_index_outbox.c.lease_token
+                        ),
+                    ),
+                    (
+                        "lease_expires_at",
+                        case(
+                            (changed, None),
+                            else_=metadata_index_outbox.c.lease_expires_at,
+                        ),
+                    ),
+                    (
+                        "last_error_type",
+                        case(
+                            (changed, None),
+                            else_=metadata_index_outbox.c.last_error_type,
+                        ),
+                    ),
+                    # MySQL 从左到右计算赋值；版本列必须最后覆盖，前面的
+                    # changed 表达式才能与行内旧版本比较。
+                    ("desired_version", statement.inserted.desired_version),
+                ]
             )
         )
 
@@ -79,22 +100,26 @@ class MetadataIndexOutboxRepository:
         """短锁领取当前可执行任务并写入数据库时钟租约。"""
         batch_size = limit or app_config.metadata_index.dispatch_batch_size
         rows = (
-            await self._session.execute(
-                select(metadata_index_outbox)
-                .where(
-                    metadata_index_outbox.c.attempts
-                    < app_config.metadata_index.max_attempts,
-                    metadata_index_outbox.c.available_at <= func.now(),
-                    or_(
-                        metadata_index_outbox.c.lease_expires_at.is_(None),
-                        metadata_index_outbox.c.lease_expires_at <= func.now(),
-                    ),
+            (
+                await self._session.execute(
+                    select(metadata_index_outbox)
+                    .where(
+                        metadata_index_outbox.c.attempts
+                        < app_config.metadata_index.max_attempts,
+                        metadata_index_outbox.c.available_at <= func.now(),
+                        or_(
+                            metadata_index_outbox.c.lease_expires_at.is_(None),
+                            metadata_index_outbox.c.lease_expires_at <= func.now(),
+                        ),
+                    )
+                    .order_by(metadata_index_outbox.c.available_at)
+                    .limit(batch_size)
+                    .with_for_update(skip_locked=True)
                 )
-                .order_by(metadata_index_outbox.c.available_at)
-                .limit(batch_size)
-                .with_for_update(skip_locked=True)
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         claimed: list[ClaimedMetadataIndexWork] = []
         for row in rows:
             token = uuid4().hex
@@ -175,14 +200,10 @@ class MetadataIndexOutboxRepository:
             lease_expires_at=None,
             last_error_type=None,
         )
+        # 已存在的新期望状态本身就是收敛依据，迟到 worker 不得覆盖它；只有
+        # outbox 已被并发确认删除时才插入新的 repair generation。
         statement = statement.on_duplicate_key_update(
-            operation=statement.inserted.operation,
-            desired_version=statement.inserted.desired_version,
-            attempts=0,
-            available_at=func.now(),
-            lease_token=None,
-            lease_expires_at=None,
-            last_error_type=None,
+            desired_version=metadata_index_outbox.c.desired_version
         )
         result = await self._session.execute(statement)
         return isinstance(result, CursorResult) and bool(result.rowcount)

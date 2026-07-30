@@ -16,6 +16,7 @@ from data_agent.metadata_indexing.models import (
     MetadataCandidate,
     MetadataIndexTarget,
     MetadataObjectKind,
+    MetadataSemanticHit,
     MetadataSemanticProjection,
     MetadataValueCandidate,
     MetadataValueProjection,
@@ -86,17 +87,21 @@ class MetadataProjectionRepository:
         """重建一个当前 Meta 对象的语义投影。"""
         if kind == MetadataObjectKind.TABLE:
             row = (
-                await self._session.execute(
-                    select(table_info).where(table_info.c.id == object_id)
+                (
+                    await self._session.execute(
+                        select(table_info).where(table_info.c.id == object_id)
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 return None
             columns = (
                 await self._session.execute(
-                    select(column_info.c.name, column_info.c.description).where(
-                        column_info.c.table_id == object_id
-                    ).order_by(column_info.c.id)
+                    select(column_info.c.name, column_info.c.description)
+                    .where(column_info.c.table_id == object_id)
+                    .order_by(column_info.c.id)
                 )
             ).all()
             return _semantic_projection(
@@ -112,16 +117,20 @@ class MetadataProjectionRepository:
             )
         if kind == MetadataObjectKind.COLUMN:
             row = (
-                await self._session.execute(
-                    select(
-                        column_info,
-                        table_info.c.name.label("table_name"),
-                        table_info.c.description.label("table_description"),
+                (
+                    await self._session.execute(
+                        select(
+                            column_info,
+                            table_info.c.name.label("table_name"),
+                            table_info.c.description.label("table_description"),
+                        )
+                        .join(table_info, table_info.c.id == column_info.c.table_id)
+                        .where(column_info.c.id == object_id)
                     )
-                    .join(table_info, table_info.c.id == column_info.c.table_id)
-                    .where(column_info.c.id == object_id)
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 return None
             return _semantic_projection(
@@ -139,26 +148,34 @@ class MetadataProjectionRepository:
                 ),
             )
         row = (
-            await self._session.execute(
-                select(metric_info).where(metric_info.c.id == object_id)
+            (
+                await self._session.execute(
+                    select(metric_info).where(metric_info.c.id == object_id)
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             return None
         related = (
-            await self._session.execute(
-                select(
-                    column_info.c.name,
-                    column_info.c.description,
-                    column_info.c.table_id,
-                    table_info.c.name.label("table_name"),
+            (
+                await self._session.execute(
+                    select(
+                        column_info.c.name,
+                        column_info.c.description,
+                        column_info.c.table_id,
+                        table_info.c.name.label("table_name"),
+                    )
+                    .join(column_metric, column_metric.c.column_id == column_info.c.id)
+                    .join(table_info, table_info.c.id == column_info.c.table_id)
+                    .where(column_metric.c.metric_id == object_id)
+                    .order_by(column_info.c.id)
                 )
-                .join(column_metric, column_metric.c.column_id == column_info.c.id)
-                .join(table_info, table_info.c.id == column_info.c.table_id)
-                .where(column_metric.c.metric_id == object_id)
-                .order_by(column_info.c.id)
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         return _semantic_projection(
             kind=kind,
             object_id=object_id,
@@ -182,14 +199,18 @@ class MetadataProjectionRepository:
     async def eligible_columns(self, table_id: str) -> list[tuple[str, str]]:
         """返回当前表仍通过严格资格门禁的字段标识与物理名。"""
         rows = (
-            await self._session.execute(
-                select(
-                    column_info.c.id,
-                    column_info.c.name,
-                    column_info.c.index_profile,
-                ).where(column_info.c.table_id == table_id)
+            (
+                await self._session.execute(
+                    select(
+                        column_info.c.id,
+                        column_info.c.name,
+                        column_info.c.index_profile,
+                    ).where(column_info.c.table_id == table_id)
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         return [
             (str(row["id"]), str(row["name"]))
             for row in rows
@@ -334,8 +355,7 @@ class MetadataProjectionRepository:
         pending = set(
             await self._session.scalars(
                 select(metadata_index_outbox.c.object_id).where(
-                    metadata_index_outbox.c.target
-                    == MetadataIndexTarget.VALUES.value,
+                    metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
                     metadata_index_outbox.c.object_id.in_(table_ids),
                 )
             )
@@ -385,7 +405,7 @@ class MetadataProjectionRepository:
 
     async def authoritative_candidates(
         self,
-        identities: list[tuple[MetadataObjectKind, str, str]],
+        identities: list[MetadataSemanticHit],
     ) -> list[MetadataCandidate]:
         """按 Qdrant 顺序回读当前 Meta 对象，拒绝已删除候选。"""
         if not identities:
@@ -399,7 +419,7 @@ class MetadataProjectionRepository:
                     metadata_index_outbox.c.target
                     == MetadataIndexTarget.SEMANTIC.value,
                     metadata_index_outbox.c.object_id.in_(
-                        {object_id for _, object_id, _ in identities}
+                        {hit.object_id for hit in identities}
                     ),
                 )
             )
@@ -409,7 +429,9 @@ class MetadataProjectionRepository:
             for kind, object_id in pending_rows
         }
         candidates: list[MetadataCandidate] = []
-        for kind, object_id, schema_fingerprint in identities:
+        for hit in identities:
+            kind, object_id = hit.kind, hit.object_id
+            schema_fingerprint = hit.schema_fingerprint
             if (kind, object_id) in pending:
                 continue
             projection = await self.semantic_projection(kind, object_id)
@@ -433,6 +455,8 @@ class MetadataProjectionRepository:
                             object_id=object_id,
                             name=str(row.name),
                             description=str(row.description or ""),
+                            score=hit.score,
+                            matched_text=hit.matched_text,
                         )
                     )
             elif kind == MetadataObjectKind.COLUMN:
@@ -453,6 +477,8 @@ class MetadataProjectionRepository:
                             table_id=str(row.table_id),
                             name=str(row.name),
                             description=str(row.description or ""),
+                            score=hit.score,
+                            matched_text=hit.matched_text,
                         )
                     )
             else:
@@ -482,6 +508,8 @@ class MetadataProjectionRepository:
                                 for row in rows
                                 if row.column_id is not None
                             ),
+                            score=hit.score,
+                            matched_text=hit.matched_text,
                         )
                     )
         return candidates

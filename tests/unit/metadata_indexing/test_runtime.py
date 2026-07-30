@@ -24,6 +24,7 @@ from data_agent.metadata_indexing.models import (
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
+    MetadataSemanticHit,
     MetadataSemanticProjection,
     MetadataValueProjection,
 )
@@ -167,9 +168,7 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
         ) -> None:
             """记录 Qdrant 写入。"""
             del semantic, vector
-            cast(list[int], state["external_depths"]).append(
-                cast(int, state["depth"])
-            )
+            cast(list[int], state["external_depths"]).append(cast(int, state["depth"]))
 
     class FakeEmbeddings:
         """返回固定测试向量。"""
@@ -177,9 +176,7 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
         async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
             """记录 TEI 调用并返回固定向量。"""
             del texts
-            cast(list[int], state["external_depths"]).append(
-                cast(int, state["depth"])
-            )
+            cast(list[int], state["external_depths"]).append(cast(int, state["depth"]))
             return [[0.1]]
 
     class FakeClient:
@@ -282,7 +279,15 @@ async def test_semantic_candidates_reject_stale_projection_fingerprint() -> None
 
     repository = FakeProjectionRepository(cast(AsyncSession, FakeSession()))
     candidates = await repository.authoritative_candidates(
-        [(MetadataObjectKind.COLUMN, "column-1", "stale")]
+        [
+            MetadataSemanticHit(
+                kind=MetadataObjectKind.COLUMN,
+                object_id="column-1",
+                schema_fingerprint="stale",
+                score=0.5,
+                matched_text="订单状态",
+            )
+        ]
     )
 
     check_equal("拒绝旧语义投影", candidates, [])
@@ -325,6 +330,7 @@ def test_metadata_indexes_must_be_isolated_from_memory_indexes() -> None:
 
 async def test_elasticsearch_setup_rejects_dynamic_mapping() -> None:
     """字段值索引存在但不是 strict mapping 时启动校验必须失败。"""
+
     class FakeIndices:
         """返回错误动态 mapping 的 Elasticsearch indices 客户端。"""
 
@@ -345,9 +351,7 @@ async def test_elasticsearch_setup_rejects_dynamic_mapping() -> None:
 
     client = SimpleNamespace(indices=FakeIndices())
     try:
-        await MetadataValueElasticsearchIndex(
-            cast(AsyncElasticsearch, client)
-        ).setup()
+        await MetadataValueElasticsearchIndex(cast(AsyncElasticsearch, client)).setup()
     except DataAgentError as error:
         check_equal(
             "拒绝动态字段值 mapping",
@@ -364,6 +368,7 @@ async def test_elasticsearch_setup_rejects_dynamic_mapping() -> None:
 
 async def test_qdrant_setup_rejects_wrong_vector_dimension() -> None:
     """Meta 语义集合维度不一致时启动校验必须失败。"""
+
     class FakeQdrantClient:
         """返回错误向量维度的 Qdrant 客户端。"""
 
@@ -387,9 +392,7 @@ async def test_qdrant_setup_rejects_wrong_vector_dimension() -> None:
             )
 
     try:
-        await MetadataQdrantIndex(
-            cast(AsyncQdrantClient, FakeQdrantClient())
-        ).setup()
+        await MetadataQdrantIndex(cast(AsyncQdrantClient, FakeQdrantClient())).setup()
     except DataAgentError as error:
         check_equal(
             "拒绝错误 Meta 向量维度",
@@ -406,6 +409,7 @@ async def test_qdrant_setup_rejects_wrong_vector_dimension() -> None:
 
 async def test_qdrant_setup_rejects_wrong_payload_index_type() -> None:
     """Meta 语义集合 payload 索引类型漂移时必须阻断启动。"""
+
     class FakeQdrantClient:
         """返回错误 payload 索引类型的 Qdrant 客户端。"""
 
@@ -433,9 +437,7 @@ async def test_qdrant_setup_rejects_wrong_payload_index_type() -> None:
             )
 
     try:
-        await MetadataQdrantIndex(
-            cast(AsyncQdrantClient, FakeQdrantClient())
-        ).setup()
+        await MetadataQdrantIndex(cast(AsyncQdrantClient, FakeQdrantClient())).setup()
     except DataAgentError as error:
         check_equal(
             "拒绝错误 Meta payload 索引类型",

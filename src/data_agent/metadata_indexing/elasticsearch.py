@@ -151,6 +151,30 @@ class MetadataValueElasticsearchIndex:
             for hit in response["hits"]["hits"]
         ]
 
+    async def current_refresh_versions(self, table_ids: set[str]) -> dict[str, str]:
+        """读取每张表当前唯一可见的刷新代次。"""
+        if not table_ids:
+            return {}
+        response = await self._client.search(
+            index=self._index,
+            size=0,
+            query={"terms": {"table_id": sorted(table_ids)}},
+            aggs={
+                "tables": {
+                    "terms": {"field": "table_id", "size": len(table_ids)},
+                    "aggs": {
+                        "versions": {"terms": {"field": "refresh_version", "size": 2}}
+                    },
+                }
+            },
+        )
+        versions: dict[str, str] = {}
+        for bucket in response["aggregations"]["tables"]["buckets"]:
+            version_buckets = bucket["versions"]["buckets"]
+            if len(version_buckets) == 1:
+                versions[str(bucket["key"])] = str(version_buckets[0]["key"])
+        return versions
+
 
 def _bulk_chunks(
     projections: list[MetadataValueProjection],

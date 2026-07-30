@@ -2,6 +2,7 @@
 
 from loguru import logger
 
+from data_agent.data_sync.locks import generation_lock_name
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
@@ -20,6 +21,7 @@ from data_agent.metadata_indexing.projections import (
 )
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
+from data_agent.settings import app_config
 
 
 class MetadataIndexDispatcher:
@@ -33,7 +35,15 @@ class MetadataIndexDispatcher:
         processed = 0
         # 步骤二：逐项隔离投影读取、外部写入与结算。
         for item in items:
-            if await self._synchronize(item):
+            if item.target == MetadataIndexTarget.VALUES:
+                lock = generation_lock_name("metadata-values", item.object_id)
+                async with MySQLDatabase.advisory_locks(
+                    {lock},
+                    timeout_seconds=app_config.data_sync.generation_lock_timeout_seconds,
+                ):
+                    if await self._synchronize(item):
+                        processed += 1
+            elif await self._synchronize(item):
                 processed += 1
         return processed
 
@@ -128,9 +138,9 @@ class MetadataIndexDispatcher:
         if item.operation != MetadataIndexOperation.REFRESH:
             raise ValueError("字段值索引仅支持 refresh 期望状态")
         async with MySQLDatabase.session() as session:
-            projections = await MetadataProjectionRepository(
-                session
-            ).value_projections(item.object_id, item.desired_version)
+            projections = await MetadataProjectionRepository(session).value_projections(
+                item.object_id, item.desired_version
+            )
         await MetadataValueElasticsearchIndex(
             ElasticsearchClient.get_client()
         ).refresh_table(

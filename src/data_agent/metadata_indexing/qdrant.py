@@ -24,6 +24,7 @@ from qdrant_client.models import (
 from data_agent.errors import DataAgentError
 from data_agent.metadata_indexing.models import (
     MetadataObjectKind,
+    MetadataSemanticHit,
     MetadataSemanticProjection,
 )
 from data_agent.settings import app_config
@@ -144,7 +145,7 @@ class MetadataQdrantIndex:
         vector: list[float],
         kinds: set[MetadataObjectKind] | None,
         limit: int,
-    ) -> list[tuple[MetadataObjectKind, str, str]]:
+    ) -> list[MetadataSemanticHit]:
         """使用 Qdrant RRF 融合 dense 与服务端 BM25 候选。"""
         if len(vector) != app_config.qdrant.vector_size:
             raise ValueError("TEI query embedding 维度与 Meta Qdrant 配置不一致")
@@ -160,7 +161,7 @@ class MetadataQdrantIndex:
                     FieldCondition(
                         key="kind",
                         match=MatchAny(any=sorted(kind.value for kind in kinds)),
-                    )
+                    ),
                 ]
             )
             if kinds
@@ -188,13 +189,15 @@ class MetadataQdrantIndex:
             ],
             query=FusionQuery(fusion=Fusion.RRF),
             limit=limit,
-            with_payload=["kind", "object_id", "schema_fingerprint"],
+            with_payload=["kind", "object_id", "schema_fingerprint", "search_text"],
         )
         return [
-            (
-                MetadataObjectKind(str(point.payload["kind"])),
-                str(point.payload["object_id"]),
-                str(point.payload["schema_fingerprint"]),
+            MetadataSemanticHit(
+                kind=MetadataObjectKind(str(point.payload["kind"])),
+                object_id=str(point.payload["object_id"]),
+                schema_fingerprint=str(point.payload["schema_fingerprint"]),
+                score=float(point.score),
+                matched_text=str(point.payload.get("search_text", "")),
             )
             for point in result.points
             if point.payload
