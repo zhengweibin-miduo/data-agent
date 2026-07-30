@@ -215,11 +215,9 @@ class MetadataIndexOutboxRepository:
                 progress_column_id=None,
                 last_primary_key=None,
                 bulk_cursor=None,
-                index_generation=(
-                    current["index_generation"]
-                    if same_frequency
-                    else frequency_version
-                ),
+                # 普通刷新必须沿用 publication generation，才能把上一频次代次
+                # 已发布但不再属于 Top-N 的文档纳入本轮 cleanup。
+                index_generation=current["index_generation"],
                 attempts=0,
                 available_at=available,
                 lease_token=None,
@@ -441,11 +439,9 @@ class MetadataIndexOutboxRepository:
                     ),
                     progress_column_id=None,
                     last_primary_key=None,
-                    index_generation=(
-                        row["index_generation"]
-                        if same_frequency
-                        else pending_frequency
-                    ),
+                    # pending 代次仍属于同一次物理索引生命周期；沿用已发布
+                    # 集合的 generation，避免旧成员逃逸清理。
+                    index_generation=row["index_generation"],
                 )
         else:
             values.update(

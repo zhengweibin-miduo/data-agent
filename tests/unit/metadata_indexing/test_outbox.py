@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any, cast
+from unittest.mock import patch
 
+import pytest
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
@@ -14,6 +16,7 @@ from tests.helpers.factories import semantic_for
 from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.metadata_indexing.desired import (
+    enqueue_value_refresh,
     semantic_desired_states,
     shared_value_refresh_states,
 )
@@ -169,6 +172,68 @@ async def test_shared_eligibility_change_refreshes_every_peer_table() -> None:
         "共享投影指纹变化生成新值版本",
         states[0].desired_version != changed_states[0].desired_version,
         expected="schema_fingerprint 变化必须替换 VALUES desired_version",
+    )
+
+
+@pytest.mark.asyncio
+async def test_frequency_version_is_independent_of_triggering_peer() -> None:
+    """共享目标的频次代次必须由全部 peer 决定，而非当前事件来源。"""
+    peers = [
+        DesiredSyncTable(
+            source=source,
+            source_schema="sales",
+            source_table=f"orders_{source}",
+            target_table="orders",
+            columns=[
+                DesiredColumn(
+                    id=f"column-{source}",
+                    name=f"region_{source}",
+                    data_type="VARCHAR(64)",
+                    nullable=False,
+                )
+            ],
+            primary_key=[f"region_{source}"],
+            schema_fingerprint=source * 64,
+        )
+        for source in ("a", "b")
+    ]
+
+    class FakeScalars:
+        def all(self) -> list[dict[str, object]]:
+            return [peer.model_dump(mode="json") for peer in peers]
+
+    class FakeTableScalars:
+        def __iter__(self) -> Iterator[str]:
+            return iter(["table-a", "table-b"])
+
+    class FakeSession:
+        async def scalars(self, statement: object) -> FakeScalars | FakeTableScalars:
+            rendered = str(statement)
+            if "desired_json" in rendered:
+                return FakeScalars()
+            return FakeTableScalars()
+
+    captured: list[list[MetadataIndexDesired]] = []
+
+    async def capture_enqueue(
+        self: MetadataIndexOutboxRepository,
+        states: list[MetadataIndexDesired],
+        *,
+        debounce_seconds: int | None = None,
+    ) -> None:
+        del self, debounce_seconds
+        captured.append(states)
+
+    with patch.object(MetadataIndexOutboxRepository, "enqueue", capture_enqueue):
+        for peer in peers:
+            await enqueue_value_refresh(
+                cast(AsyncSession, FakeSession()), peer, {"position": 1}
+            )
+
+    check_equal(
+        "不同来源事件生成相同频次代次",
+        {state.frequency_version for states in captured for state in states},
+        {captured[0][0].frequency_version},
     )
 
 

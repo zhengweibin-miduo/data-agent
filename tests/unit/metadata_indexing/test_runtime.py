@@ -121,6 +121,7 @@ def test_value_scope_includes_global_rebuild_state() -> None:
     check_equal("查询限定 VALUES 目标", "target = 'values'" in compiled, True)
     check_equal("查询包含当前表", "object_id IN ('table-1')" in compiled, True)
     check_equal("查询包含全局重建", "operation = 'rebuild'" in compiled, True)
+    check_equal("查询排除已完成刷新", "phase != 'complete'" in compiled, True)
 
 
 def test_set_value_text_is_stable_business_value() -> None:

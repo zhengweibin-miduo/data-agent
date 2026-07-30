@@ -24,6 +24,7 @@ from data_agent.metadata_indexing.models import (
     MetadataSemanticProjection,
     MetadataValueCandidate,
     MetadataValueProjection,
+    MetadataValueRefreshPhase,
 )
 from data_agent.metadata_indexing.repository import metadata_desired_version
 from data_agent.metadata_indexing.tables import metadata_index_outbox
@@ -36,7 +37,13 @@ def _pending_value_scope_statement(table_ids: set[str]) -> Select[tuple[str]]:
     return select(metadata_index_outbox.c.object_id).where(
         metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
         or_(
-            metadata_index_outbox.c.object_id.in_(table_ids),
+            (
+                metadata_index_outbox.c.object_id.in_(table_ids)
+                & (
+                    metadata_index_outbox.c.phase
+                    != MetadataValueRefreshPhase.COMPLETE.value
+                )
+            ),
             metadata_index_outbox.c.operation
             == MetadataIndexOperation.REBUILD.value,
         ),

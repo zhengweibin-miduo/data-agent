@@ -275,9 +275,11 @@ async def enqueue_value_refresh(
         raise RuntimeError("DW 字段未对应当前 Meta 表")
     frequency_version = metadata_desired_version(
         {
-            "desired_hash": desired.desired_hash(),
+            "peer_desired_hashes": sorted(
+                {peer.desired_hash() for peer in [desired, *peers]}
+            ),
             "peer_schema_fingerprints": sorted(
-                peer.schema_fingerprint for peer in [desired, *peers]
+                {peer.schema_fingerprint for peer in [desired, *peers]}
             ),
             "target_table": desired.target_table,
             "normalization_version": 1,
