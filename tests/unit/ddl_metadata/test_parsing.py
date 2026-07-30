@@ -139,6 +139,25 @@ async def test_ddl_parser() -> None:
         [("parent", "id")],
     )
 
+    quoted_references = await parse_ddl(
+        "test_source",
+        "CREATE TABLE `sales`.`parent` (`ID` BIGINT PRIMARY KEY); "
+        "CREATE TABLE `sales`.`table_child` ("
+        "child_id BIGINT PRIMARY KEY, "
+        "parent_id BIGINT REFERENCES `sales`.`parent`(`ID`)); "
+        "CREATE TABLE `sales`.`constraint_child` ("
+        "child_id BIGINT PRIMARY KEY, parent_id BIGINT, "
+        "FOREIGN KEY (parent_id) REFERENCES `sales`.`parent`(`ID`))",
+    )
+    check_equal(
+        "带反引号的列级和表级外键目标使用规范身份",
+        [
+            (relationship.target_table, relationship.target_column)
+            for relationship in quoted_references.relationships
+        ],
+        [("sales.parent", "ID"), ("sales.parent", "ID")],
+    )
+
     changed_reference = await parse_ddl(
         "test_source",
         DDL.replace(

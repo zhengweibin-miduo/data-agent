@@ -197,6 +197,13 @@ def _relationships(
 ) -> list[PhysicalRelationship]:
     """把表级与列级外键约束规范化为字段引用边。"""
     relationships: list[PhysicalRelationship] = []
+
+    def qualified_table_name(target: exp.Table) -> str:
+        """从 AST 标识符构造不含 SQL 引号的规范表名。"""
+        return ".".join(
+            part for part in (target.catalog, target.db, target.name) if part
+        )
+
     for create, table in zip(creates, tables, strict=True):
         schema = create.this
         if not isinstance(schema, exp.Schema):
@@ -224,7 +231,7 @@ def _relationships(
                 PhysicalRelationship(
                     source_table_id=table.id,
                     source_column_id=columns[source_name.casefold()].id,
-                    target_table=target.this.sql(dialect="mysql"),
+                    target_table=qualified_table_name(target.this),
                     target_column=target_columns[0],
                 )
             )
@@ -253,7 +260,7 @@ def _relationships(
                     PhysicalRelationship(
                         source_table_id=table.id,
                         source_column_id=columns[source_name.casefold()].id,
-                        target_table=target.this.sql(dialect="mysql"),
+                        target_table=qualified_table_name(target.this),
                         target_column=target_name,
                     )
                 )
