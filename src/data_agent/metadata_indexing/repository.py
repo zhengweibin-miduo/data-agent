@@ -1,0 +1,237 @@
+"""Meta 索引 desired state 的短事务仓储。"""
+
+import hashlib
+import json
+from uuid import uuid4
+
+from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy.dialects.mysql import insert
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
+
+from data_agent.metadata_indexing.models import (
+    ClaimedMetadataIndexWork,
+    MetadataIndexDesired,
+    MetadataIndexOperation,
+    MetadataIndexTarget,
+)
+from data_agent.metadata_indexing.tables import metadata_index_outbox
+from data_agent.settings import app_config
+
+
+def metadata_desired_version(payload: object) -> str:
+    """为规范化 desired payload 生成稳定版本。"""
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class MetadataIndexOutboxRepository:
+    """在调用方事务中合并、领取并结算 Meta 索引任务。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        """绑定调用方拥有的 Session。"""
+        self._session = session
+
+    async def enqueue(
+        self,
+        desired: list[MetadataIndexDesired],
+        *,
+        debounce_seconds: int = 0,
+    ) -> None:
+        """按目标与对象身份合并最新期望状态。"""
+        if not desired:
+            return
+        rows = [item.model_dump(mode="json") for item in desired]
+        statement = insert(metadata_index_outbox).values(rows)
+        changed = (
+            metadata_index_outbox.c.desired_version
+            != statement.inserted.desired_version
+        )
+        available = func.timestampadd(text("SECOND"), debounce_seconds, func.now())
+        await self._session.execute(
+            statement.on_duplicate_key_update(
+                operation=statement.inserted.operation,
+                desired_version=statement.inserted.desired_version,
+                attempts=case((changed, 0), else_=metadata_index_outbox.c.attempts),
+                available_at=case(
+                    (changed, available),
+                    else_=metadata_index_outbox.c.available_at,
+                ),
+                lease_token=case(
+                    (changed, None), else_=metadata_index_outbox.c.lease_token
+                ),
+                lease_expires_at=case(
+                    (changed, None), else_=metadata_index_outbox.c.lease_expires_at
+                ),
+                last_error_type=case(
+                    (changed, None), else_=metadata_index_outbox.c.last_error_type
+                ),
+            )
+        )
+
+    async def claim(self, limit: int | None = None) -> list[ClaimedMetadataIndexWork]:
+        """短锁领取当前可执行任务并写入数据库时钟租约。"""
+        batch_size = limit or app_config.metadata_index.dispatch_batch_size
+        rows = (
+            await self._session.execute(
+                select(metadata_index_outbox)
+                .where(
+                    metadata_index_outbox.c.attempts
+                    < app_config.metadata_index.max_attempts,
+                    metadata_index_outbox.c.available_at <= func.now(),
+                    or_(
+                        metadata_index_outbox.c.lease_expires_at.is_(None),
+                        metadata_index_outbox.c.lease_expires_at <= func.now(),
+                    ),
+                )
+                .order_by(metadata_index_outbox.c.available_at)
+                .limit(batch_size)
+                .with_for_update(skip_locked=True)
+            )
+        ).mappings().all()
+        claimed: list[ClaimedMetadataIndexWork] = []
+        for row in rows:
+            token = uuid4().hex
+            await self._session.execute(
+                update(metadata_index_outbox)
+                .where(
+                    metadata_index_outbox.c.target == row["target"],
+                    metadata_index_outbox.c.object_kind == row["object_kind"],
+                    metadata_index_outbox.c.object_id == row["object_id"],
+                    metadata_index_outbox.c.desired_version == row["desired_version"],
+                )
+                .values(
+                    lease_token=token,
+                    lease_expires_at=func.timestampadd(
+                        text("SECOND"),
+                        app_config.metadata_index.claim_lease_seconds,
+                        func.now(),
+                    ),
+                )
+            )
+            claimed.append(
+                ClaimedMetadataIndexWork(
+                    target=row["target"],
+                    object_kind=row["object_kind"],
+                    object_id=row["object_id"],
+                    operation=row["operation"],
+                    desired_version=row["desired_version"],
+                    lease_token=token,
+                )
+            )
+        return claimed
+
+    def _authority(
+        self,
+        item: ClaimedMetadataIndexWork,
+    ) -> tuple[ColumnElement[bool], ...]:
+        """构造结算必须匹配的完整 desired-state 身份。"""
+        return (
+            metadata_index_outbox.c.target == item.target.value,
+            metadata_index_outbox.c.object_kind == item.object_kind.value,
+            metadata_index_outbox.c.object_id == item.object_id,
+            metadata_index_outbox.c.operation == item.operation.value,
+            metadata_index_outbox.c.desired_version == item.desired_version,
+            metadata_index_outbox.c.lease_token == item.lease_token,
+        )
+
+    async def acknowledge(self, item: ClaimedMetadataIndexWork) -> bool:
+        """仅确认仍由当前 worker 持有的完整期望状态。"""
+        result = await self._session.execute(
+            delete(metadata_index_outbox).where(*self._authority(item))
+        )
+        return isinstance(result, CursorResult) and bool(result.rowcount)
+
+    async def restore_reconciliation(self, item: ClaimedMetadataIndexWork) -> bool:
+        """迟到写入无法确认时强制发布一次新的当前状态收敛。"""
+        operation = (
+            MetadataIndexOperation.UPSERT
+            if item.target == MetadataIndexTarget.SEMANTIC
+            else MetadataIndexOperation.REFRESH
+        )
+        repair_version = metadata_desired_version(
+            {
+                "repair": uuid4().hex,
+                "target": item.target.value,
+                "object_kind": item.object_kind.value,
+                "object_id": item.object_id,
+            }
+        )
+        statement = insert(metadata_index_outbox).values(
+            target=item.target.value,
+            object_kind=item.object_kind.value,
+            object_id=item.object_id,
+            operation=operation.value,
+            desired_version=repair_version,
+            attempts=0,
+            available_at=func.now(),
+            lease_token=None,
+            lease_expires_at=None,
+            last_error_type=None,
+        )
+        statement = statement.on_duplicate_key_update(
+            operation=statement.inserted.operation,
+            desired_version=statement.inserted.desired_version,
+            attempts=0,
+            available_at=func.now(),
+            lease_token=None,
+            lease_expires_at=None,
+            last_error_type=None,
+        )
+        result = await self._session.execute(statement)
+        return isinstance(result, CursorResult) and bool(result.rowcount)
+
+    async def backoff(self, item: ClaimedMetadataIndexWork, error_type: str) -> bool:
+        """仅为仍有权结算的远程失败增加有界退避。"""
+        seconds = func.least(
+            func.pow(2, metadata_index_outbox.c.attempts),
+            app_config.metadata_index.retry_max_seconds,
+        )
+        result = await self._session.execute(
+            update(metadata_index_outbox)
+            .where(*self._authority(item))
+            .values(
+                attempts=metadata_index_outbox.c.attempts + 1,
+                available_at=func.timestampadd(text("SECOND"), seconds, func.now()),
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type=error_type[:128],
+            )
+        )
+        return isinstance(result, CursorResult) and bool(result.rowcount)
+
+    async def pending_value_tables(self, table_ids: set[str]) -> set[str]:
+        """读取仍存在值刷新期望状态的表标识。"""
+        if not table_ids:
+            return set()
+        return set(
+            (
+                await self._session.scalars(
+                    select(metadata_index_outbox.c.object_id).where(
+                        metadata_index_outbox.c.target
+                        == MetadataIndexTarget.VALUES.value,
+                        metadata_index_outbox.c.object_id.in_(table_ids),
+                    )
+                )
+            ).all()
+        )
+
+    async def dead_letter_count(self) -> int:
+        """返回达到重试上限且仍遮蔽完整性的任务数。"""
+        return int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(metadata_index_outbox)
+                .where(
+                    metadata_index_outbox.c.attempts
+                    >= app_config.metadata_index.max_attempts
+                )
+            )
+            or 0
+        )

@@ -1,5 +1,8 @@
 """模型元数据确定性校验检查。"""
 
+import pytest
+from pydantic import ValidationError
+
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.validation import (
     finalize_and_validate_metrics,
@@ -9,6 +12,7 @@ from data_agent.ddl_metadata.validation import (
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (
     ColumnRole,
+    ColumnValueIndexProfile,
     MetricAnswer,
     MetricMetadata,
     MetricQuestion,
@@ -16,6 +20,8 @@ from data_agent.models.semantic import (
     SemanticMetadata,
     SemanticTable,
     TableRole,
+    ValueIndexDecision,
+    ValueSensitivity,
 )
 from tests.helpers.checks import check_condition, check_equal
 
@@ -62,6 +68,12 @@ async def _valid_metadata() -> tuple[PhysicalSchema, SemanticMetadata]:
                     description=f"{column.name} description",
                     confidence=0.99,
                     evidence=[column.id],
+                    value_index=ColumnValueIndexProfile(
+                        decision=ValueIndexDecision.INDEX,
+                        sensitivity=ValueSensitivity.NON_SENSITIVE,
+                        reason="字段值可用于业务检索",
+                        evidence=[table.id, column.id],
+                    ),
                 )
             )
     return schema, SemanticMetadata(
@@ -162,3 +174,54 @@ async def test_metadata_validator() -> None:
         {issue.code for issue in issues},
         {"unsupported_metric_claim"},
     )
+
+
+async def test_value_index_profile_uses_strict_three_state_gate() -> None:
+    """只有 index + non_sensitive + 当前证据通过值索引门禁。"""
+    schema, metadata = await _valid_metadata()
+    first = metadata.columns[0]
+
+    for decision, sensitivity in (
+        (ValueIndexDecision.SKIP, ValueSensitivity.SENSITIVE),
+        (ValueIndexDecision.UNKNOWN, ValueSensitivity.UNKNOWN),
+    ):
+        profile = first.value_index.model_copy(
+            update={"decision": decision, "sensitivity": sensitivity}
+        )
+        candidate = metadata.model_copy(
+            update={
+                "columns": [
+                    first.model_copy(update={"value_index": profile}),
+                    *metadata.columns[1:],
+                ]
+            }
+        )
+        check_equal("非索引三态仍是合法事实", validate_metadata(schema, candidate), [])
+
+    conflict = first.value_index.model_copy(
+        update={"sensitivity": ValueSensitivity.SENSITIVE}
+    )
+    invalid_evidence = first.value_index.model_copy(update={"evidence": ["missing"]})
+    candidate = metadata.model_copy(
+        update={
+            "columns": [
+                first.model_copy(update={"value_index": conflict}),
+                metadata.columns[1].model_copy(
+                    update={"value_index": invalid_evidence}
+                ),
+                *metadata.columns[2:],
+            ]
+        }
+    )
+    check_equal(
+        "冲突与越界证据均拒绝",
+        {issue.code for issue in validate_metadata(schema, candidate)},
+        {"conflicting_value_index_profile", "invalid_value_index_evidence"},
+    )
+    with pytest.raises(ValidationError):
+        ColumnValueIndexProfile(
+            decision=ValueIndexDecision.INDEX,
+            sensitivity=ValueSensitivity.NON_SENSITIVE,
+            reason="",
+            evidence=[],
+        )

@@ -121,9 +121,11 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             "cron:reap_stalled_jobs",
             "cron:cleanup_checkpoints",
             "cron:dispatch_memory_index_outbox",
+            "cron:dispatch_metadata_index_outbox",
             "cron:extract_conversation_memory",
             "cron:purge_user_memories",
             "cron:report_memory_index_dead_letters",
+            "cron:report_metadata_index_dead_letters",
         ],
     )
     check_equal(
@@ -136,9 +138,11 @@ def test_worker_discovery_contract_is_unchanged() -> None:
             3,
             {5, 15, 25, 35, 45, 55},
             {2, 12, 22, 32, 42, 52},
+            {6, 16, 26, 36, 46, 56},
             {4, 14, 24, 34, 44, 54},
             {7, 17, 27, 37, 47, 57},
             9,
+            11,
         ],
     )
     check_equal(

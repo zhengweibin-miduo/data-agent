@@ -12,6 +12,8 @@ from data_agent.models.semantic import (
     SemanticMetadata,
     TableRole,
     ValidationIssue,
+    ValueIndexDecision,
+    ValueSensitivity,
 )
 from data_agent.settings import app_config
 
@@ -137,6 +139,26 @@ def validate_metadata(
                     code="invalid_evidence",
                     path=f"columns.{column.column_id}.evidence",
                     message="列语义证据必须引用当前物理对象 ID",
+                )
+            )
+        profile = column.value_index
+        if not set(profile.evidence) <= known_evidence:
+            issues.append(
+                ValidationIssue(
+                    code="invalid_value_index_evidence",
+                    path=f"columns.{column.column_id}.value_index.evidence",
+                    message="字段值索引证据必须引用当前物理对象 ID",
+                )
+            )
+        if (
+            profile.decision == ValueIndexDecision.INDEX
+            and profile.sensitivity != ValueSensitivity.NON_SENSITIVE
+        ):
+            issues.append(
+                ValidationIssue(
+                    code="conflicting_value_index_profile",
+                    path=f"columns.{column.column_id}.value_index",
+                    message="只有明确非敏感字段可以获得值索引资格",
                 )
             )
     return issues

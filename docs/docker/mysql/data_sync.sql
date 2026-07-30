@@ -70,3 +70,22 @@ CREATE TABLE IF NOT EXISTS data_sync_key_owner
     PRIMARY KEY (target_table, primary_key_hash),
     INDEX idx_data_sync_key_owner_source (source, target_table)
 ) ENGINE = InnoDB COMMENT = '保存统一 DW 目标主键的首次来源归属及删除墓碑';
+
+CREATE TABLE IF NOT EXISTS metadata_index_outbox
+(
+    target             VARCHAR(16) NOT NULL COMMENT 'semantic 或 values 索引目标',
+    object_kind        VARCHAR(16) NOT NULL COMMENT 'table、column 或 metric 对象类型',
+    object_id          VARCHAR(128) NOT NULL COMMENT 'Meta 对象或值刷新表标识',
+    operation          VARCHAR(16) NOT NULL COMMENT 'upsert、delete 或 refresh 期望操作',
+    desired_version    CHAR(64) NOT NULL COMMENT '合并期望状态版本',
+    attempts           INT NOT NULL DEFAULT 0 COMMENT '远程失败次数',
+    available_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下次允许领取时间',
+    lease_token        CHAR(32) NULL COMMENT '当前领取令牌',
+    lease_expires_at   DATETIME NULL COMMENT '当前领取到期时间',
+    last_error_type    VARCHAR(128) NULL COMMENT '最近安全异常类型',
+    created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '期望状态创建时间',
+    updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                      ON UPDATE CURRENT_TIMESTAMP COMMENT '期望状态更新时间',
+    PRIMARY KEY (target, object_kind, object_id),
+    INDEX idx_metadata_index_outbox_claim (available_at, lease_expires_at, attempts)
+) ENGINE = InnoDB COMMENT = '保存 Meta 语义与字段值派生索引的可合并期望状态';

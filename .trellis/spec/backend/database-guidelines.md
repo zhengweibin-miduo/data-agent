@@ -482,8 +482,8 @@ initializes `data_agent`, `data_sync`, `dw`, `meta`, and the local
 `metric_info`, and `column_metric`; `data_agent.sql` defines the fresh
 conversation schema plus `agent_memory`, `agent_memory_event`,
 `agent_memory_link`, and `memory_index_outbox`. `data_sync.sql` owns the three
-CDC control tables; `source_demo.sql` owns only the local source database and
-replication-user grants. SQLAlchemy Core definitions must
+CDC control tables plus `metadata_index_outbox`; `source_demo.sql` owns only the
+local source database and replication-user grants. SQLAlchemy Core definitions must
 remain compatible with those bootstrap schemas. Integration fixtures may call
 `metadata.create_all()` using the default `meta` connection because the memory
 tables are schema-qualified, but they are not a production migration
@@ -532,8 +532,9 @@ The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
 - Ownership: `meta.sql` owns exactly the four Meta tables. `data_agent.sql` uses
   InnoDB and owns the application conversation tables plus exactly four
   long-term-memory lifecycle tables; it does not manage retired memory
-  contracts. `data_sync.sql` owns only `data_sync_task`, `data_sync_event`, and
-  `data_sync_key_owner`; `source_demo.sql` owns no application control tables.
+  contracts. `data_sync.sql` owns `data_sync_task`, `data_sync_event`,
+  `data_sync_key_owner`, and `metadata_index_outbox`; `source_demo.sql` owns no
+  application control tables.
 - Binlog: local Compose enables a nonzero server ID, ROW format, FULL row image,
   a named binary log, and bounded retention.
 - Existing volume: entrypoint scripts do not rerun. Applying `data_agent.sql`

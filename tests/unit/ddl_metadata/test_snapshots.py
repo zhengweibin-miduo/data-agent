@@ -54,6 +54,22 @@ def _install_repository_fakes(
             events.append("fingerprints")
             return set()
 
+        async def semantic_scope_before_sync(
+            self,
+            schema: object,
+        ) -> tuple[set[str], set[str]]:
+            del schema
+            return set(), set()
+
+        async def existing_object_ids(
+            self,
+            table_ids: set[str],
+            column_ids: set[str],
+            metric_ids: set[str],
+        ) -> set[str]:
+            del table_ids, column_ids
+            return metric_ids
+
         async def synchronize(
             self,
             schema: object,
@@ -95,9 +111,24 @@ def _install_repository_fakes(
             del desired
             events.append("desired")
 
+    class FakeMetadataIndexOutboxRepository:
+        """记录与 Meta 同事务发布的索引期望状态。"""
+
+        def __init__(self, session: object) -> None:
+            del session
+
+        async def enqueue(self, desired: object) -> None:
+            del desired
+            events.append("metadata_outbox")
+
     monkeypatch.setattr(snapshots, "MetadataRepository", FakeMetadataRepository)
     monkeypatch.setattr(snapshots, "MemoryRepository", FakeMemoryRepository)
     monkeypatch.setattr(snapshots, "DataSyncRepository", FakeDataSyncRepository)
+    monkeypatch.setattr(
+        snapshots,
+        "MetadataIndexOutboxRepository",
+        FakeMetadataIndexOutboxRepository,
+    )
 
 
 async def test_snapshot_holds_generation_lock_through_session_commit(
@@ -167,6 +198,7 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
             "expire",
             "meta",
             "desired",
+            "metadata_outbox",
             "memory",
             "session_commit",
             "generation_exit",

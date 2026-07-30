@@ -10,7 +10,8 @@ CREATE TABLE table_info
     id          VARCHAR(64) PRIMARY KEY COMMENT '表编号',
     name        VARCHAR(128) COMMENT '表名称',
     role        VARCHAR(32) COMMENT '表类型(fact/dim)',
-    description TEXT COMMENT '表描述'
+    description TEXT COMMENT '表描述',
+    alias       JSON COMMENT '表别名'
 ) COMMENT = '存储物理表的结构与业务语义元数据';
 
 
@@ -25,6 +26,7 @@ CREATE TABLE column_info
     examples    JSON COMMENT '数据示例',
     description TEXT COMMENT '列描述',
     alias       JSON COMMENT '列别名',
+    index_profile JSON NOT NULL COMMENT '字段值索引资格事实',
     table_id    VARCHAR(64) COMMENT '所属表编号'
 ) COMMENT = '存储物理字段的结构与业务语义元数据';
 

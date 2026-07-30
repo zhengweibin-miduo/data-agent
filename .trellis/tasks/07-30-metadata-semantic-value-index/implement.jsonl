@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "约束新根级 metadata_indexing 模块及依赖方向"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "约束 Meta、data_sync、outbox、事务和数据库时钟"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "复用 Qdrant、Elasticsearch、TEI 和 derived projection 契约"}
+{"file": ".trellis/tasks/07-30-metadata-semantic-value-index/research/repository-evidence.md", "reason": "提供现有代码锚点与最小复用结论"}

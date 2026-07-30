@@ -25,6 +25,7 @@ from data_agent.data_sync.repository import (
     DataSyncRepository,
 )
 from data_agent.errors import DataAgentError
+from data_agent.metadata_indexing.desired import enqueue_value_refresh
 
 
 async def read_backfill_batch(
@@ -88,6 +89,7 @@ async def apply_backfill_batch(
     last_key = tuple(values[-1][name] for name in task.desired.primary_key)
     if not await repository.record_backfill_cursor(task, last_key):
         raise RuntimeError("回填批次完成后同步任务租约已失效")
+    await enqueue_value_refresh(session, task.desired, {"backfill_key": last_key})
     return last_key
 
 
@@ -156,6 +158,12 @@ async def reset_source_rows(
         source=task.desired.source,
         primary_key_documents=documents,
     )
+    if documents:
+        await enqueue_value_refresh(
+            session,
+            task.desired,
+            {"reset_documents": documents},
+        )
     return len(documents) < limit
 
 
@@ -212,6 +220,11 @@ async def apply_buffered_event(
         raise RuntimeError("Binlog 事件确认失败")
     if not await repository.advance_applied_coordinate(task, event.coordinate):
         raise RuntimeError("Binlog 事件应用后同步位点未推进")
+    await enqueue_value_refresh(
+        session,
+        desired,
+        {"coordinate": event.coordinate.model_dump(mode="json")},
+    )
 
 
 def _desired_values(

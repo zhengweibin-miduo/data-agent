@@ -70,6 +70,10 @@ class QdrantSettings(SettingsModel):
         min_length=1,
         description="存储长期记忆向量的 Qdrant 集合名称。",
     )
+    metadata_collection: str = Field(
+        min_length=1,
+        description="存储 Meta 表、字段和指标语义的 Qdrant 集合名称。",
+    )
     vector_size: int = Field(gt=0, description="Qdrant 记忆向量的维度。")
     distance: Literal["Cosine", "Dot", "Euclid"] = Field(
         description="Qdrant 记忆向量检索使用的距离度量。"
@@ -96,6 +100,10 @@ class ElasticsearchSettings(SettingsModel):
     memory_index: str = Field(
         min_length=1,
         description="存储长期记忆全文索引的 Elasticsearch 索引名称。",
+    )
+    metadata_value_index: str = Field(
+        min_length=1,
+        description="存储 Meta 字段业务值的 Elasticsearch 索引名称。",
     )
     analyzer: str = Field(
         min_length=1,
@@ -422,6 +430,19 @@ class MemorySettings(SettingsModel):
     )
 
 
+class MetadataIndexSettings(SettingsModel):
+    """Meta 语义和值派生索引配置。"""
+
+    projection_version: str = Field(min_length=1, description="Meta 索引投影版本。")
+    value_top_n: int = Field(gt=0, le=10_000, description="每字段保留的高频值上限。")
+    dispatch_batch_size: int = Field(gt=0, le=1000, description="每轮领取任务数。")
+    claim_lease_seconds: int = Field(gt=0, description="索引任务领取租约秒数。")
+    retry_max_seconds: int = Field(gt=0, description="索引任务最大退避秒数。")
+    max_attempts: int = Field(gt=0, description="索引任务死信前最大失败次数。")
+    debounce_seconds: int = Field(ge=0, le=3600, description="表级值刷新合并窗口秒数。")
+    search_limit: int = Field(gt=0, le=100, description="内部检索默认返回数。")
+
+
 class ConversationSettings(SettingsModel):
     """永久文本会话与异步记忆提炼配置。"""
 
@@ -473,6 +494,7 @@ class AppSettings(SettingsModel):
     redis: RedisSettings = Field(description="Redis、任务队列和恢复配置。")
     llm: LLMSettings = Field(description="OpenAI 兼容模型调用配置。")
     memory: MemorySettings = Field(description="长期语义记忆配置。")
+    metadata_index: MetadataIndexSettings = Field(description="Meta 派生索引配置。")
     conversation: ConversationSettings = Field(
         description="永久文本会话与异步长期记忆提炼配置。"
     )
@@ -507,14 +529,27 @@ class AppSettings(SettingsModel):
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")
-        # 步骤四：SSE 事件流用 xread 阻塞满一个心跳间隔属于正常空闲行为，而
+        # 步骤四：Meta 与长期记忆索引必须使用不同目标，防止重建误删另一业务投影。
+        if (
+            self.qdrant.metadata_collection.casefold()
+            == self.qdrant.memory_collection.casefold()
+        ):
+            raise ValueError("qdrant.metadata_collection 必须与 memory_collection 不同")
+        if (
+            self.elasticsearch.metadata_value_index.casefold()
+            == self.elasticsearch.memory_index.casefold()
+        ):
+            raise ValueError(
+                "elasticsearch.metadata_value_index 必须与 memory_index 不同"
+            )
+        # 步骤五：SSE 事件流用 xread 阻塞满一个心跳间隔属于正常空闲行为，而
         # socket_timeout 是单次命令的读取超时；两者相等或更小会把正常心跳变成
         # 套接字超时并打断事件流，因此必须严格大于心跳间隔。
         if self.redis.socket_timeout_seconds <= self.api.sse_heartbeat_seconds:
             raise ValueError(
                 "redis.socket_timeout_seconds 必须大于 api.sse_heartbeat_seconds"
             )
-        # 步骤五：返回完成跨配置约束校验的根配置实例。
+        # 步骤六：返回完成跨配置约束校验的根配置实例。
         return self
 
     @classmethod

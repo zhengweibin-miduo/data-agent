@@ -35,6 +35,10 @@ from data_agent.memory.indexing.elasticsearch import (
     MemoryElasticsearchIndex,
 )
 from data_agent.memory.indexing.qdrant import MemoryQdrantIndex
+from data_agent.metadata_indexing.elasticsearch import (
+    MetadataValueElasticsearchIndex,
+)
+from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.settings import app_config
 
 
@@ -67,10 +71,8 @@ async def _wait_for_queue(queue: ArqRedis) -> None:
 def is_fatal_index_error(error: BaseException) -> bool:
     """判定索引初始化异常是否必须阻断 worker 启动。
 
-    暂时不可用（连接失败、服务未就绪）只延后派生投影，MySQL 权威数据与 outbox 仍可
-    恢复，因此允许继续启动并在后续启动重试。结构不兼容不会自行痊愈：继续启动会让
-    dispatcher 直接向被污染的索引写入并确认 outbox 行，把错误映射固化下来，中文检索
-    静默降级且再无请求能纠正它，必须由运维显式重建索引。
+    结构不兼容不会自行痊愈，必须由运维显式重建索引。长期记忆索引的临时连接失败
+    仍沿用既有降级契约；Meta 索引 setup 则在调用本函数前已按更严格契约直接失败。
 
     Args:
         error: 索引初始化抛出的异常。
@@ -78,10 +80,11 @@ def is_fatal_index_error(error: BaseException) -> bool:
     Returns:
         是否属于必须阻断启动的结构性故障。
     """
-    return (
-        isinstance(error, DataAgentError)
-        and error.code == "memory_index_mapping_invalid"
-    )
+    return isinstance(error, DataAgentError) and error.code in {
+        "memory_index_mapping_invalid",
+        "metadata_semantic_mapping_invalid",
+        "metadata_value_mapping_invalid",
+    }
 
 
 async def startup(ctx: dict[Any, Any]) -> None:
@@ -96,10 +99,13 @@ async def startup(ctx: dict[Any, Any]) -> None:
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     TEIEmbeddingClient.initialize()
-    # 步骤二：区分"暂时不可用"与"结构不兼容"。前者只延后派生投影，MySQL 权威数据
-    # 与 outbox 仍可恢复；后者不会自行痊愈——继续启动会让 dispatcher 直接向被污染的
-    # 索引写入并确认 outbox 行，把错误映射固化下来，中文检索静默降级且再无请求能
-    # 纠正它，因此必须让启动失败，由运维显式重建索引。
+    # 步骤二：Meta 索引结构必须先成功创建或严格校验，才允许处理 Meta/DW 业务数据。
+    for setup in (
+        MetadataValueElasticsearchIndex(elasticsearch).setup,
+        MetadataQdrantIndex(qdrant).setup,
+    ):
+        await setup()
+    # 步骤三：长期记忆索引沿用既有降级契约；结构不兼容仍阻断启动。
     for setup in (
         MemoryElasticsearchIndex(elasticsearch).setup,
         MemoryQdrantIndex(qdrant).setup,
@@ -110,7 +116,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
             if is_fatal_index_error(error):
                 raise
             logger.warning("记忆索引初始化失败，本次启动继续运行并将在后续启动时重试")
-    # 步骤三：模型能力探测与 checkpoint 初始化成功后，才装配任务门面和工作流。
+    # 步骤四：模型能力探测与 checkpoint 初始化成功后，才装配任务门面和工作流。
     model = LLMClient.initialize()
     await LLMClient.check_structured_output_capability()
     checkpointer = await CheckpointStore.initialize()
@@ -130,7 +136,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
         ),
         checkpointer,
     )
-    # 步骤四：服务就绪前先重放 dispatch 与 checkpoint 清理 outbox，再报告启动完成。
+    # 步骤五：服务就绪前先重放 dispatch 与 checkpoint 清理 outbox，再报告启动完成。
     await dispatch_pending(ctx)
     await cleanup_checkpoints(ctx)
     logger.info("DDL 元数据 worker 已启动，任务执行与周期维护资源均已就绪")
