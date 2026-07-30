@@ -57,6 +57,8 @@ class MetadataIndexOutboxRepository:
             changed,
             metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
             metadata_index_outbox.c.operation == MetadataIndexOperation.REFRESH.value,
+            metadata_index_outbox.c.attempts
+            < app_config.metadata_index.max_attempts,
             or_(
                 metadata_index_outbox.c.lease_token.is_not(None),
                 metadata_index_outbox.c.progress_column_id.is_not(None),

@@ -370,6 +370,35 @@ async def test_enqueue_new_version_invalidates_lease_and_retry_state() -> None:
     )
 
 
+async def test_enqueue_new_version_replaces_dead_lettered_refresh() -> None:
+    """新代次必须替换无法继续推进的死信刷新并清空游标。"""
+    session = _RecordingSession()
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.enqueue(
+        [
+            MetadataIndexDesired(
+                target=MetadataIndexTarget.VALUES,
+                object_kind=MetadataObjectKind.TABLE,
+                object_id="table-1",
+                operation=MetadataIndexOperation.REFRESH,
+                desired_version="new-version",
+            )
+        ]
+    )
+
+    duplicate = _rendered(session.statements[0]).split("ON DUPLICATE KEY UPDATE")[1]
+    check_condition(
+        "死信刷新不再保留当前代次",
+        "attempts <" in duplicate
+        and "progress_column_id IS NOT NULL" in duplicate
+        and "attempts = CASE" in duplicate
+        and "progress_column_id = CASE" in duplicate,
+        actual=duplicate,
+        expected="continuing 条件排除死信，新版本走 replace_current 清理状态",
+    )
+
+
 async def test_authority_check_matches_full_claim_identity() -> None:
     """外部修改前必须用完整期望状态与租约身份复核执行权。"""
     session = _RecordingSession()

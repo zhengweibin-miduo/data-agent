@@ -35,6 +35,7 @@ from data_agent.metadata_indexing.models import (
     MetadataObjectKind,
     MetadataSemanticHit,
     MetadataSemanticProjection,
+    MetadataValueCandidate,
     MetadataValueProjection,
 )
 from data_agent.metadata_indexing.projections import (
@@ -45,6 +46,7 @@ from data_agent.metadata_indexing.projections import (
 from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.metadata_indexing.rebuilder import MetadataIndexRebuilder
 from data_agent.metadata_indexing.search import (
+    _finalize_value_results,
     _refresh_generation_matches,
     _semantic_candidate_limit,
     _value_candidate_limit,
@@ -146,6 +148,24 @@ def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:
         _refresh_generation_matches({}, {"table-1": "v2"}, []),
         False,
     )
+
+
+def test_incomplete_value_search_preserves_authoritative_candidates() -> None:
+    """正常 pending 刷新只降低完整性，不得清空已通过权威过滤的部分值。"""
+    candidate = MetadataValueCandidate(
+        column_id="column-1",
+        table_id="table-1",
+        value="Shanghai",
+        frequency=2,
+    )
+    scope = {"column-1": ("table-1", "schema-1")}
+
+    values, complete = _finalize_value_results(
+        [candidate], scope, scope, True, False
+    )
+
+    check_equal("不完整刷新保留有效候选", values, [candidate])
+    check_equal("不完整刷新正确降级", complete, False)
 
 
 def test_shared_target_requires_unambiguous_column_ownership() -> None:

@@ -10,6 +10,7 @@ from data_agent.metadata_indexing.elasticsearch import (
 from data_agent.metadata_indexing.models import (
     MetadataCandidate,
     MetadataObjectKind,
+    MetadataValueCandidate,
     MetadataValueProjection,
     MetadataValueSearchResult,
 )
@@ -48,6 +49,19 @@ def _refresh_generation_matches(
         after.get(projection.table_id) == projection.refresh_version
         for projection in projections
     )
+
+
+def _finalize_value_results(
+    values: list[MetadataValueCandidate],
+    current_scope: dict[str, tuple[str, str]],
+    final_scope: dict[str, tuple[str, str]],
+    complete: bool,
+    final_complete: bool,
+) -> tuple[list[MetadataValueCandidate], bool]:
+    """仅在权威范围改变时丢弃候选，不完整状态仍保留有效部分结果。"""
+    if final_scope != current_scope:
+        return [], False
+    return values, complete and final_complete
 
 
 class MetadataSearchService:
@@ -126,9 +140,13 @@ class MetadataSearchService:
             final_scope, final_complete = await MetadataProjectionRepository(
                 session
             ).resolve_value_scope(column_ids)
-        if final_scope != current_scope or not final_complete:
-            values = []
-            complete = False
+        values, complete = _finalize_value_results(
+            values,
+            current_scope,
+            final_scope,
+            complete,
+            final_complete,
+        )
         return MetadataValueSearchResult(
             values=values[:bounded_limit], complete=complete
         )

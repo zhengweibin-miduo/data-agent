@@ -179,9 +179,14 @@ async def test_metadata_validator() -> None:
 async def test_value_index_profile_uses_strict_three_state_gate() -> None:
     """只有 index + non_sensitive + 当前证据通过值索引门禁。"""
     schema, metadata = await _valid_metadata()
-    relationship_source = schema.relationships[0].source_column_id
+    unrelated_id = next(
+        column.id
+        for table in schema.tables
+        for column in table.columns
+        if column.name == "amount"
+    )
     first = next(
-        column for column in metadata.columns if column.column_id == relationship_source
+        column for column in metadata.columns if column.column_id == unrelated_id
     )
 
     for decision, sensitivity in (
@@ -409,4 +414,39 @@ async def test_foreign_key_cannot_index_sensitive_target_values() -> None:
         "conflicting_related_value_sensitivity"
         in {issue.code for issue in validate_metadata(schema, candidate)},
         True,
+    )
+
+
+async def test_sensitive_foreign_key_blocks_target_value_index() -> None:
+    """引用端敏感时，被引用端也不得索引相同标识值。"""
+    schema, metadata = await _valid_metadata()
+    relationship = schema.relationships[0]
+    candidate = metadata.model_copy(
+        update={
+            "columns": [
+                column.model_copy(
+                    update={
+                        "value_index": column.value_index.model_copy(
+                            update={
+                                "decision": ValueIndexDecision.SKIP,
+                                "sensitivity": ValueSensitivity.SENSITIVE,
+                            }
+                        )
+                    }
+                )
+                if column.column_id == relationship.source_column_id
+                else column
+                for column in metadata.columns
+            ]
+        }
+    )
+
+    check_condition(
+        "敏感引用端阻止目标端值索引",
+        any(
+            issue.code == "conflicting_related_value_sensitivity"
+            and relationship.source_column_id not in issue.path
+            for issue in validate_metadata(schema, candidate)
+        ),
+        expected="被引用字段报告关系敏感度冲突",
     )
