@@ -287,6 +287,57 @@ async def _row_is_counted(
     return bool(await session.scalar(select(tuple_(*primary_key) <= tuple_(*cursor))))
 
 
+async def _rows_are_counted(
+    session: AsyncSession,
+    state: FrequencyMutationState,
+    column_id: str,
+    rows: Sequence[Mapping[str, object]],
+) -> list[bool]:
+    """用一次数据库往返批量判断一组行是否已经越过 SCAN 游标。"""
+    if not rows:
+        return []
+    if state.phase != MetadataValueRefreshPhase.SCAN:
+        return [True] * len(rows)
+    column_ids = [item[0] for item in state.plan.columns]
+    if not column_ids:
+        return [False] * len(rows)
+    try:
+        current_index = (
+            0
+            if state.progress_column_id is None
+            else column_ids.index(state.progress_column_id)
+        )
+        column_index = column_ids.index(column_id)
+    except ValueError:
+        return [False] * len(rows)
+    if column_index < current_index:
+        return [True] * len(rows)
+    if column_index > current_index or state.last_primary_key is None:
+        return [False] * len(rows)
+
+    types = _primary_key_types(state.plan)
+    cursor = tuple(
+        _mysql_order_value(value, data_type)
+        for value, data_type in zip(state.last_primary_key, types, strict=True)
+    )
+    comparisons = [
+        tuple_(
+            *(
+                _mysql_order_value(row[name], data_type)
+                for name, data_type in zip(
+                    state.plan.desired.primary_key,
+                    types,
+                    strict=True,
+                )
+            )
+        )
+        <= tuple_(*cursor)
+        for row in rows
+    ]
+    result = (await session.execute(select(*comparisons))).one()
+    return [bool(value) for value in result]
+
+
 async def apply_frequency_row_changes(
     session: AsyncSession,
     states: Sequence[FrequencyMutationState],
@@ -298,15 +349,17 @@ async def apply_frequency_row_changes(
     for state in states:
         for column_id, name, data_type in state.plan.columns:
             delta: Counter[str] = Counter()
-            for row in before_rows:
-                if row.get(name) is not None and await _row_is_counted(
-                    session, state, column_id, row
-                ):
+            before_counted = await _rows_are_counted(
+                session, state, column_id, before_rows
+            )
+            after_counted = await _rows_are_counted(
+                session, state, column_id, after_rows
+            )
+            for row, counted in zip(before_rows, before_counted, strict=True):
+                if row.get(name) is not None and counted:
                     delta[_stable_value_text(row[name], data_type)] -= 1
-            for row in after_rows:
-                if row.get(name) is not None and await _row_is_counted(
-                    session, state, column_id, row
-                ):
+            for row, counted in zip(after_rows, after_counted, strict=True):
+                if row.get(name) is not None and counted:
                     delta[_stable_value_text(row[name], data_type)] += 1
             await repository.apply_deltas(
                 table_id=state.table_id,
@@ -506,6 +559,7 @@ class MetadataValueFrequencyRepository:
             .mappings()
             .all()
         )
+        values: list[dict[str, object]] = []
         for row in rows:
             projection = MetadataValueProjection(
                 column_id=column_id,
@@ -523,17 +577,24 @@ class MetadataValueFrequencyRepository:
                 column_id,
                 str(row["value_hash"]),
             )
+            values.append(
+                {
+                    "table_id": item.object_id,
+                    "index_generation": item.index_generation,
+                    "document_id": document_id,
+                    "column_id": column_id,
+                    "value_hash": row["value_hash"],
+                    "value_text": row["value_text"],
+                    "schema_fingerprint": plan.desired.schema_fingerprint,
+                    "desired_membership_version": item.desired_version,
+                    "desired_frequency": row["frequency"],
+                    "desired_payload_hash": payload_hash,
+                }
+            )
+        batch_size = app_config.metadata_index.value_bulk_batch_size
+        for start in range(0, len(values), batch_size):
             statement = insert(metadata_value_publication).values(
-                table_id=item.object_id,
-                index_generation=item.index_generation,
-                document_id=document_id,
-                column_id=column_id,
-                value_hash=row["value_hash"],
-                value_text=row["value_text"],
-                schema_fingerprint=plan.desired.schema_fingerprint,
-                desired_membership_version=item.desired_version,
-                desired_frequency=row["frequency"],
-                desired_payload_hash=payload_hash,
+                values[start : start + batch_size]
             )
             await self._session.execute(
                 statement.on_duplicate_key_update(

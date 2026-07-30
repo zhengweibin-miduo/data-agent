@@ -109,16 +109,16 @@ async def test_scan_cursor_only_applies_cdc_to_already_scanned_rows(
         FakeRepository,
     )
 
-    async def row_is_counted(
+    async def rows_are_counted(
         session: AsyncSession,
         state: FrequencyMutationState,
         column_id: str,
-        row: dict[str, object],
-    ) -> bool:
+        rows: list[dict[str, object]],
+    ) -> list[bool]:
         del session, state, column_id
-        return int(str(row["id"])) <= 10
+        return [int(str(row["id"])) <= 10 for row in rows]
 
-    monkeypatch.setattr(value_refresh, "_row_is_counted", row_is_counted)
+    monkeypatch.setattr(value_refresh, "_rows_are_counted", rows_are_counted)
     state = _state(
         MetadataValueRefreshPhase.SCAN,
         progress="region-id",
@@ -189,6 +189,39 @@ async def test_scan_cursor_uses_mysql_enum_and_set_order() -> None:
     ).lower()
     check_condition("ENUM 使用 MySQL FIELD 顺序", "field(" in rendered)
     check_condition("SET 使用 MySQL FIND_IN_SET 位序", "find_in_set(" in rendered)
+
+
+async def test_scan_cursor_batches_row_boundary_comparisons() -> None:
+    """同一批 CDC 行的游标边界必须由一次集合化查询完成。"""
+    statements: list[ClauseElement] = []
+
+    class FakeResult:
+        def one(self) -> tuple[bool, ...]:
+            return (True, False, True)
+
+    class FakeSession:
+        async def execute(self, statement: ClauseElement) -> FakeResult:
+            statements.append(statement)
+            return FakeResult()
+
+    state = _state(
+        MetadataValueRefreshPhase.SCAN,
+        progress="region-id",
+        cursor=(10,),
+    )
+    counted = await value_refresh._rows_are_counted(
+        cast(AsyncSession, FakeSession()),
+        state,
+        "region-id",
+        [
+            {"id": 8, "region": "a"},
+            {"id": 12, "region": "b"},
+            {"id": 9, "region": "c"},
+        ],
+    )
+
+    check_equal("批量边界结果", counted, [True, False, True])
+    check_equal("边界查询次数", len(statements), 1)
 
 
 @pytest.mark.parametrize(
