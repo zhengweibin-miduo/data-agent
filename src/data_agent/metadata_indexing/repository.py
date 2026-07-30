@@ -57,8 +57,7 @@ class MetadataIndexOutboxRepository:
             changed,
             metadata_index_outbox.c.target == MetadataIndexTarget.VALUES.value,
             metadata_index_outbox.c.operation == MetadataIndexOperation.REFRESH.value,
-            metadata_index_outbox.c.attempts
-            < app_config.metadata_index.max_attempts,
+            metadata_index_outbox.c.attempts < app_config.metadata_index.max_attempts,
             or_(
                 metadata_index_outbox.c.lease_token.is_not(None),
                 metadata_index_outbox.c.progress_column_id.is_not(None),
@@ -326,6 +325,27 @@ class MetadataIndexOutboxRepository:
 
     async def backoff(self, item: ClaimedMetadataIndexWork, error_type: str) -> bool:
         """仅为仍有权结算的远程失败增加有界退避。"""
+        promoted = await self._session.execute(
+            update(metadata_index_outbox)
+            .where(
+                *self._authority(item),
+                metadata_index_outbox.c.pending_desired_version.is_not(None),
+                metadata_index_outbox.c.attempts + 1
+                >= app_config.metadata_index.max_attempts,
+            )
+            .values(
+                desired_version=metadata_index_outbox.c.pending_desired_version,
+                pending_desired_version=None,
+                progress_column_id=None,
+                attempts=0,
+                available_at=func.now(),
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_type=None,
+            )
+        )
+        if isinstance(promoted, CursorResult) and bool(promoted.rowcount):
+            return True
         seconds = func.least(
             func.pow(2, metadata_index_outbox.c.attempts),
             app_config.metadata_index.retry_max_seconds,

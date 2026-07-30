@@ -216,7 +216,12 @@ async def test_claim_uses_database_clock_and_excludes_dead_letters() -> None:
 async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
     """确认和退避都必须匹配版本、操作与领取令牌。"""
     session = _RecordingSession(
-        [_FakeResult(rowcount=0), _FakeResult(rowcount=0), _FakeResult(rowcount=0)]
+        [
+            _FakeResult(rowcount=0),
+            _FakeResult(rowcount=0),
+            _FakeResult(rowcount=0),
+            _FakeResult(rowcount=0),
+        ]
     )
     repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
     stale = _work("stale-worker-token".ljust(32, "x"))
@@ -228,7 +233,9 @@ async def test_ack_and_backoff_reject_stale_worker_generations() -> None:
         False,
     )
     for label, statement in zip(
-        ("待处理版本提升", "确认", "退避"), session.statements, strict=True
+        ("确认版本提升", "确认删除", "退避版本提升", "退避"),
+        session.statements,
+        strict=True,
     ):
         rendered = _rendered(statement)
         check_condition(
@@ -396,6 +403,31 @@ async def test_enqueue_new_version_replaces_dead_lettered_refresh() -> None:
         and "progress_column_id = CASE" in duplicate,
         actual=duplicate,
         expected="continuing 条件排除死信，新版本走 replace_current 清理状态",
+    )
+
+
+async def test_backoff_promotes_pending_version_before_dead_letter() -> None:
+    """当前代次即将死信时必须提升已经等待的新代次。"""
+    session = _RecordingSession()
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.backoff(_work(), "remote_failure")
+
+    rendered = _rendered(session.statements[0])
+    check_condition(
+        "待处理代次在当前代次死信前提升",
+        all(
+            fragment in rendered
+            for fragment in (
+                "pending_desired_version IS NOT NULL",
+                "attempts + %s >= %s",
+                "progress_column_id=%s",
+                "pending_desired_version=%s",
+                "desired_version=data_sync.metadata_index_outbox.pending_desired_version",
+            )
+        ),
+        actual=rendered,
+        expected="达到预算时原子提升 pending 版本并重置执行状态",
     )
 
 

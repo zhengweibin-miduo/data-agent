@@ -98,9 +98,12 @@ def _value_index_evidence_by_column(schema: PhysicalSchema) -> dict[str, set[str
     return allowed
 
 
-def _foreign_key_neighbors_by_column(schema: PhysicalSchema) -> dict[str, set[str]]:
+def _foreign_key_neighbors_by_column(
+    schema: PhysicalSchema,
+) -> tuple[dict[str, set[str]], set[str]]:
     """按 MySQL 名称解析规则返回外键两端的直接相邻字段。"""
     neighbors: dict[str, set[str]] = {}
+    unresolved_sources: set[str] = set()
     tables_by_name = {table.qualified_name.casefold(): table for table in schema.tables}
     source_tables = {table.id: table for table in schema.tables}
     for relationship in schema.relationships:
@@ -112,6 +115,7 @@ def _foreign_key_neighbors_by_column(schema: PhysicalSchema) -> dict[str, set[st
             qualified = f"{schema_name}.{target_name}" if schema_name else target_name
             target_table = tables_by_name.get(qualified.casefold())
         if target_table is None:
+            unresolved_sources.add(relationship.source_column_id)
             continue
         target_column = next(
             (
@@ -128,7 +132,9 @@ def _foreign_key_neighbors_by_column(schema: PhysicalSchema) -> dict[str, set[st
             neighbors.setdefault(target_column.id, set()).add(
                 relationship.source_column_id
             )
-    return neighbors
+        else:
+            unresolved_sources.add(relationship.source_column_id)
+    return neighbors, unresolved_sources
 
 
 def validate_metadata(
@@ -156,7 +162,9 @@ def validate_metadata(
     # 步骤二：逐表校验置信度与证据引用，低置信度属于不可自动修复问题。
     known_evidence = expected_tables | expected_columns
     value_index_evidence = _value_index_evidence_by_column(schema)
-    foreign_key_neighbors = _foreign_key_neighbors_by_column(schema)
+    foreign_key_neighbors, unresolved_foreign_keys = _foreign_key_neighbors_by_column(
+        schema
+    )
     semantic_columns = {column.column_id: column for column in metadata.columns}
     for table in metadata.tables:
         if table.confidence < confidence_threshold:
@@ -250,6 +258,14 @@ def validate_metadata(
                     code="conflicting_related_value_sensitivity",
                     path=f"columns.{column.column_id}.value_index.sensitivity",
                     message="直接外键任一端非明确非敏感时，另一端不能获得值索引资格",
+                )
+            )
+        if profile.eligible and column.column_id in unresolved_foreign_keys:
+            issues.append(
+                ValidationIssue(
+                    code="unverified_related_value_sensitivity",
+                    path=f"columns.{column.column_id}.value_index.sensitivity",
+                    message="无法核验外键目标敏感度时，引用字段不能获得值索引资格",
                 )
             )
     return issues

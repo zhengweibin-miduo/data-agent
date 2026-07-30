@@ -450,3 +450,61 @@ async def test_sensitive_foreign_key_blocks_target_value_index() -> None:
         ),
         expected="被引用字段报告关系敏感度冲突",
     )
+
+
+async def test_unresolved_foreign_key_target_blocks_value_index() -> None:
+    """当前快照无法核验外部目标敏感度时必须保守拒绝索引。"""
+    schema = await parse_ddl(
+        "validator",
+        """
+        CREATE TABLE fact_order (
+            id BIGINT PRIMARY KEY,
+            customer_id BIGINT,
+            FOREIGN KEY (customer_id) REFERENCES external_customer(id)
+        )
+        """,
+    )
+    metadata = SemanticMetadata(
+        tables=[
+            SemanticTable(
+                table_id=table.id,
+                role=TableRole.FACT,
+                description="订单事实表",
+                confidence=0.99,
+                evidence=[table.id],
+            )
+            for table in schema.tables
+        ],
+        columns=[
+            SemanticColumn(
+                column_id=column.id,
+                role=(
+                    ColumnRole(column.structural_role)
+                    if column.structural_role
+                    else ColumnRole.DIMENSION
+                ),
+                description=f"{column.name} 字段",
+                confidence=0.99,
+                evidence=[column.id],
+                value_index=ColumnValueIndexProfile(
+                    decision=ValueIndexDecision.INDEX,
+                    sensitivity=ValueSensitivity.NON_SENSITIVE,
+                    reason="候选业务标识",
+                    evidence=[table.id, column.id],
+                ),
+            )
+            for table in schema.tables
+            for column in table.columns
+        ],
+    )
+    relationship = schema.relationships[0]
+
+    check_condition(
+        "外部外键目标无法核验时拒绝值索引",
+        any(
+            issue.code == "unverified_related_value_sensitivity"
+            and relationship.source_column_id in issue.path
+            for issue in validate_metadata(schema, metadata)
+        ),
+        expected="引用字段报告无法核验目标敏感度",
+    )
