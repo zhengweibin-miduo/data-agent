@@ -126,6 +126,48 @@ async def test_cdc_update_applies_old_minus_one_and_new_plus_one(
     check_equal("CDC UPDATE 精确 delta", calls, [("华东", -1), ("华西", 1)])
 
 
+async def test_incremental_changes_skip_values_over_scan_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CDC、回填与 reset 必须像 SCAN 一样排除确定性超限值。"""
+    calls: list[dict[str, int]] = []
+
+    class FakeRepository:
+        """记录增量频次变化。"""
+
+        def __init__(self, session: AsyncSession) -> None:
+            del session
+
+        async def apply_deltas(self, **kwargs: object) -> None:
+            calls.append(cast(dict[str, int], kwargs["deltas"]))
+
+    monkeypatch.setattr(
+        value_refresh,
+        "MetadataValueFrequencyRepository",
+        FakeRepository,
+    )
+    oversized = "长" * value_refresh._VALUE_READ_BYTE_LIMIT
+    await value_refresh.apply_frequency_row_changes(
+        cast(AsyncSession, object()),
+        [_state(MetadataValueRefreshPhase.COMPLETE)],
+        [
+            {"id": 1, "region": oversized},
+            {"id": 2, "region": "旧值"},
+            {"id": 3, "region": oversized},
+        ],
+        [
+            {"id": 1, "region": "新增"},
+            {"id": 2, "region": oversized},
+        ],
+    )
+
+    check_equal(
+        "增量频次统一排除超限 before/after 值",
+        calls,
+        [{"旧值": -1, "新增": 1}],
+    )
+
+
 async def test_scan_cursor_only_applies_cdc_to_already_scanned_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

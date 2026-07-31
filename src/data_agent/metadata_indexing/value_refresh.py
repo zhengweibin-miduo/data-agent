@@ -163,6 +163,14 @@ def _estimated_value_bytes(raw_bytes: int) -> int:
     return raw_bytes + 2048
 
 
+def _indexable_value_text(value: object, data_type: str) -> str | None:
+    """规范化业务值，并对增量维护复用 SCAN 的单值字节门禁。"""
+    value_text = _stable_value_text(value, data_type)
+    if _estimated_value_bytes(len(value_text.encode("utf-8"))) > _VALUE_READ_BYTE_LIMIT:
+        return None
+    return value_text
+
+
 async def prepare_frequency_mutation(
     session: AsyncSession,
     desired: DesiredSyncTable,
@@ -407,10 +415,14 @@ async def apply_frequency_row_changes(
             )
             for row, counted in zip(before_rows, before_counted, strict=True):
                 if row.get(name) is not None and counted:
-                    delta[_stable_value_text(row[name], data_type)] -= 1
+                    value_text = _indexable_value_text(row[name], data_type)
+                    if value_text is not None:
+                        delta[value_text] -= 1
             for row, counted in zip(after_rows, after_counted, strict=True):
                 if row.get(name) is not None and counted:
-                    delta[_stable_value_text(row[name], data_type)] += 1
+                    value_text = _indexable_value_text(row[name], data_type)
+                    if value_text is not None:
+                        delta[value_text] += 1
             await repository.apply_deltas(
                 table_id=state.table_id,
                 column_id=column_id,
