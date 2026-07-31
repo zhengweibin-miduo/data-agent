@@ -27,6 +27,7 @@ from data_agent.metadata_indexing.dispatcher import (
 from data_agent.metadata_indexing.elasticsearch import (
     MetadataValueElasticsearchIndex,
     _async_bulk_chunks,
+    metadata_value_projection_fits_bulk,
 )
 from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
@@ -70,6 +71,22 @@ def _value_projection(value: str) -> MetadataValueProjection:
         frequency=1,
         refresh_version="v1",
         schema_fingerprint="schema-1",
+    )
+
+
+def test_single_value_bulk_budget_is_checked_before_publication() -> None:
+    """超出单文档预算的长文本必须在 publication 前确定性排除。"""
+    check_equal(
+        "普通字段值满足单文档预算",
+        metadata_value_projection_fits_bulk(_value_projection("华东")),
+        True,
+    )
+    check_equal(
+        "超长字段值超过单文档预算",
+        metadata_value_projection_fits_bulk(
+            _value_projection("x" * (5 * 1024 * 1024))
+        ),
+        False,
     )
 
 

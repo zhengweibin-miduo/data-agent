@@ -38,6 +38,7 @@ from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.metadata_indexing.elasticsearch import (
     MetadataValueElasticsearchIndex,
     metadata_value_document_id,
+    metadata_value_projection_fits_bulk,
 )
 from data_agent.metadata_indexing.models import (
     ClaimedMetadataIndexWork,
@@ -588,6 +589,11 @@ class MetadataValueFrequencyRepository:
                 refresh_version=item.desired_version,
                 schema_fingerprint=plan.desired.schema_fingerprint,
             )
+            # 超过 Elasticsearch 单文档预算的值是确定性的不可索引输入，
+            # 不应进入 publication 后作为远程失败反复重试。未写入本代
+            # membership 也会让曾发布的同值文档在 CLEANUP 中收敛删除。
+            if not metadata_value_projection_fits_bulk(projection):
+                continue
             payload = projection.model_dump(mode="json")
             payload_hash = metadata_desired_version(payload)
             document_id = metadata_value_document_id(
@@ -978,6 +984,10 @@ class MetadataValueRefresh:
             async with MySQLDatabase.session() as session:
                 outbox = MetadataIndexOutboxRepository(session)
                 if not await outbox.lock_authoritative(item):
+                    return
+                # 当前权威 plan 可能已经切换到 pending 结构代次；必须在
+                # 解释旧字段进度前提升，否则删除字段会令 index() 永久失败。
+                if await outbox.promote_pending_value_state(item):
                     return
                 plan = await self._plan(session, item.object_id)
                 columns = () if plan is None else plan.columns

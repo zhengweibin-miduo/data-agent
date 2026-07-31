@@ -1,5 +1,7 @@
 """字段值精确频次与稳定发布身份契约。"""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from typing import cast
@@ -12,7 +14,12 @@ from tests.helpers.checks import check_condition, check_equal
 from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
 from data_agent.metadata_indexing import value_refresh
 from data_agent.metadata_indexing.elasticsearch import metadata_value_document_id
-from data_agent.metadata_indexing.models import MetadataValueRefreshPhase
+from data_agent.metadata_indexing.models import (
+    MetadataIndexOperation,
+    MetadataIndexTarget,
+    MetadataObjectKind,
+    MetadataValueRefreshPhase,
+)
 from data_agent.metadata_indexing.projections import ValueProjectionPlan
 from data_agent.metadata_indexing.value_refresh import FrequencyMutationState
 
@@ -280,6 +287,57 @@ def test_data_sync_skips_old_scan_cursor_for_pending_structure_generation() -> N
         ),
         False,
     )
+
+
+async def test_select_top_n_promotes_pending_before_reading_current_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SELECT_TOP_N 必须先提升结构代次再解释旧字段进度。"""
+    calls: list[str] = []
+
+    class FakeOutbox:
+        def __init__(self, session: AsyncSession) -> None:
+            del session
+
+        async def lock_authoritative(self, item: object) -> bool:
+            del item
+            calls.append("lock")
+            return True
+
+        async def promote_pending_value_state(self, item: object) -> bool:
+            del item
+            calls.append("promote")
+            return True
+
+    @asynccontextmanager
+    async def session_context() -> AsyncIterator[AsyncSession]:
+        yield cast(AsyncSession, object())
+
+    refresh = value_refresh.MetadataValueRefresh()
+
+    async def forbidden_plan(session: AsyncSession, table_id: str) -> None:
+        del session, table_id
+        pytest.fail("pending 提升前不得读取当前结构 plan")
+
+    monkeypatch.setattr(value_refresh, "MetadataIndexOutboxRepository", FakeOutbox)
+    monkeypatch.setattr(value_refresh.MySQLDatabase, "session", session_context)
+    monkeypatch.setattr(refresh, "_plan", forbidden_plan)
+
+    item = value_refresh.ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-a",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="v1",
+        frequency_version="f1",
+        lease_token="a" * 32,
+        progress_column_id="removed-column",
+        phase=MetadataValueRefreshPhase.SELECT_TOP_N,
+        index_generation="g1",
+    )
+    await refresh._select_top_n(item)
+
+    check_equal("SELECT_TOP_N 抢占顺序", calls, ["lock", "promote"])
 
 
 def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:

@@ -325,3 +325,14 @@ def _bulk_pair(
     if pair_bytes > _BULK_BYTE_LIMIT:
         raise ValueError("单个 Meta 字段值超过 Elasticsearch bulk 字节上限")
     return pair, pair_bytes
+
+
+def metadata_value_projection_fits_bulk(
+    projection: MetadataValueProjection,
+) -> bool:
+    """返回单个字段值投影是否满足 Elasticsearch bulk 单文档预算。"""
+    try:
+        _bulk_pair(projection)
+    except ValueError:
+        return False
+    return True
