@@ -33,3 +33,13 @@ Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取�
 项目级 `git-pr-rules` 的授权、分支命名、base/head 和历史安全规则优先于外部工作流或插件 Skill（包括其默认分支前缀）；首次推送前必须校验实际分支名。
 
 Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/workflow.md` 为项目工作流来源；Skill 提供 Git 与 PR 操作的安全边界和通用执行规则。
+
+## 前端组合技能
+
+仅当任务涉及前端页面或组件的新建、视觉设计、界面重塑或实现审查时，必须按以下顺序组合使用项目级 Skill：
+
+1. **设计**：新建前端页面或组件、开展视觉设计或重塑现有界面前，必须先读取并使用 `frontend-design` Skill：`.agents/skills/frontend-design/SKILL.md`。
+2. **实现**：按照 `frontend-design` 确定的设计方向完成前端代码。
+3. **审查**：前端实现完成后，必须读取并使用 `web-design-guidelines` Skill：`.agents/skills/web-design-guidelines/SKILL.md`，审查可访问性、UX、性能和 Web 界面最佳实践。
+
+审查发现问题后必须完成修复，并再次使用 `web-design-guidelines` 复查，直至相关问题解决。
