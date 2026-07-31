@@ -1,18 +1,19 @@
 # Frontend Type Safety
 
-## Current Scope
+## Current Boundary
 
-Not applicable yet. The repository has no TypeScript compiler configuration,
-frontend type declarations, runtime schema library for browser data, or
-generated API types.
+The browser code is plain JavaScript with no TypeScript compiler or runtime
+schema dependency. FastAPI/Pydantic owns the HTTP contracts; the frontend must
+not invent fields that are absent from those models.
 
-Python type checking is established for the backend through Pyright and is
-documented in `.trellis/spec/backend/quality-guidelines.md`; it must not be
-recast as a frontend TypeScript convention. When a frontend package is added,
-record the actual compiler settings, type ownership, boundary validation, and
-forbidden escape hatches here.
+## Rules
 
-## Evidence
-
-There is no `tsconfig.json`, `package.json`, `.ts`, or `.tsx` file in the
-tracked project or current application tree.
+- Centralize HTTP failure projection in `ApiError` and treat missing envelope
+  fields as an opaque HTTP failure.
+- Keep job status/stage values aligned with `data_agent.models.jobs`.
+- Do not use SSE `JobEventData` as an answer-submission contract: it lacks
+  `question_set_id`; fetch `JobRecord` first.
+- Preserve response nullability and empty states instead of assuming result,
+  questions, history, or error data exists.
+- Add TypeScript only with an approved package/tooling change and a real compile
+  gate; do not add declarations that are never checked.

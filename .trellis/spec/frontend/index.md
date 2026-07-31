@@ -1,48 +1,40 @@
 # Frontend Development Guidelines
 
-> Current frontend scope and explicit non-applicability boundaries.
+> Current conventions for the framework-free local Schema Loom UI.
 
 ## Overview
 
-This repository currently contains no frontend application. These files record
-that fact so future agents do not invent framework, component, hook, state,
-TypeScript, or frontend quality conventions while working on the Python backend.
+The frontend is a small HTML/CSS/JavaScript application served by FastAPI from
+`src/data_agent/frontend/`. It has no package manifest, framework, bundler, or
+browser dependency. Keep that boundary until a concrete requirement outgrows
+the static implementation.
 
 ## Guidelines Index
 
-| Guide | Description | Status |
-|-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Evidence that no frontend tree exists | Current scope documented |
-| [Component Guidelines](./component-guidelines.md) | No component framework or conventions yet | Current scope documented |
-| [Hook Guidelines](./hook-guidelines.md) | No hook or frontend data-fetching patterns yet | Current scope documented |
-| [State Management](./state-management.md) | No frontend state layer yet | Current scope documented |
-| [Quality Guidelines](./quality-guidelines.md) | No frontend quality commands yet | Current scope documented |
-| [Type Safety](./type-safety.md) | No TypeScript boundary yet | Current scope documented |
-
-## Re-evaluation Trigger
-
-Re-evaluate these guides only after frontend source or tooling exists. Derive
-any later convention from the actual package manifest, source, tests, and CI
-rather than selecting a framework or workflow in advance.
+| Guide | Description |
+|-------|-------------|
+| [Directory Structure](./directory-structure.md) | Static asset ownership and FastAPI routes |
+| [Component Guidelines](./component-guidelines.md) | Semantic DOM and accessibility conventions |
+| [Hook Guidelines](./hook-guidelines.md) | Explicit non-applicability of framework hooks |
+| [State Management](./state-management.md) | URL, browser storage, and in-memory state ownership |
+| [Quality Guidelines](./quality-guidelines.md) | Runnable JavaScript and Python checks |
+| [Type Safety](./type-safety.md) | Plain-JavaScript API boundary checks |
 
 ## Pre-Development Checklist
 
-- Check whether the task actually touches a frontend source tree or frontend
-  manifest. The current repository has neither.
-- For backend-only work, treat the frontend guides as a non-applicability
-  boundary; do not introduce framework, component, hook, state, or TypeScript
-  rules.
-- If frontend files have appeared, inspect those files before changing this
-  index because the current absence statements may no longer be true.
+- Reuse `index.html`, `styles.css`, and `app.js`; do not add a frontend framework
+  or dependency for a change these files can express directly.
+- Keep model credentials and LLM calls on the server.
+- Read the backend contract before changing a request, response, SSE event, or
+  error projection.
+- Preserve keyboard access, visible focus, reduced motion, and mobile stacking.
 
 ## Quality Check
 
-- Confirm that every frontend guide still describes only repository evidence
-  and does not name a framework, library, command, or test that is absent.
-- Do not report npm, pnpm, yarn, browser, accessibility, or frontend build
-  checks as executed while no corresponding manifest command exists.
-- Verify that all six links in the guidelines index resolve and that any future
-  status change is backed by actual frontend files.
+- Run the commands in `quality-guidelines.md`.
+- Confirm static assets are included in the built wheel.
+- Verify `waiting_input` uses an authoritative job read before answers are
+  enabled because SSE events do not contain `question_set_id`.
 
 ---
 

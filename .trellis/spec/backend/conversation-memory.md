@@ -24,6 +24,7 @@ DELETE /api/v1/conversations/{conversation_uid}?user_id=<id>
 
 POST   /api/v1/conversations/{conversation_uid}/turns
 POST   /api/v1/conversations/{conversation_uid}/turns/{turn_uid}/assistant
+POST   /api/v1/conversations/{conversation_uid}/chat-turns
 
 GET    /api/v1/users/{user_id}/memories/search?query=<text>&limit=<1..100>
 GET    /api/v1/users/{user_id}/memories/{memory_uid}
@@ -66,6 +67,17 @@ All request models forbid unknown fields. `user_id` is 1 to 128 characters;
 `turn_uid` is 1 to 64 characters; user and assistant `content` is non-empty
 text bounded by `conversation.max_message_chars`.
 
+`POST .../chat-turns` is the server-owned current-DDL orchestration boundary.
+Its request contains `user_id`, `turn_uid`, `content`, and `ddl_context` with a
+1-to-128-character `source`, literal `dialect=mysql`, and non-empty DDL. Its
+response contains the persisted assistant `MessageRecord` and one safe
+`readiness` value: `proceed`, `data_preparing`, or `intent_unresolved`.
+
+The API process requires `DATA_AGENT_LLM_API_KEY`; browsers never receive that
+key or call the OpenAI-compatible endpoint directly. The application initializes
+one shared `LLMClient`, injects it into the readiness classifier and chat service,
+and closes it before the other shared resources during lifespan shutdown.
+
 Starting a turn atomically inserts the user message and sets
 `active_turn_uid`. It returns the persisted message plus a bounded context:
 the current summary, recent messages after its cursor, and relevant active
@@ -73,6 +85,15 @@ the current summary, recent messages after its cursor, and relevant active
 the assistant message, inserts one extraction outbox row, releases the active
 turn, and only then reports success. Replaying the same `turn_uid` and content
 returns the existing result.
+
+Chat orchestration validates and parses the bounded DDL before claiming a turn,
+then runs `start_turn -> readiness -> model -> complete_turn`. The prompt contains
+only the fixed DDL-assistant policy, canonical current DDL, source, bounded
+conversation context, and authoritative user-memory hits. It may explain or
+draft a DDL clarification answer, but it cannot submit
+`/metadata/ddl-jobs/{job_id}/answers`; only an explicit user confirmation may use
+that job contract. A failed model or completion call leaves the active turn
+leased, so the client must retry the same `turn_uid`, content, source, and DDL.
 
 History uses the auto-increment row ID as an exclusive `before` keyset cursor.
 Rows are selected newest-first for paging and returned oldest-first for display.
@@ -130,6 +151,12 @@ the purge worker physically remove memory, links, and events.
 | A different turn is already active in the conversation | `409 conversation_busy` |
 | Reused `turn_uid` has different content | `409 idempotency_conflict` |
 | Assistant completion does not match the active turn | `409 stale_turn` |
+| Chat DDL exceeds `api.max_ddl_bytes` | `422 ddl_too_large` before a turn is claimed |
+| Chat DDL is invalid or exceeds parser table/column limits | Existing deterministic DDL validation error before a turn is claimed |
+| Chat model connection, timeout, rate limit, or server call fails | `502 chat_model_failed`; `retryable` reflects the upstream error class |
+| Chat model returns empty, non-text, or oversized content | `502 chat_model_invalid`, retryable |
+| Readiness cannot resolve data dependencies | Persist and return `intent_unresolved` with the fixed safe user message |
+| Required DW data is not ready | Persist and return `data_preparing` with `数据准备中，请稍后重试` |
 | Memory update races a newer authority version | `409 stale_memory` |
 | Extraction LLM call, validation, or lease finalization fails | Persisted messages remain readable; outbox retries with bounded backoff |
 | ES, Qdrant, or TEI fails | MySQL remains authoritative; projection work remains retryable |
@@ -147,6 +174,15 @@ the purge worker physically remove memory, links, and events.
   bounded summary and removes the extraction outbox without creating memory.
 - Base: summary extraction is delayed; context falls back to bounded recent raw
   messages and chat remains available.
+- Good: a user asks what `orders.total` means for the current DDL; the server
+  uses bounded conversation context and returns a persisted draft without
+  advancing the DDL job.
+- Base: readiness reports that no DW rows are required for a schema-semantic
+  question; chat proceeds without reading `data_sync`.
+- Bad: browser JavaScript receives the LLM key, calls the model directly, or
+  treats assistant prose as a confirmed metric answer.
+- Bad: a failed chat request retries with a new `turn_uid` and collides with the
+  still-leased turn instead of replaying the same idempotency coordinates.
 - Bad: `OK`, `yes`, or an unrelated later user statement is treated as evidence
   for an assistant claim.
 - Bad: filtering `user_id` only after ES/Qdrant search or only before returning
@@ -158,6 +194,12 @@ the purge worker physically remove memory, links, and events.
 
 - Contract tests must assert that text-only requests reject empty, oversized,
   attachment, multimodal, unsupported-role, and unknown-field payloads.
+- Chat tests must assert route shape, current-DDL prompt contents, readiness safe
+  messages, same-turn replay without a second model call, retryable model error
+  projection, invalid/oversized DDL rejection before `start_turn`, and assistant
+  persistence failure propagation. Frontend checks must assert that failed chat
+  retries reuse the same `turn_uid` and that SSE `waiting_input` is refreshed
+  from the authoritative job record before answers are enabled.
 - Repository integration tests must assert keyset order, tenant isolation, one
   active turn, same-content idempotency, conflicting-content rejection, and
   atomic assistant-message/outbox completion.
@@ -207,3 +249,22 @@ return await memory_repository.get_many_active(
 
 The same tenant predicate must exist at the index query and authoritative MySQL
 lookup boundaries; response-time filtering alone is not isolation.
+
+#### Wrong
+
+```javascript
+// This leaks the model credential and bypasses conversation authority.
+await fetch(modelUrl, { headers: { Authorization: apiKey }, body: userText });
+```
+
+#### Correct
+
+```javascript
+await fetch(`/api/v1/conversations/${conversationUid}/chat-turns`, {
+  method: "POST",
+  body: JSON.stringify({ user_id, turn_uid, content, ddl_context }),
+});
+```
+
+The server owns model credentials, bounded context, readiness, idempotency, and
+assistant-message persistence. The browser owns only explicit user interaction.

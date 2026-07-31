@@ -1,0 +1,29 @@
+{
+  "id": "design-frontend-experience",
+  "name": "design-frontend-experience",
+  "title": "设计 Data Agent 前端产品方案",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "frontend",
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-07-31",
+  "completedAt": null,
+  "branch": "feature/frontend-experience-20260731",
+  "base_branch": "master",
+  "worktree_path": "C:\\Users\\midoo\\.codex\\worktrees\\4fe6\\data-agent-repo",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "codex",
+    "task_creation_policy": "codex_host_managed"
+  }
+}

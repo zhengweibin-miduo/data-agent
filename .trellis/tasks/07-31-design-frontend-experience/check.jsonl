@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "按前端质量规范复核实现"}
+{"file": ".trellis/tasks/07-31-design-frontend-experience/research/backend-capability-map.md", "reason": "复核 API 映射与明确边界"}
+{"file": ".trellis/tasks/07-31-design-frontend-experience/research/chat-capability-gap.md", "reason": "检查聊天编排、模型密钥和结构化澄清边界"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行仓库 Python 质量门禁"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "复核会话和长期记忆边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核错误状态和用户安全投影"}
