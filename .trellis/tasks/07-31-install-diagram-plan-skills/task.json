@@ -1,0 +1,29 @@
+{
+  "id": "install-diagram-plan-skills",
+  "name": "install-diagram-plan-skills",
+  "title": "安装规划与图表组合技能",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-07-31",
+  "completedAt": null,
+  "branch": "chore/install-diagram-plan-skills-20260731",
+  "base_branch": "master",
+  "worktree_path": "C:\\Users\\midoo\\.codex\\worktrees\\7291\\data-agent-repo",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "codex",
+    "task_creation_policy": "codex_host_managed"
+  }
+}
