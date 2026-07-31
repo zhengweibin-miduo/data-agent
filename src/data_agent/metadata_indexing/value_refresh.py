@@ -637,7 +637,8 @@ class MetadataValueFrequencyRepository:
         item: ClaimedMetadataIndexWork,
     ) -> list[tuple[str, MetadataValueProjection]]:
         """持久化并返回一个有界 UPSERT 动作批次。"""
-        rows = await self._publication_candidates(item, "upsert")
+        document_ids = await self._publication_candidate_ids(item, "upsert")
+        rows = await self._publication_candidates(item, document_ids)
         actions: list[tuple[str, MetadataValueProjection]] = []
         payload_bytes = 0
         for row in rows:
@@ -682,11 +683,11 @@ class MetadataValueFrequencyRepository:
             )
         return actions
 
-    async def _publication_candidates(
+    def _publication_predicates(
         self,
         item: ClaimedMetadataIndexWork,
         action: str,
-    ) -> list[Mapping[str, object]]:
+    ) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
         if item.index_generation is None:
             raise ValueError("字段值刷新缺少 index_generation")
         if action == "upsert":
@@ -711,14 +712,35 @@ class MetadataValueFrequencyRepository:
                 metadata_value_publication.c.desired_membership_version
                 != item.desired_version,
             )
+        return membership, predicate
+
+    async def _publication_candidate_ids(
+        self,
+        item: ClaimedMetadataIndexWork,
+        action: str,
+    ) -> list[str]:
+        """先读取轻量候选并按字节预算选择本 claim 的稳定文档集合。"""
+        membership, predicate = self._publication_predicates(item, action)
+        columns: list[ColumnElement[object]] = [
+            metadata_value_publication.c.document_id
+        ]
+        if action == "upsert":
+            columns.append(
+                (
+                    func.octet_length(metadata_value_publication.c.value_text)
+                    + func.coalesce(
+                        func.octet_length(
+                            metadata_value_publication.c.action_payload_json
+                        ),
+                        0,
+                    )
+                    + 2048
+                ).label("estimated_bytes")
+            )
         rows = (
             (
                 await self._session.execute(
-                    select(
-                        metadata_value_publication,
-                        # projection schema fingerprint comes from the active plan and
-                        # is persisted in the immutable action body on first prepare.
-                    )
+                    select(*columns)
                     .where(
                         metadata_value_publication.c.table_id == item.object_id,
                         metadata_value_publication.c.index_generation
@@ -728,6 +750,43 @@ class MetadataValueFrequencyRepository:
                     )
                     .order_by(metadata_value_publication.c.document_id)
                     .limit(app_config.metadata_index.value_bulk_batch_size)
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .all()
+        )
+        document_ids: list[str] = []
+        payload_bytes = 0
+        for row in rows:
+            estimated_bytes = int(row.get("estimated_bytes", 0))
+            if (
+                document_ids
+                and payload_bytes + estimated_bytes > _ACTION_PAYLOAD_BYTE_LIMIT
+            ):
+                break
+            payload_bytes += estimated_bytes
+            document_ids.append(str(row["document_id"]))
+        return document_ids
+
+    async def _publication_candidates(
+        self,
+        item: ClaimedMetadataIndexWork,
+        document_ids: Sequence[str],
+    ) -> list[Mapping[str, object]]:
+        if not document_ids:
+            return []
+        rows = (
+            (
+                await self._session.execute(
+                    select(metadata_value_publication)
+                    .where(
+                        metadata_value_publication.c.table_id == item.object_id,
+                        metadata_value_publication.c.index_generation
+                        == item.index_generation,
+                        metadata_value_publication.c.document_id.in_(document_ids),
+                    )
+                    .order_by(metadata_value_publication.c.document_id)
                     .with_for_update()
                 )
             )
@@ -767,8 +826,7 @@ class MetadataValueFrequencyRepository:
         item: ClaimedMetadataIndexWork,
     ) -> list[str]:
         """持久化并返回一个有界 DELETE 动作批次。"""
-        rows = await self._publication_candidates(item, "delete")
-        document_ids = [str(row["document_id"]) for row in rows]
+        document_ids = await self._publication_candidate_ids(item, "delete")
         if document_ids:
             await self._session.execute(
                 update(metadata_value_publication)

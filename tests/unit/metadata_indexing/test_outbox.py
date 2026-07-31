@@ -632,6 +632,42 @@ async def test_same_frequency_pending_scan_finishes_into_requested_phase() -> No
     )
 
 
+async def test_same_frequency_pending_preserves_top_n_progress() -> None:
+    """持续 CDC 的同频版本不得在 SELECT_TOP_N 中清空字段进度。"""
+    session = _RecordingSession(
+        [
+            _FakeResult(
+                [
+                    {
+                        "pending_desired_version": "next-version",
+                        "pending_frequency_version": "frequency-v1",
+                        "frequency_version": "frequency-v1",
+                        "phase": MetadataValueRefreshPhase.SELECT_TOP_N.value,
+                    }
+                ]
+            )
+        ]
+    )
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+    item = ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-1",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="current-version",
+        frequency_version="frequency-v1",
+        lease_token="a" * 32,
+        progress_column_id="column-7",
+        phase=MetadataValueRefreshPhase.SELECT_TOP_N,
+        index_generation="publication-generation",
+    )
+
+    promoted = await repository.promote_pending_value_state(item)
+
+    check_equal("同频 Top-N 不提前提升", promoted, False)
+    check_equal("同频 Top-N 不写状态", len(session.statements), 1)
+
+
 async def test_authority_check_matches_full_claim_identity() -> None:
     """外部修改前必须用完整期望状态与租约身份复核执行权。"""
     session = _RecordingSession()

@@ -490,12 +490,31 @@ class MetadataIndexOutboxRepository:
         item: ClaimedMetadataIndexWork,
     ) -> bool:
         """在读取当前投影前提升等待中的 VALUES 代次。"""
-        pending = await self._session.scalar(
-            select(metadata_index_outbox.c.pending_desired_version)
-            .where(*self._authority(item))
-            .with_for_update()
+        pending = (
+            (
+                await self._session.execute(
+                    select(
+                        metadata_index_outbox.c.pending_desired_version,
+                        metadata_index_outbox.c.pending_frequency_version,
+                        metadata_index_outbox.c.frequency_version,
+                        metadata_index_outbox.c.phase,
+                    )
+                    .where(*self._authority(item))
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
         )
-        if pending is None:
+        if pending is None or pending["pending_desired_version"] is None:
+            return False
+        if (
+            pending["pending_frequency_version"] == pending["frequency_version"]
+            and pending["phase"] != MetadataValueRefreshPhase.SCAN.value
+        ):
+            # 同频 CDC 只改变发布版本。让当前 Top-N/发布/清理轮次先完成，
+            # 再由 COMPLETE 边界提升 pending 并重跑 SELECT_TOP_N；否则持续
+            # 到达的位点会在每次 claim 前清空字段进度，令刷新永久饥饿。
             return False
         await self.advance_value_state(
             item,

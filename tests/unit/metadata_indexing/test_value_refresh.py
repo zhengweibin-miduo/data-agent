@@ -351,6 +351,59 @@ def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:
     check_equal("稳定 ID 同时包含三层身份", len(identifiers), 3)
 
 
+async def test_publication_candidate_ids_budget_before_payload_read() -> None:
+    """发布候选必须先用轻量长度查询裁剪，再读取 LONGTEXT/JSON 正文。"""
+    class FakeMappings:
+        def __init__(self, rows: list[dict[str, object]]) -> None:
+            self.rows = rows
+
+        def mappings(self) -> "FakeMappings":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return self.rows
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        async def execute(self, statement: ClauseElement) -> FakeMappings:
+            self.statements.append(statement)
+            return FakeMappings(
+                [
+                    {"document_id": "doc-1", "estimated_bytes": 3_000_000},
+                    {"document_id": "doc-2", "estimated_bytes": 3_000_000},
+                ]
+            )
+
+    session = FakeSession()
+    repository = value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, session)
+    )
+    item = value_refresh.ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-a",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="desired-v1",
+        frequency_version="frequency-v1",
+        lease_token="a" * 32,
+        phase=MetadataValueRefreshPhase.PUBLISH,
+        index_generation="generation-v1",
+    )
+
+    document_ids = await repository._publication_candidate_ids(item, "upsert")
+
+    check_equal("字节预算内候选", document_ids, ["doc-1"])
+    rendered = str(session.statements[0])
+    check_condition(
+        "轻量查询不读取 LONGTEXT 正文",
+        "value_text," not in rendered and "octet_length" in rendered.lower(),
+        actual=rendered,
+        expected="仅选择 document_id 与估算字节数",
+    )
+
+
 def test_scan_cursor_rejects_schema_or_primary_key_identity_mismatch() -> None:
     """恢复 SCAN 时不能把旧 schema 的同长度游标误当成当前游标。"""
     plan = _state(MetadataValueRefreshPhase.SCAN).plan
