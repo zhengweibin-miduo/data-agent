@@ -9,6 +9,7 @@ from data_agent.conversation.models import (
     DeleteConversationDataResponse,
     DeleteConversationResponse,
     MessagePage,
+    MessageRecord,
     StartTurnResponse,
 )
 from data_agent.conversation.repository import ConversationRepository
@@ -146,6 +147,21 @@ class ConversationService:
                 content,
             )
         return CompleteTurnResponse(message=message)
+
+    async def assistant_message(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> MessageRecord | None:
+        """读取指定轮次已有的助手消息，供编排入口执行幂等回放。"""
+        # 步骤一：在用户和会话边界内执行精确轮次读取，不扫描消息历史页。
+        async with MySQLDatabase.session() as session:
+            return await ConversationRepository(session).assistant_message(
+                user_id,
+                conversation_uid,
+                turn_uid,
+            )
 
     async def delete_user_data(
         self,

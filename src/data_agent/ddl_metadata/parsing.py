@@ -14,6 +14,8 @@ from sqlglot.errors import ParseError
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import column_id, table_id
 from data_agent.models.physical import (
+    DDLPreview,
+    DDLPreviewRelationship,
     PhysicalColumn,
     PhysicalSchema,
     PhysicalTable,
@@ -69,6 +71,62 @@ def _constraint_column_names(
                     if isinstance(identifier, exp.Identifier)
                 )
     return primary_keys, foreign_keys
+
+
+def _reference_parts(reference: exp.Reference) -> tuple[str, list[str]] | None:
+    """提取外键引用的限定表名与字段名。"""
+    schema = reference.this
+    if not isinstance(schema, exp.Schema) or not isinstance(schema.this, exp.Table):
+        return None
+    table = schema.this
+    qualified_name = ".".join(
+        part for part in (table.catalog or None, table.db or None, table.name) if part
+    )
+    columns = [
+        identifier.name
+        for identifier in schema.expressions
+        if isinstance(identifier, exp.Identifier)
+    ]
+    return qualified_name, columns
+
+
+def _foreign_key_pairs(create: exp.Create) -> list[tuple[str, str, str]]:
+    """按 DDL 顺序提取本表字段、目标表、目标字段。"""
+    schema = create.this
+    if not isinstance(schema, exp.Schema):
+        return []
+    pairs: list[tuple[str, str, str]] = []
+    for item in schema.expressions:
+        if isinstance(item, exp.ColumnDef):
+            for constraint in item.constraints:
+                reference = constraint.kind.find(exp.Reference)
+                if isinstance(reference, exp.Reference):
+                    target = _reference_parts(reference)
+                    if target and len(target[1]) == 1:
+                        pairs.append((item.name, target[0], target[1][0]))
+        expressions = item.expressions if isinstance(item, exp.Constraint) else [item]
+        for constraint in expressions:
+            if not isinstance(constraint, exp.ForeignKey):
+                continue
+            reference = constraint.args.get("reference")
+            target = (
+                _reference_parts(reference)
+                if isinstance(reference, exp.Reference)
+                else None
+            )
+            source_columns = [
+                identifier.name
+                for identifier in constraint.expressions
+                if isinstance(identifier, exp.Identifier)
+            ]
+            if target and len(source_columns) == len(target[1]):
+                pairs.extend(
+                    (source_column, target[0], target_column)
+                    for source_column, target_column in zip(
+                        source_columns, target[1], strict=True
+                    )
+                )
+    return pairs
 
 
 def _inline_role(
@@ -190,11 +248,11 @@ def _parse_table(source: str, create: exp.Create) -> PhysicalTable:
     )
 
 
-def _parse_ddl_sync(
+def _parse_ddl_document_sync(
     source: str,
     ddl: str,
     limits: APISettings = app_config.api,
-) -> PhysicalSchema:
+) -> tuple[PhysicalSchema, list[exp.Create]]:
     """在线程中解析并规范化有界 MySQL CREATE TABLE DDL。"""
     # 步骤一：在进入 SQLGlot 前按 UTF-8 字节限制输入，并把语法错误收敛为安全业务错误。
     encoded_size = len(ddl.encode("utf-8"))
@@ -311,12 +369,93 @@ def _parse_ddl_sync(
         sort_keys=True,
     )
     schema_fingerprint = hashlib.sha256(physical_json.encode()).hexdigest()
-    return PhysicalSchema(
+    return (
+        PhysicalSchema(
+            source=source,
+            canonical_ddl=canonical_ddl,
+            ddl_hash=ddl_hash,
+            schema_fingerprint=schema_fingerprint,
+            tables=tables,
+        ),
+        creates,
+    )
+
+
+def _parse_ddl_sync(
+    source: str,
+    ddl: str,
+    limits: APISettings = app_config.api,
+) -> PhysicalSchema:
+    """解析物理模式并丢弃仅供 preview 使用的 AST。"""
+    return _parse_ddl_document_sync(source, ddl, limits)[0]
+
+
+def _preview_relationships(
+    source: str,
+    creates: list[exp.Create],
+    schema: PhysicalSchema,
+) -> list[DDLPreviewRelationship]:
+    """把已解析 AST 中的真实外键投影为画布坐标。"""
+    tables_by_name = {table.qualified_name.casefold(): table for table in schema.tables}
+    relationships: list[DDLPreviewRelationship] = []
+    for create, source_table in zip(creates, schema.tables, strict=True):
+        source_columns = {
+            column.name.casefold(): column for column in source_table.columns
+        }
+        for source_name, target_name, target_column_name in _foreign_key_pairs(create):
+            source_qualifier, separator, _ = source_table.qualified_name.rpartition(".")
+            target_qualified_name = (
+                f"{source_qualifier}.{target_name}"
+                if separator and "." not in target_name
+                else target_name
+            )
+            target_table = tables_by_name.get(target_qualified_name.casefold())
+            source_column = source_columns.get(source_name.casefold())
+            target_table_id = (
+                target_table.id
+                if target_table
+                else table_id(source, target_qualified_name.casefold())
+            )
+            if source_column is None:
+                continue
+            target_column = next(
+                (
+                    column
+                    for column in target_table.columns
+                    if column.name.casefold() == target_column_name.casefold()
+                ),
+                None,
+            ) if target_table else None
+            relationships.append(
+                DDLPreviewRelationship(
+                    source_table_id=source_table.id,
+                    source_column_id=source_column.id,
+                    target_table_id=target_table_id,
+                    target_column_id=(
+                        target_column.id
+                        if target_column
+                        else column_id(target_table_id, target_column_name.casefold())
+                    ),
+                    target_table_name=target_qualified_name,
+                    target_column_name=target_column_name,
+                )
+            )
+    return relationships
+
+
+def _parse_ddl_preview_sync(
+    source: str,
+    ddl: str,
+    limits: APISettings = app_config.api,
+) -> DDLPreview:
+    """复用物理解析结果并补充同一 AST 中的外键画布投影。"""
+    schema, creates = _parse_ddl_document_sync(source, ddl, limits)
+    return DDLPreview(
         source=source,
-        canonical_ddl=canonical_ddl,
-        ddl_hash=ddl_hash,
-        schema_fingerprint=schema_fingerprint,
-        tables=tables,
+        tables=schema.tables,
+        relationships=_preview_relationships(source, creates, schema),
+        table_count=len(schema.tables),
+        column_count=sum(len(table.columns) for table in schema.tables),
     )
 
 
@@ -327,3 +466,12 @@ async def parse_ddl(
 ) -> PhysicalSchema:
     """在线程边界外解析并规范化有界 MySQL CREATE TABLE DDL。"""
     return await asyncio.to_thread(_parse_ddl_sync, source, ddl, limits)
+
+
+async def parse_ddl_preview(
+    source: str,
+    ddl: str,
+    limits: APISettings = app_config.api,
+) -> DDLPreview:
+    """解析只读 DDL 画布投影，不产生任何持久化副作用。"""
+    return await asyncio.to_thread(_parse_ddl_preview_sync, source, ddl, limits)
