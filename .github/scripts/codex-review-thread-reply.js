@@ -325,6 +325,17 @@ function publishReply(rawInput, adapter = createGhAdapter()) {
     };
   }
 
+  if (input.outcome === "fixed") {
+    const pull = adapter.getCurrentPr();
+    if (pull.state !== "OPEN") {
+      throw new Error(`当前 PR 状态不是 OPEN：${pull.state || "<unknown>"}`);
+    }
+    if (pull.headRefOid !== input.commitSha) {
+      throw new Error(
+        `commitSha 与当前 PR head 不一致：${input.commitSha} != ${pull.headRefOid}`,
+      );
+    }
+  }
   adapter.resolveThread(input.threadId);
   return {
     status: alreadyPublished ? "resolved_existing_reply" : "published_and_resolved",
@@ -422,7 +433,7 @@ function selfTest() {
   assert.equal(fixedResult.status, "published_and_resolved");
   assert.deepEqual(
     fixed.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "addReply", "resolveThread"],
+    ["getThread", "getCurrentPr", "addReply", "getCurrentPr", "resolveThread"],
   );
 
   const noChange = fakeAdapter();
@@ -467,7 +478,7 @@ function selfTest() {
   assert.equal(publishReply(existingInput, existing).status, "resolved_existing_reply");
   assert.deepEqual(
     existing.calls.map((call) => call[0]),
-    ["getThread", "resolveThread"],
+    ["getThread", "getCurrentPr", "resolveThread"],
   );
 
   const failedReply = fakeAdapter({ addError: new Error("reply failed") });
@@ -481,7 +492,24 @@ function selfTest() {
   assert.throws(() => publishReply(fixedInput(), failedResolve), /resolve failed/);
   assert.deepEqual(
     failedResolve.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "addReply", "resolveThread"],
+    ["getThread", "getCurrentPr", "addReply", "getCurrentPr", "resolveThread"],
+  );
+
+  const changedHeadAfterReply = fakeAdapter({
+    thread: {
+      id: "PRRT_existing_changed_head",
+      isResolved: false,
+      comments: [{ body: formatReply(validateInput(fixedInput({ threadId: "PRRT_existing_changed_head" }))) }],
+    },
+    pull: { state: "OPEN", headRefOid: "b".repeat(40) },
+  });
+  assert.throws(
+    () => publishReply(fixedInput({ threadId: "PRRT_existing_changed_head" }), changedHeadAfterReply),
+    /commitSha 与当前 PR head 不一致/,
+  );
+  assert.equal(
+    changedHeadAfterReply.calls.some((call) => call[0] === "resolveThread"),
+    false,
   );
 
   const changedHead = fakeAdapter({

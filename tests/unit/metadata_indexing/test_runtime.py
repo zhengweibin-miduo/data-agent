@@ -173,6 +173,23 @@ def test_time_value_text_uses_mysql_business_format() -> None:
     )
 
 
+def test_json_value_text_is_canonical_across_mysql_and_binlog_formats() -> None:
+    """MySQL 与 Binlog 的等价 JSON 文本必须生成相同频次键。"""
+    mysql_text = '{"beta": 2, "alpha": {"items": [3, 1]}}'
+    binlog_text = '{"alpha":{"items":[3,1]},"beta":2}'
+
+    check_equal(
+        "JSON 文本忽略空格和对象键顺序",
+        _stable_value_text(mysql_text, "JSON"),
+        _stable_value_text(binlog_text, "JSON"),
+    )
+    check_equal(
+        "JSON 频次键使用紧凑稳定文本",
+        _stable_value_text(mysql_text, "JSON"),
+        binlog_text,
+    )
+
+
 def test_empty_value_hits_detect_concurrent_refresh_generation() -> None:
     """零命中也必须通过查询前后代次判断并发刷新。"""
     check_equal(

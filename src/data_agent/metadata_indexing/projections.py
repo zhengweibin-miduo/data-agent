@@ -1,5 +1,6 @@
 """从权威 Meta 与 DW 构造当前索引投影。"""
 
+import json
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -63,11 +64,23 @@ class ValueProjectionPlan:
 
 def _stable_value_text(value: object, data_type: str | None = None) -> str:
     """把特殊 MySQL 值转换为跨进程稳定的可检索业务文本。"""
+    base_type = data_type.upper().split("(", 1)[0] if data_type else None
+    if base_type == "JSON":
+        decoded = (
+            json.loads(value)
+            if isinstance(value, (str, bytes, bytearray))
+            else value
+        )
+        return json.dumps(
+            decoded,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
     if data_type and data_type.upper().startswith("BIT") and isinstance(value, bytes):
         return str(int.from_bytes(value, byteorder="big", signed=False))
     if (
-        data_type
-        and data_type.upper().split("(", 1)[0] == "TIME"
+        base_type == "TIME"
         and isinstance(value, timedelta)
     ):
         total_microseconds = (
