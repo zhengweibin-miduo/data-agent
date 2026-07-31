@@ -238,6 +238,22 @@ async def apply_buffered_event(
         )
     repository = DataSyncRepository(session)
     frequency_states = await prepare_frequency_mutation(session, desired)
+    event_rows = [
+        _decoded_event_row(desired, row)
+        for row in (event.before, event.after)
+        if row is not None
+    ]
+    current_rows = (
+        await _read_target_rows(
+            session,
+            desired,
+            event_rows,
+            dw_database=dw_database,
+        )
+        if frequency_states
+        else []
+    )
+    current_by_key = {_primary_key_values(desired, row): row for row in current_rows}
     before_changes: list[Mapping[str, object]] = []
     after_changes: list[Mapping[str, object]] = []
     if event.operation == RowOperation.DELETE:
@@ -249,7 +265,9 @@ async def apply_buffered_event(
             source=desired.source,
         ):
             await session.execute(_delete_statement(desired, before, dw_database))
-            before_changes.append(before)
+            current = current_by_key.get(_primary_key_values(desired, before))
+            if current is not None:
+                before_changes.append(current)
     else:
         after = _decoded_event_row(desired, event.after)
         if event.operation == RowOperation.UPDATE and event.before is not None:
@@ -266,9 +284,12 @@ async def apply_buffered_event(
                     await session.execute(
                         _delete_statement(desired, before, dw_database)
                     )
-                    before_changes.append(before)
-            else:
-                before_changes.append(before)
+                    current = current_by_key.get(_primary_key_values(desired, before))
+                    if current is not None:
+                        before_changes.append(current)
+        current = current_by_key.get(_primary_key_values(desired, after))
+        if current is not None:
+            before_changes.append(current)
         await _claim_owner(repository, desired, after)
         await session.execute(_upsert_statement(desired, [after], dw_database))
         after_changes.append(after)

@@ -11,6 +11,7 @@ import pytest
 from data_agent.memory.application import search as search_module
 from data_agent.memory.application.search import MemorySearchService
 from data_agent.memory.domain.payloads import memory_content_hash
+from data_agent.memory.versions import search_category_versions
 from data_agent.models.memory import (
     BuiltinMemoryCategory,
     MemoryDetail,
@@ -120,6 +121,27 @@ class _FakeMemoryIndexOutboxRepository:
     ) -> dict[str, set[MemoryIndexTarget]]:
         """返回无待处理投影目标。"""
         return {}
+
+
+def test_search_versions_preserve_category_version_pairs() -> None:
+    """混合类别检索不得把旧 DDL 版本与 DDL 类别错误组合。"""
+    versions = search_category_versions(
+        {
+            BuiltinMemoryCategory.DDL_SEMANTIC.value,
+            BuiltinMemoryCategory.USER_PREFERENCE.value,
+        }
+    )
+
+    check_equal(
+        "DDL 语义使用独立契约版本",
+        versions[BuiltinMemoryCategory.DDL_SEMANTIC.value],
+        app_config.memory.ddl_semantic_content_version,
+    )
+    check_equal(
+        "用户偏好保持全局契约版本",
+        versions[BuiltinMemoryCategory.USER_PREFERENCE.value],
+        app_config.memory.content_version,
+    )
 
 
 @pytest.mark.asyncio

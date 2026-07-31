@@ -33,7 +33,7 @@ from data_agent.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.memory.versions import search_content_versions
+from data_agent.memory.versions import ddl_memory_categories, search_category_versions
 from data_agent.models.memory import (
     MEMORY_CONTENT_ADAPTER,
     MemoryActorType,
@@ -903,7 +903,36 @@ class MemoryRepository:
                 agent_memory.c.expires_at.is_(None),
                 agent_memory.c.expires_at > func.now(),
             ),
-            agent_memory.c.content_version.in_(search_content_versions(categories)),
+            (
+                or_(
+                    *(
+                        and_(
+                            agent_memory.c.category == category,
+                            agent_memory.c.content_version == version,
+                        )
+                        for category, version in search_category_versions(
+                            categories
+                        ).items()
+                    )
+                )
+                if categories
+                else or_(
+                    *(
+                        and_(
+                            agent_memory.c.category == category,
+                            agent_memory.c.content_version == version,
+                        )
+                        for category, version in search_category_versions(
+                            ddl_memory_categories()
+                        ).items()
+                    ),
+                    and_(
+                        agent_memory.c.category.not_in(ddl_memory_categories()),
+                        agent_memory.c.content_version
+                        == app_config.memory.content_version,
+                    ),
+                )
+            ),
             # 两侧都是可走索引的等值比较：memory_key 有前缀索引，检索文本改比定长
             # 哈希（memory_text 是 TEXT 列，全等比较无法走索引，会退化为按 source
             # 范围扫描并成为检索延迟主项）。

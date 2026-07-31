@@ -5,7 +5,7 @@ from typing import Any, cast
 from elasticsearch import AsyncElasticsearch, NotFoundError
 
 from data_agent.errors import DataAgentError
-from data_agent.memory.versions import search_content_versions
+from data_agent.memory.versions import ddl_memory_categories, search_category_versions
 from data_agent.models.memory import MemoryProjection
 from data_agent.settings import app_config
 
@@ -207,7 +207,63 @@ class MemoryElasticsearchIndex:
         filters: list[dict[str, object]] = [
             {"term": {"source": source}},
             {"term": {"status": "ACTIVE"}},
-            {"terms": {"content_version": sorted(search_content_versions(categories))}},
+            (
+                {
+                    "bool": {
+                        "should": [
+                            {
+                                "bool": {
+                                    "filter": [
+                                        {"term": {"category": category}},
+                                        {"term": {"content_version": version}},
+                                    ]
+                                }
+                            }
+                            for category, version in search_category_versions(
+                                categories
+                            ).items()
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+                if categories
+                else {
+                    "bool": {
+                        "should": [
+                            *[
+                                {
+                                    "bool": {
+                                        "filter": [
+                                            {"term": {"category": category}},
+                                            {"term": {"content_version": version}},
+                                        ]
+                                    }
+                                }
+                                for category, version in search_category_versions(
+                                    ddl_memory_categories()
+                                ).items()
+                            ],
+                            {
+                                "bool": {
+                                    "filter": {
+                                        "term": {
+                                            "content_version": (
+                                                app_config.memory.content_version
+                                            )
+                                        }
+                                    },
+                                    "must_not": {
+                                        "terms": {
+                                            "category": sorted(ddl_memory_categories())
+                                        }
+                                    },
+                                }
+                            },
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            ),
             {"term": {"projection_version": app_config.memory.projection_version}},
         ]
         # 步骤二：追加租户与可选类别过滤，索引层不允许产生跨租户候选。

@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from tests.helpers.checks import check_equal
+from tests.helpers.checks import check_condition, check_equal
 
 from data_agent.data_sync import backfill
 from data_agent.data_sync.models import (
@@ -229,3 +229,48 @@ async def test_missing_old_key_does_not_claim_ownership(
         _task().desired,
         {"coordinate": coordinate.model_dump(mode="json")},
     )
+
+
+async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回填已写入事件后镜像时，缓冲 INSERT 不得重复累计频次。"""
+    repository = AsyncMock()
+    repository.claim_key_owner.return_value = None
+    repository.acknowledge_event.return_value = True
+    repository.advance_applied_coordinate.return_value = True
+    monkeypatch.setattr(backfill, "DataSyncRepository", lambda session: repository)
+    monkeypatch.setattr(
+        backfill, "prepare_frequency_mutation", AsyncMock(return_value=[object()])
+    )
+    monkeypatch.setattr(
+        backfill, "_read_target_rows", AsyncMock(return_value=[{"id": 1}])
+    )
+    apply_changes = AsyncMock()
+    monkeypatch.setattr(backfill, "apply_frequency_row_changes", apply_changes)
+    monkeypatch.setattr(backfill, "enqueue_value_refresh", AsyncMock())
+    coordinate = BinlogCoordinate(file="mysql-bin.000001", position=121, row_index=0)
+    event = SyncRowEvent(
+        source="local",
+        source_schema="business",
+        source_table="fact_order",
+        coordinate=coordinate,
+        operation=RowOperation.INSERT,
+        before=None,
+        after={"id": 1},
+    )
+
+    await backfill.apply_buffered_event(
+        AsyncMock(),
+        _task(),
+        BufferedSyncEvent(id=2, event=event),
+        dw_database="dw",
+    )
+
+    apply_changes.assert_awaited_once()
+    call = apply_changes.await_args
+    check_condition("频次变化调用参数存在", call is not None)
+    if call is None:
+        return
+    check_equal("当前 DW 镜像作为扣减端", call.args[2], [{"id": 1}])
+    check_equal("事件后镜像作为增加端", call.args[3], [{"id": 1}])

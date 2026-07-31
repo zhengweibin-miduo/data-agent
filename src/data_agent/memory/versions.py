@@ -21,3 +21,18 @@ def search_content_versions(categories: set[str] | None) -> set[str]:
     """返回一次类别检索允许进入候选池的内容版本。"""
     selected = categories or _ALL_CATEGORIES
     return {category_content_version(category) for category in selected}
+
+
+def search_category_versions(
+    categories: set[str] | None,
+) -> dict[str, str]:
+    """返回检索类别与其当前内容版本的精确对应关系。"""
+    selected = categories or _ALL_CATEGORIES
+    return {
+        category: category_content_version(category) for category in sorted(selected)
+    }
+
+
+def ddl_memory_categories() -> set[str]:
+    """返回使用独立 DDL 内容契约的类别。"""
+    return set(_DDL_CATEGORIES)
