@@ -549,9 +549,10 @@ class MetadataValueFrequencyRepository:
         """把一个扫描批次的值精确累加到当前 generation。"""
         column_id, name, data_type = column_item
         counts: Counter[str] = Counter(
-            _stable_value_text(row[name], data_type)
+            value_text
             for row in rows
             if row[name] is not None
+            if (value_text := _indexable_value_text(row[name], data_type)) is not None
         )
         await self.apply_deltas(
             table_id=table_id,

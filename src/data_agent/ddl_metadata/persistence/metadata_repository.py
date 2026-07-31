@@ -135,12 +135,13 @@ class MetadataRepository:
                     "id": metric.id,
                     "name": metric.name,
                     "description": metric.definition,
+                    "fact_table_id": metric.fact_table_id,
                     "relevant_columns": metric.relevant_column_ids,
                     "alias": metric.aliases,
                 }
                 for metric in metrics
             ],
-            ("name", "description", "relevant_columns", "alias"),
+            ("name", "description", "fact_table_id", "relevant_columns", "alias"),
         )
 
         # 步骤三：先移除范围内旧关联再按当前指标重建，避免指标列集合收缩后残留边；

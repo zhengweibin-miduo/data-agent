@@ -336,6 +336,28 @@ async def test_scan_preflights_length_and_filters_key_owner() -> None:
     )
 
 
+async def test_scan_applies_normalized_value_byte_limit() -> None:
+    """Base64 膨胀后超限的二进制值不得进入精确频次。"""
+    captured: list[dict[str, int]] = []
+
+    class RecordingRepository(value_refresh.MetadataValueFrequencyRepository):
+        """仅记录 SCAN 生成的增量。"""
+
+        async def apply_deltas(self, **kwargs: object) -> None:
+            captured.append(cast(dict[str, int], kwargs["deltas"]))
+
+    raw_value = b"x" * 3_200_000
+    repository = RecordingRepository(cast(AsyncSession, object()))
+    await repository.add_scan_values(
+        table_id="table-a",
+        frequency_version="frequency-v1",
+        column_item=("blob-id", "payload", "LONGBLOB"),
+        rows=({"payload": raw_value},),
+    )
+
+    check_equal("SCAN 排除规范化后超限值", captured, [{}])
+
+
 async def test_scan_stops_before_value_that_exceeds_remaining_batch_budget() -> None:
     """SCAN 总预算不足时必须停在前一主键并留待下一 claim。"""
     plan = _state(MetadataValueRefreshPhase.SCAN).plan

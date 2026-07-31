@@ -3,6 +3,7 @@
 import json
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import cast
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -261,7 +262,7 @@ class MetadataProjectionRepository:
         return _semantic_projection(
             kind=kind,
             object_id=object_id,
-            table_id=str(related[0]["table_id"]) if related else None,
+            table_id=str(row["fact_table_id"]),
             search_text=_search_text(
                 row["name"],
                 row["alias"],
@@ -565,10 +566,16 @@ class MetadataProjectionRepository:
                 MetadataCandidate(
                     kind=kind,
                     object_id=object_id,
-                    table_id=row.get("table_id"),
+                    table_id=(
+                        str(row["table_id"])
+                        if row.get("table_id") is not None
+                        else None
+                    ),
                     name=str(row["name"]),
                     description=str(row.get("description") or ""),
-                    related_column_ids=row.get("related_column_ids", []),
+                    related_column_ids=cast(
+                        list[str], row.get("related_column_ids", [])
+                    ),
                     score=hit.score,
                     matched_text=hit.matched_text,
                 )
@@ -685,26 +692,25 @@ class MetadataProjectionRepository:
             ).mappings().all()
             related_by_metric: dict[str, list[object]] = {}
             related_ids: dict[str, list[str]] = {}
-            related_tables: dict[str, str] = {}
             for row in related_rows:
                 metric_id = str(row["metric_id"])
                 related_by_metric.setdefault(metric_id, []).extend(
                     (row["table_name"], row["name"], row["description"])
                 )
                 related_ids.setdefault(metric_id, []).append(str(row["column_id"]))
-                related_tables.setdefault(metric_id, str(row["table_id"]))
             for row in metrics:
                 object_id = str(row["id"])
                 key = (MetadataObjectKind.METRIC, object_id)
                 projections[key] = _semantic_projection(
                     kind=key[0], object_id=object_id,
-                    table_id=related_tables.get(object_id),
+                    table_id=str(row["fact_table_id"]),
                     search_text=_search_text(
                         row["name"], row["alias"], row["description"],
                         related_by_metric.get(object_id, []),
                     ),
                 )
                 content[key] = {
+                    "table_id": str(row["fact_table_id"]),
                     "name": row["name"],
                     "description": row["description"],
                     "related_column_ids": sorted(related_ids.get(object_id, [])),

@@ -36,6 +36,7 @@ CREATE TABLE metric_info
     id               VARCHAR(64) PRIMARY KEY COMMENT '指标编码',
     name             VARCHAR(128) COMMENT '指标名称',
     description      TEXT COMMENT '指标描述',
+    fact_table_id    VARCHAR(64) NOT NULL COMMENT '权威事实表编号',
     relevant_columns JSON COMMENT '关联的列',
     alias            JSON COMMENT '指标别名'
 ) COMMENT = '存储基于数据结构定义的业务指标元数据';

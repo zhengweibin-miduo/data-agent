@@ -37,3 +37,4 @@ def test_meta_core_columns_match_bootstrap_script() -> None:
             creates[table.name],
         )
     check_equal("字段资格列不可为空", column_info.c.index_profile.nullable, False)
+    check_equal("指标事实表列不可为空", metric_info.c.fact_table_id.nullable, False)

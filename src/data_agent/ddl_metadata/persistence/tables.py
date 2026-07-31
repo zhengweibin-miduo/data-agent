@@ -38,6 +38,7 @@ metric_info = Table(
     Column("id", String(64), primary_key=True),
     Column("name", String(128)),
     Column("description", Text),
+    Column("fact_table_id", String(64), nullable=False),
     Column("relevant_columns", JSON),
     Column("alias", JSON),
 )
