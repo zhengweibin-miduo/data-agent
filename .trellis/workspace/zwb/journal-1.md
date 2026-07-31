@@ -1754,3 +1754,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 55: 完成值索引 V1 投影与有界读取
+
+**Date**: 2026-08-01
+**Task**: 完成值索引 V1 投影与有界读取
+**Branch**: `feature/metadata-semantic-value-index-20260730`
+
+### Summary
+
+修复共享目标同名字段的逐来源投影归属，给 SCAN 与 Top-N 增加 4 MiB 有界读取和 V1 断点游标；统一首版配置、移除旧升级 SQL，并补齐单元与集成验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8dcbf69` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
