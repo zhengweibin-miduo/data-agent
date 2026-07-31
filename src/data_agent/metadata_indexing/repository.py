@@ -17,7 +17,10 @@ from data_agent.metadata_indexing.models import (
     MetadataIndexTarget,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.tables import metadata_index_outbox
+from data_agent.metadata_indexing.tables import (
+    metadata_index_outbox,
+    metadata_value_frequency,
+)
 from data_agent.settings import app_config
 
 
@@ -196,6 +199,8 @@ class MetadataIndexOutboxRepository:
             )
             return
         same_frequency = current["frequency_version"] == frequency_version
+        if not same_frequency:
+            await self._clear_frequency_generation(item.object_id, frequency_version)
         await self._session.execute(
             update(metadata_index_outbox)
             .where(*identity)
@@ -415,6 +420,11 @@ class MetadataIndexOutboxRepository:
         if pending is not None:
             pending_frequency = row["pending_frequency_version"]
             same_frequency = pending_frequency == row["frequency_version"]
+            if not same_frequency:
+                await self._clear_frequency_generation(
+                    item.object_id,
+                    str(pending_frequency),
+                )
             values.update(
                 desired_version=pending,
                 pending_desired_version=None,
@@ -454,6 +464,19 @@ class MetadataIndexOutboxRepository:
             .values(**values)
         )
         return isinstance(result, CursorResult) and bool(result.rowcount)
+
+    async def _clear_frequency_generation(
+        self,
+        table_id: str,
+        frequency_version: str,
+    ) -> None:
+        """在重新全量扫描前清除同身份的遗留频次，避免回退代次重复累计。"""
+        await self._session.execute(
+            delete(metadata_value_frequency).where(
+                metadata_value_frequency.c.table_id == table_id,
+                metadata_value_frequency.c.frequency_version == frequency_version,
+            )
+        )
 
     async def promote_pending_value_state(
         self,

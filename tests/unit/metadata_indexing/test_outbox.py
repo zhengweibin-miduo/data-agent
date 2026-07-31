@@ -509,6 +509,56 @@ async def test_enqueue_active_value_records_latest_pending_version() -> None:
     )
 
 
+async def test_restarting_old_frequency_generation_clears_stale_counts() -> None:
+    """V1→V2→V1 回退重新 SCAN 前必须清空遗留的 V1 精确频次。"""
+    session = _RecordingSession(
+        [
+            _FakeResult(
+                [
+                    {
+                        "desired_version": "v2",
+                        "frequency_version": "frequency-v2",
+                        "phase": "complete",
+                        "lease_token": None,
+                        "attempts": 0,
+                        "index_generation": "publication-generation",
+                    }
+                ]
+            )
+        ]
+    )
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+
+    await repository.enqueue(
+        [
+            MetadataIndexDesired(
+                target=MetadataIndexTarget.VALUES,
+                object_kind=MetadataObjectKind.TABLE,
+                object_id="table-1",
+                operation=MetadataIndexOperation.REFRESH,
+                desired_version="v1-again",
+                frequency_version="frequency-v1",
+            )
+        ]
+    )
+
+    delete_sql = _rendered(session.statements[-2])
+    update_sql = _rendered(session.statements[-1])
+    check_condition(
+        "回退代次先清空遗留频次",
+        "DELETE FROM data_sync.metadata_value_frequency" in delete_sql
+        and "frequency_version" in delete_sql,
+        actual=delete_sql,
+        expected="按 table_id 和 frequency_version 删除旧频次",
+    )
+    check_condition(
+        "回退代次重新进入 SCAN",
+        "phase" in update_sql and "last_primary_key" in update_sql,
+        actual=update_sql,
+        expected="清空游标并重新 SCAN",
+    )
+
+
 async def test_backoff_promotes_pending_version_before_dead_letter() -> None:
     """当前代次即将死信时必须提升已经等待的新代次。"""
     session = _RecordingSession()

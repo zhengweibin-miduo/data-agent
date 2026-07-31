@@ -237,6 +237,11 @@ def _mysql_order_value(value: object, data_type: str) -> ColumnElement[Any]:
                 else_=0,
             )
         return numeric
+    base_type = normalized.split("(", 1)[0].strip()
+    if base_type in {"CHAR", "VARCHAR", "TEXT", "TINYTEXT", "MEDIUMTEXT", "LONGTEXT"}:
+        # DW 字符串主键固定使用二进制排序规则；literal 默认继承当前连接/库的
+        # collation，必须显式对齐 keyset scan 才能正确处理大小写和重音差异。
+        return literal(value).collate("utf8mb4_0900_bin")
     # DECIMAL、时态与二进制等主键必须按 MySQL 原列类型绑定；游标信封的
     # JSON 编码只用于持久化，不能参与数据库排序比较。
     return literal(value)

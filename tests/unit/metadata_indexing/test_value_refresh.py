@@ -243,6 +243,19 @@ def test_mysql_cursor_comparison_binds_native_primary_key_values(
     check_equal("原生主键绑定值", list(parameters.values()), [value])
 
 
+def test_mysql_cursor_comparison_uses_dw_binary_collation_for_text_keys() -> None:
+    """字符串边界比较必须与 DW keyset scan 使用相同的二进制排序规则。"""
+    expression = value_refresh._mysql_order_value("a", "VARCHAR(64)")
+    rendered = str(expression.compile(compile_kwargs={"literal_binds": True})).lower()
+
+    check_condition(
+        "字符串主键使用 DW 排序规则",
+        "collate utf8mb4_0900_bin" in rendered,
+        actual=rendered,
+        expected="literal 显式使用 utf8mb4_0900_bin",
+    )
+
+
 def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:
     """相同规范值在不同 table/column 下不能共享 Elasticsearch ID。"""
     value_hash = "a" * 64
