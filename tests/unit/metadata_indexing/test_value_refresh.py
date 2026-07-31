@@ -256,6 +256,32 @@ def test_mysql_cursor_comparison_uses_dw_binary_collation_for_text_keys() -> Non
     )
 
 
+def test_data_sync_skips_old_scan_cursor_for_pending_structure_generation() -> None:
+    """结构代次 pending 后 data-sync 不得用新 plan 解码旧 SCAN 游标。"""
+    check_equal(
+        "结构代次变化需要跳过旧增量",
+        value_refresh._has_pending_structure_generation(
+            {
+                "pending_desired_version": "desired-v2",
+                "pending_frequency_version": "frequency-v2",
+                "frequency_version": "frequency-v1",
+            }
+        ),
+        True,
+    )
+    check_equal(
+        "同频 pending 仍可维护当前基线",
+        value_refresh._has_pending_structure_generation(
+            {
+                "pending_desired_version": "desired-v2",
+                "pending_frequency_version": "frequency-v1",
+                "frequency_version": "frequency-v1",
+            }
+        ),
+        False,
+    )
+
+
 def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:
     """相同规范值在不同 table/column 下不能共享 Elasticsearch ID。"""
     value_hash = "a" * 64

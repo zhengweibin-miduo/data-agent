@@ -26,6 +26,7 @@ from data_agent.metadata_indexing.models import (
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
+    MetadataValueRefreshPhase,
 )
 from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
 from data_agent.models.semantic import MetricMetadata
@@ -581,6 +582,53 @@ async def test_backoff_promotes_pending_version_before_dead_letter() -> None:
         ),
         actual=rendered,
         expected="达到预算时原子提升 pending 版本并重置执行状态",
+    )
+
+
+async def test_same_frequency_pending_scan_finishes_into_requested_phase() -> None:
+    """同频 pending 恰逢 SCAN 结束时必须进入调用方请求的下一阶段。"""
+    session = _RecordingSession(
+        [
+            _FakeResult(
+                [
+                    {
+                        "pending_desired_version": "next-version",
+                        "pending_frequency_version": "frequency-v1",
+                        "frequency_version": "frequency-v1",
+                        "phase": MetadataValueRefreshPhase.SCAN.value,
+                        "index_generation": "publication-generation",
+                    }
+                ]
+            ),
+            _FakeResult(),
+        ]
+    )
+    repository = MetadataIndexOutboxRepository(cast(AsyncSession, session))
+    item = ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-1",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="current-version",
+        frequency_version="frequency-v1",
+        lease_token="a" * 32,
+        phase=MetadataValueRefreshPhase.SCAN,
+        index_generation="publication-generation",
+    )
+
+    await repository.advance_value_state(
+        item,
+        phase=MetadataValueRefreshPhase.SELECT_TOP_N,
+    )
+
+    rendered = _rendered(session.statements[-1])
+    check_condition(
+        "SCAN 完成边界保留请求阶段",
+        "'phase': 'select_top_n'" in rendered
+        and "'progress_column_id': None" in rendered
+        and "'last_primary_key': None" in rendered,
+        actual=rendered,
+        expected="同频 pending 提升到 SELECT_TOP_N 并清空 SCAN 游标",
     )
 
 

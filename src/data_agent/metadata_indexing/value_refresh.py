@@ -179,6 +179,11 @@ async def prepare_frequency_mutation(
         )
         if row is None or row["frequency_version"] is None or row["phase"] is None:
             continue
+        if _has_pending_structure_generation(row):
+            # 当前权威结构已经切换到待处理代次，旧 SCAN 游标无法用新 plan
+            # 安全解释。跳过旧代次增量，由 dispatcher 提升后从全量 SCAN
+            # 建立新基线，不能因此回滚权威 DW 事务。
+            continue
         try:
             plan = await MetadataProjectionRepository(session).value_projection_plan(
                 table_id
@@ -200,6 +205,14 @@ async def prepare_frequency_mutation(
             )
         )
     return states
+
+
+def _has_pending_structure_generation(row: Mapping[Any, object]) -> bool:
+    """判断权威 plan 是否已越过当前频次代次的 SCAN 游标身份。"""
+    return (
+        row["pending_desired_version"] is not None
+        and row["pending_frequency_version"] != row["frequency_version"]
+    )
 
 
 def _literal_type_members(data_type: str) -> tuple[str, ...]:

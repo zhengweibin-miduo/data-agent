@@ -11,6 +11,7 @@ const FIELD_LIMITS = {
   testSummary: 200,
 };
 const FORBIDDEN_CONTENT = [
+  { name: "Codex 触发词", pattern: /@codex/i },
   { name: "字面量 \\\\n", pattern: /\\n/ },
   { name: "pytest 进度", pattern: /\[\s*\d{1,3}%\s*\]/ },
   { name: "warnings summary", pattern: /warnings summary/i },
@@ -405,6 +406,12 @@ function selfTest() {
     () => validateInput(fixedInput({ testSummary: "....... [ 43%]" })),
     /pytest 进度/,
   );
+  for (const field of ["reason", "fix", "testSummary"]) {
+    assert.throws(
+      () => validateInput(fixedInput({ [field]: "不得提及 @CoDeX" })),
+      /Codex 触发词/,
+    );
+  }
   assert.throws(
     () => validateInput({ threadId: "T", outcome: "no_change", reason: "无需修改", testSummary: "1 passed" }),
     /no_change 不允许字段/,

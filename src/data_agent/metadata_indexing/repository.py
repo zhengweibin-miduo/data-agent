@@ -433,11 +433,18 @@ class MetadataIndexOutboxRepository:
                 bulk_cursor=None,
             )
             if same_frequency and row["phase"] == MetadataValueRefreshPhase.SCAN.value:
-                values.update(
-                    phase=MetadataValueRefreshPhase.SCAN.value,
-                    progress_column_id=progress_column_id,
-                    last_primary_key=last_primary_key,
-                )
+                if phase == MetadataValueRefreshPhase.SCAN:
+                    values.update(
+                        phase=phase.value,
+                        progress_column_id=progress_column_id,
+                        last_primary_key=last_primary_key,
+                    )
+                else:
+                    values.update(
+                        phase=phase.value,
+                        progress_column_id=None,
+                        last_primary_key=None,
+                    )
             else:
                 values.update(
                     phase=(
