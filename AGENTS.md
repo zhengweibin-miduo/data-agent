@@ -34,6 +34,12 @@ Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取�
 
 Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/workflow.md` 为项目工作流来源；Skill 提供 Git 与 PR 操作的安全边界和通用执行规则。
 
+## 技术分析方案文档组合技能
+
+仅当任务需要产出技术分析方案文档时，使用项目级 `create-implementation-plan` Skill：`.agents/skills/create-implementation-plan/SKILL.md`。
+
+若该文档需要架构图、流程图、时序图或其他专业 SVG 可视化，再组合使用项目级 `baoyu-diagram` Skill：`.agents/skills/baoyu-diagram/SKILL.md`。普通实现计划、任务拆解或未要求技术分析方案文档的开发任务不得触发该组合。
+
 ## 前端组合技能
 
 仅当任务涉及前端页面或组件的新建、视觉设计、界面重塑或实现审查时，必须按以下顺序组合使用项目级 Skill：
