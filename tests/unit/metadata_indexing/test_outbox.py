@@ -278,6 +278,11 @@ async def test_frequency_version_is_independent_of_triggering_peer() -> None:
         {state.frequency_version for states in captured for state in states},
         {captured[0][0].frequency_version},
     )
+    check_equal(
+        "行事件只刷新发生变化的逻辑来源表",
+        [[state.object_id for state in states] for states in captured],
+        [["table-a"], ["table-b"]],
+    )
 
 
 def _rendered(statement: ClauseElement) -> str:

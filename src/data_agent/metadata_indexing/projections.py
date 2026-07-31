@@ -547,88 +547,166 @@ class MetadataProjectionRepository:
             (MetadataObjectKind(str(kind)), str(object_id))
             for kind, object_id in pending_rows
         }
+        active_hits = [
+            hit for hit in identities if (hit.kind, hit.object_id) not in pending
+        ]
+        projections, content = await self._semantic_candidate_rows(active_hits)
         candidates: list[MetadataCandidate] = []
-        for hit in identities:
+        for hit in active_hits:
             kind, object_id = hit.kind, hit.object_id
-            schema_fingerprint = hit.schema_fingerprint
-            if (kind, object_id) in pending:
-                continue
-            projection = await self.semantic_projection(kind, object_id)
+            projection = projections.get((kind, object_id))
             if (
                 projection is None
-                or projection.schema_fingerprint != schema_fingerprint
+                or projection.schema_fingerprint != hit.schema_fingerprint
             ):
                 continue
-            if kind == MetadataObjectKind.TABLE:
-                row = (
-                    await self._session.execute(
-                        select(table_info.c.name, table_info.c.description).where(
-                            table_info.c.id == object_id
-                        )
-                    )
-                ).one_or_none()
-                if row:
-                    candidates.append(
-                        MetadataCandidate(
-                            kind=kind,
-                            object_id=object_id,
-                            name=str(row.name),
-                            description=str(row.description or ""),
-                            score=hit.score,
-                            matched_text=hit.matched_text,
-                        )
-                    )
-            elif kind == MetadataObjectKind.COLUMN:
-                row = (
-                    await self._session.execute(
-                        select(
-                            column_info.c.name,
-                            column_info.c.description,
-                            column_info.c.table_id,
-                        ).where(column_info.c.id == object_id)
-                    )
-                ).one_or_none()
-                if row:
-                    candidates.append(
-                        MetadataCandidate(
-                            kind=kind,
-                            object_id=object_id,
-                            table_id=str(row.table_id),
-                            name=str(row.name),
-                            description=str(row.description or ""),
-                            score=hit.score,
-                            matched_text=hit.matched_text,
-                        )
-                    )
-            else:
-                rows = (
-                    await self._session.execute(
-                        select(
-                            metric_info.c.name,
-                            metric_info.c.description,
-                            column_metric.c.column_id,
-                        )
-                        .outerjoin(
-                            column_metric,
-                            column_metric.c.metric_id == metric_info.c.id,
-                        )
-                        .where(metric_info.c.id == object_id)
-                    )
-                ).all()
-                if rows:
-                    candidates.append(
-                        MetadataCandidate(
-                            kind=kind,
-                            object_id=object_id,
-                            name=str(rows[0].name),
-                            description=str(rows[0].description or ""),
-                            related_column_ids=sorted(
-                                str(row.column_id)
-                                for row in rows
-                                if row.column_id is not None
-                            ),
-                            score=hit.score,
-                            matched_text=hit.matched_text,
-                        )
-                    )
+            row = content[(kind, object_id)]
+            candidates.append(
+                MetadataCandidate(
+                    kind=kind,
+                    object_id=object_id,
+                    table_id=row.get("table_id"),
+                    name=str(row["name"]),
+                    description=str(row.get("description") or ""),
+                    related_column_ids=row.get("related_column_ids", []),
+                    score=hit.score,
+                    matched_text=hit.matched_text,
+                )
+            )
         return candidates
+
+    async def _semantic_candidate_rows(
+        self,
+        identities: list[MetadataSemanticHit],
+    ) -> tuple[
+        dict[tuple[MetadataObjectKind, str], MetadataSemanticProjection],
+        dict[tuple[MetadataObjectKind, str], dict[str, object]],
+    ]:
+        """按对象类型批量回读投影依赖与候选展示内容。"""
+        ids_by_kind = {
+            kind: {hit.object_id for hit in identities if hit.kind == kind}
+            for kind in MetadataObjectKind
+        }
+        projections: dict[
+            tuple[MetadataObjectKind, str], MetadataSemanticProjection
+        ] = {}
+        content: dict[tuple[MetadataObjectKind, str], dict[str, object]] = {}
+
+        table_ids = ids_by_kind[MetadataObjectKind.TABLE]
+        if table_ids:
+            tables = (
+                await self._session.execute(
+                    select(table_info).where(table_info.c.id.in_(table_ids))
+                )
+            ).mappings().all()
+            column_rows = (
+                await self._session.execute(
+                    select(
+                        column_info.c.table_id,
+                        column_info.c.name,
+                        column_info.c.description,
+                    )
+                    .where(column_info.c.table_id.in_(table_ids))
+                    .order_by(column_info.c.id)
+                )
+            ).mappings().all()
+            columns_by_table: dict[str, list[object]] = {}
+            for row in column_rows:
+                columns_by_table.setdefault(str(row["table_id"]), []).extend(
+                    (row["name"], row["description"])
+                )
+            for row in tables:
+                object_id = str(row["id"])
+                key = (MetadataObjectKind.TABLE, object_id)
+                projections[key] = _semantic_projection(
+                    kind=key[0],
+                    object_id=object_id,
+                    role=row["role"],
+                    search_text=_search_text(
+                        row["name"], row["alias"], row["description"],
+                        columns_by_table.get(object_id, []),
+                    ),
+                )
+                content[key] = {"name": row["name"], "description": row["description"]}
+
+        column_ids = ids_by_kind[MetadataObjectKind.COLUMN]
+        if column_ids:
+            rows = (
+                await self._session.execute(
+                    select(
+                        column_info,
+                        table_info.c.name.label("table_name"),
+                        table_info.c.description.label("table_description"),
+                    )
+                    .join(table_info, table_info.c.id == column_info.c.table_id)
+                    .where(column_info.c.id.in_(column_ids))
+                )
+            ).mappings().all()
+            for row in rows:
+                object_id = str(row["id"])
+                table_id = str(row["table_id"])
+                key = (MetadataObjectKind.COLUMN, object_id)
+                projections[key] = _semantic_projection(
+                    kind=key[0], object_id=object_id, table_id=table_id,
+                    role=row["role"], data_type=row["type"],
+                    search_text=_search_text(
+                        row["name"], row["alias"], row["description"],
+                        row["table_name"], row["table_description"],
+                    ),
+                )
+                content[key] = {
+                    "table_id": table_id,
+                    "name": row["name"],
+                    "description": row["description"],
+                }
+
+        metric_ids = ids_by_kind[MetadataObjectKind.METRIC]
+        if metric_ids:
+            metrics = (
+                await self._session.execute(
+                    select(metric_info).where(metric_info.c.id.in_(metric_ids))
+                )
+            ).mappings().all()
+            related_rows = (
+                await self._session.execute(
+                    select(
+                        column_metric.c.metric_id,
+                        column_info.c.id.label("column_id"),
+                        column_info.c.name,
+                        column_info.c.description,
+                        column_info.c.table_id,
+                        table_info.c.name.label("table_name"),
+                    )
+                    .join(column_info, column_info.c.id == column_metric.c.column_id)
+                    .join(table_info, table_info.c.id == column_info.c.table_id)
+                    .where(column_metric.c.metric_id.in_(metric_ids))
+                    .order_by(column_info.c.id)
+                )
+            ).mappings().all()
+            related_by_metric: dict[str, list[object]] = {}
+            related_ids: dict[str, list[str]] = {}
+            related_tables: dict[str, str] = {}
+            for row in related_rows:
+                metric_id = str(row["metric_id"])
+                related_by_metric.setdefault(metric_id, []).extend(
+                    (row["table_name"], row["name"], row["description"])
+                )
+                related_ids.setdefault(metric_id, []).append(str(row["column_id"]))
+                related_tables.setdefault(metric_id, str(row["table_id"]))
+            for row in metrics:
+                object_id = str(row["id"])
+                key = (MetadataObjectKind.METRIC, object_id)
+                projections[key] = _semantic_projection(
+                    kind=key[0], object_id=object_id,
+                    table_id=related_tables.get(object_id),
+                    search_text=_search_text(
+                        row["name"], row["alias"], row["description"],
+                        related_by_metric.get(object_id, []),
+                    ),
+                )
+                content[key] = {
+                    "name": row["name"],
+                    "description": row["description"],
+                    "related_column_ids": sorted(related_ids.get(object_id, [])),
+                }
+        return projections, content

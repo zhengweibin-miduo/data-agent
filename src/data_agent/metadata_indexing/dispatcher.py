@@ -58,7 +58,7 @@ class MetadataIndexDispatcher:
                 async with MySQLDatabase.session() as session:
                     authoritative = await MetadataIndexOutboxRepository(
                         session
-                    ).is_authoritative(item)
+                    ).renew_lease(item)
                 if authoritative and await self._synchronize(item):
                     processed += 1
         return processed

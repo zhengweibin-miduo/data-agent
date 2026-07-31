@@ -297,8 +297,11 @@ async def enqueue_value_refresh(
         }
         for row in rows
     }
+    current_column_ids = {column.id for column in desired.columns}
     table_identifiers = {
-        str(item["table_id"]) for item in column_metadata.values()
+        str(item["table_id"])
+        for column_id, item in column_metadata.items()
+        if column_id in current_column_ids
     }
     if not table_identifiers:
         raise RuntimeError("DW 字段未对应当前 Meta 表")

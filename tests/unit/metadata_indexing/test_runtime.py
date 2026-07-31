@@ -473,6 +473,11 @@ async def test_dispatcher_calls_qdrant_outside_mysql_transaction(
             del work
             return cast(bool, state["authoritative"])
 
+        async def renew_lease(self, work: ClaimedMetadataIndexWork) -> bool:
+            """在每项开始前续租并复核完整领取身份。"""
+            del work
+            return cast(bool, state["authoritative"])
+
         async def acknowledge(self, work: ClaimedMetadataIndexWork) -> bool:
             """记录确认发生在事务内。"""
             del work
@@ -910,14 +915,17 @@ async def test_semantic_candidates_reject_stale_projection_fingerprint() -> None
     class FakeProjectionRepository(MetadataProjectionRepository):
         """返回固定当前权威投影。"""
 
-        async def semantic_projection(
+        async def _semantic_candidate_rows(
             self,
-            kind: MetadataObjectKind,
-            object_id: str,
-        ) -> MetadataSemanticProjection:
-            """返回固定当前投影。"""
-            del kind, object_id
-            return current
+            identities: list[MetadataSemanticHit],
+        ) -> tuple[
+            dict[tuple[MetadataObjectKind, str], MetadataSemanticProjection],
+            dict[tuple[MetadataObjectKind, str], dict[str, object]],
+        ]:
+            """模拟批量回读当前投影和展示内容。"""
+            del identities
+            key = (MetadataObjectKind.COLUMN, "column-1")
+            return {key: current}, {key: {"name": "订单状态", "table_id": "table-1"}}
 
     repository = FakeProjectionRepository(cast(AsyncSession, FakeSession()))
     candidates = await repository.authoritative_candidates(
