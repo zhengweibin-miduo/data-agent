@@ -11,6 +11,7 @@ from data_agent.ddl_metadata.worker.lifecycle import shutdown, startup
 from data_agent.ddl_metadata.worker.maintenance import (
     cleanup_checkpoints,
     dispatch_memory_index_outbox,
+    dispatch_metadata_index_outbox,
     dispatch_pending,
     expire_memories,
     expire_waiting,
@@ -18,6 +19,7 @@ from data_agent.ddl_metadata.worker.maintenance import (
     purge_user_memories,
     reap_stalled_jobs,
     report_memory_index_dead_letters,
+    report_metadata_index_dead_letters,
 )
 from data_agent.infrastructure.job_queue import (
     build_queue_pool,
@@ -75,6 +77,11 @@ class WorkerSettings:
             run_at_startup=True,
         ),
         cron(
+            _observed(dispatch_metadata_index_outbox),
+            second={6, 16, 26, 36, 46, 56},
+            run_at_startup=True,
+        ),
+        cron(
             _observed(extract_conversation_memory),
             second={4, 14, 24, 34, 44, 54},
             run_at_startup=True,
@@ -86,6 +93,11 @@ class WorkerSettings:
         # 死信告警独立成低频 cron：挂在 dispatch 上时，队列持续饱和会让
         # "批次未满才统计"永不成立，积压完全没有信号。
         cron(_observed(report_memory_index_dead_letters), minute=None, second=9),
+        cron(
+            _observed(report_metadata_index_dead_letters),
+            minute=None,
+            second=11,
+        ),
     ]
     on_startup = _observed(startup)
     on_shutdown = _observed(shutdown)

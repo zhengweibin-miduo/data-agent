@@ -12,6 +12,8 @@ from data_agent.models.semantic import (
     SemanticMetadata,
     TableRole,
     ValidationIssue,
+    ValueIndexDecision,
+    ValueSensitivity,
 )
 from data_agent.settings import app_config
 
@@ -56,6 +58,85 @@ def _set_issues(
     return issues
 
 
+def _value_index_evidence_by_column(schema: PhysicalSchema) -> dict[str, set[str]]:
+    """建立每个字段可引用的值索引证据作用域。"""
+    # 步骤一：当前字段与所属表始终属于字段自身上下文，并建立关系目标查找表。
+    allowed = {
+        column.id: {table.id, column.id}
+        for table in schema.tables
+        for column in table.columns
+    }
+    tables_by_name = {table.qualified_name.casefold(): table for table in schema.tables}
+    source_tables = {table.id: table for table in schema.tables}
+    # 步骤二：仅把当前字段直接引用的目标表列加入作用域，拒绝同模式无关对象。
+    for relationship in schema.relationships:
+        source_table = source_tables.get(relationship.source_table_id)
+        target_name = relationship.target_table.casefold()
+        target_table = tables_by_name.get(target_name)
+        if target_table is None and source_table is not None and "." not in target_name:
+            qualified_target = (
+                f"{source_table.schema_name}.{target_name}"
+                if source_table.schema_name
+                else target_name
+            )
+            target_table = tables_by_name.get(qualified_target.casefold())
+        if target_table is None:
+            continue
+        target_column = next(
+            (
+                column
+                for column in target_table.columns
+                if column.name.casefold() == relationship.target_column.casefold()
+            ),
+            None,
+        )
+        evidence = allowed.get(relationship.source_column_id)
+        if evidence is not None:
+            evidence.add(target_table.id)
+            if target_column is not None:
+                evidence.add(target_column.id)
+    return allowed
+
+
+def _foreign_key_neighbors_by_column(
+    schema: PhysicalSchema,
+) -> tuple[dict[str, set[str]], set[str]]:
+    """按 MySQL 名称解析规则返回外键两端的直接相邻字段。"""
+    neighbors: dict[str, set[str]] = {}
+    unresolved_sources: set[str] = set()
+    tables_by_name = {table.qualified_name.casefold(): table for table in schema.tables}
+    source_tables = {table.id: table for table in schema.tables}
+    for relationship in schema.relationships:
+        source_table = source_tables.get(relationship.source_table_id)
+        target_name = relationship.target_table.casefold()
+        target_table = tables_by_name.get(target_name)
+        if target_table is None and source_table is not None and "." not in target_name:
+            schema_name = source_table.schema_name
+            qualified = f"{schema_name}.{target_name}" if schema_name else target_name
+            target_table = tables_by_name.get(qualified.casefold())
+        if target_table is None:
+            unresolved_sources.add(relationship.source_column_id)
+            continue
+        target_column = next(
+            (
+                column
+                for column in target_table.columns
+                if column.name.casefold() == relationship.target_column.casefold()
+            ),
+            None,
+        )
+        if target_column is not None:
+            neighbors.setdefault(relationship.source_column_id, set()).add(
+                target_column.id
+            )
+            neighbors.setdefault(target_column.id, set()).add(
+                relationship.source_column_id
+            )
+        else:
+            unresolved_sources.add(relationship.source_column_id)
+    return neighbors, unresolved_sources
+
+
 def validate_metadata(
     schema: PhysicalSchema,
     metadata: SemanticMetadata,
@@ -80,6 +161,11 @@ def validate_metadata(
     )
     # 步骤二：逐表校验置信度与证据引用，低置信度属于不可自动修复问题。
     known_evidence = expected_tables | expected_columns
+    value_index_evidence = _value_index_evidence_by_column(schema)
+    foreign_key_neighbors, unresolved_foreign_keys = _foreign_key_neighbors_by_column(
+        schema
+    )
+    semantic_columns = {column.column_id: column for column in metadata.columns}
     for table in metadata.tables:
         if table.confidence < confidence_threshold:
             issues.append(
@@ -137,6 +223,49 @@ def validate_metadata(
                     code="invalid_evidence",
                     path=f"columns.{column.column_id}.evidence",
                     message="列语义证据必须引用当前物理对象 ID",
+                )
+            )
+        profile = column.value_index
+        if not set(profile.evidence) <= value_index_evidence.get(
+            column.column_id, set()
+        ):
+            issues.append(
+                ValidationIssue(
+                    code="invalid_value_index_evidence",
+                    path=f"columns.{column.column_id}.value_index.evidence",
+                    message="字段值索引证据必须引用当前字段、所属表或直接外键目标",
+                )
+            )
+        if (
+            profile.decision == ValueIndexDecision.INDEX
+            and profile.sensitivity != ValueSensitivity.NON_SENSITIVE
+        ):
+            issues.append(
+                ValidationIssue(
+                    code="conflicting_value_index_profile",
+                    path=f"columns.{column.column_id}.value_index",
+                    message="只有明确非敏感字段可以获得值索引资格",
+                )
+            )
+        if profile.eligible and any(
+            semantic_columns[neighbor_id].value_index.sensitivity
+            != ValueSensitivity.NON_SENSITIVE
+            for neighbor_id in foreign_key_neighbors.get(column.column_id, set())
+            if neighbor_id in semantic_columns
+        ):
+            issues.append(
+                ValidationIssue(
+                    code="conflicting_related_value_sensitivity",
+                    path=f"columns.{column.column_id}.value_index.sensitivity",
+                    message="直接外键任一端非明确非敏感时，另一端不能获得值索引资格",
+                )
+            )
+        if profile.eligible and column.column_id in unresolved_foreign_keys:
+            issues.append(
+                ValidationIssue(
+                    code="unverified_related_value_sensitivity",
+                    path=f"columns.{column.column_id}.value_index.sensitivity",
+                    message="无法核验外键目标敏感度时，引用字段不能获得值索引资格",
                 )
             )
     return issues

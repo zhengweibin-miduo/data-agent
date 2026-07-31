@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 49
-- **Last Active**: 2026-07-31
+- **Total Sessions**: 55
+- **Last Active**: 2026-08-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1625 | Active |
+| `journal-1.md` | ~1823 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,9 +29,15 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 50 | 2026-07-31 | 实现 Data Agent 语义数据画布与 AI 协作 | `2a849f8`, `82bd96b` | `feature/frontend-experience-20260731` |
-| 49 | 2026-07-31 | 安装规划与图表组合技能 | `f868fff` | `chore/install-diagram-plan-skills-20260731` |
-| 48 | 2026-07-31 | 添加前端组合技能路由 | `202ce34` | `chore/frontend-skill-composition-20260731` |
+| 56 | 2026-07-31 | 实现 Data Agent 语义数据画布与 AI 协作 | `2a849f8`, `82bd96b` | `feature/frontend-experience-20260731` |
+| 55 | 2026-08-01 | 完成值索引 V1 投影与有界读取 | `8dcbf69` | `feature/metadata-semantic-value-index-20260730` |
+| 54 | 2026-07-31 | 安装规划与图表组合技能 | `f868fff` | `chore/install-diagram-plan-skills-20260731` |
+| 53 | 2026-07-31 | 添加前端组合技能路由 | `202ce34` | `chore/frontend-skill-composition-20260731` |
+| 52 | 2026-07-31 | 让 Codex 安全处理远端分支干预 | `08f4d7b` | `fix/codex-safe-push-workflow-20260731` |
+| 51 | 2026-07-30 | 完成元数据值索引有界可恢复刷新 | `02a6c0d` | `feature/metadata-semantic-value-index-20260730` |
+| 50 | 2026-07-30 | 修复元数据索引长刷新无法收敛 | `38a9b22` | `fix/metadata-index-resumable-refresh-20260730` |
+| 49 | 2026-07-30 | 修复 PR #71 CDC 集成测试 CI | `e7975f0` | `fix/stabilize-ci-20260730` |
+| 48 | 2026-07-30 | 建立 Meta 语义与字段值索引 | `c247d61` | `feature/metadata-semantic-value-index-20260730` |
 | 47 | 2026-07-30 | 修复 PR 66 的 JSON 空值与 DDL 串行化 | `74e466c`, `c3c80f5`, `bbe6118` | `fix/json-null-ddl-serialization-20260729` |
 | 46 | 2026-07-29 | 修复 Codex 未完成审查线程重新委派 | `52775c6` | `fix/codex-review-redelegation-20260729` |
 | 45 | 2026-07-29 | 修复 Codex thread 解析令牌 | `aaeb0a3` | `fix/codex-review-resolver-token-20260729` |

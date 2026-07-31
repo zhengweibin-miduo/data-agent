@@ -21,6 +21,7 @@ from data_agent.memory.mysql.repository import (
     MemoryRepository,
     StoredMemory,
 )
+from data_agent.memory.versions import category_content_version
 from data_agent.models.memory import (
     BuiltinMemoryCategory,
     MemoryActorType,
@@ -414,7 +415,7 @@ class MemoryService:
             content=content,
             content_hash=memory_content_hash(content),
             trust=MemoryTrust(content.trust),
-            content_version=app_config.memory.content_version,
+            content_version=category_content_version(target.detail.category),
             projection_version=app_config.memory.projection_version,
             importance_score=policy.importance_score,
             lifecycle_policy=policy.lifecycle_policy,

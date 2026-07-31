@@ -16,7 +16,7 @@
 
 以下事实由本仓库架构保证，是历史误报的主要来源。发布问题前必须先排除这些情形；确有反例时，必须在证据中给出违反该事实的具体 `文件路径:行号`。
 
-- **SQL 注入**：静态数据库访问经由 SQLAlchemy Core 表达式或绑定参数构造。DW DDL 和源表主键回填需要动态标识符时，只能使用 MySQL dialect `identifier_preparer.quote()` 引用数据库、表、列名；字段类型必须由 SQLGlot 重新解析并输出有限规范文本。报告 SQL 注入前必须指出绕过绑定参数、标识符引用或类型规范化的实际拼接行。
+- **SQL 注入**：项目拥有的控制表使用静态 SQLAlchemy Core `Table`。已通过 `DesiredSyncTable` 校验的动态 source/DW 表，其 DML 与查询使用 Core `table()` / `column()` 和绑定值；DDL 或 Core 无法表达的窄范围控制 SQL 才允许通过 MySQL dialect `identifier_preparer.quote()` 引用数据库、表、列名。字段类型必须由 SQLGlot 重新解析并输出有限规范文本。报告 SQL 注入前必须指出绕过这些身份校验、绑定参数、标识符引用或类型规范化的实际拼接行。
 - **入参校验**：对外接口的请求体与领域模型均为 Pydantic `ContractModel` 子类，类型、必填与约束在模型层完成校验。不要把“缺少手工 if 校验”当作缺陷，除非该字段确实不在模型约束覆盖范围内。
 - **性能类建议**：除非能给出实测数据或明确的复杂度退化路径（如循环内 I/O、N+1 查询并指出具体调用点），性能优化建议一律按非阻塞处理，不得提升为 `P0` / `P1`。
 
@@ -56,6 +56,9 @@ Codex 必须读取对应代码、PR diff 和 thread 上下文，自行判断是�
 - 不需要修复时，在原 thread 说明依据后 resolve。
 - 无法安全完成修复或验证时，说明阻塞原因并保持 unresolved。
 - 回复正文禁止出现 `@codex` 字样，避免触发重新评审造成循环。
-- 内部判断过程可以保留在执行上下文中，但 GitHub thread 回复和最终任务总结禁止出现 `[裁决]`、`SHOULD_FIX` 或同类内部分类标签。
+- 自动委派任务必须通过
+  `.github/scripts/codex-review-thread-reply.js` 发布原 thread 回复并变更
+  resolve 状态；不得直接拼接回复正文或直接调用 GitHub reply/resolve
+  mutation。发布器校验失败时保持原 thread 状态，并在任务总结中报告。
 - 自动委派不设轮数上限；同一 review 与 head 只委派一次，新的 review 或 head 必须继续委派。
 - 修复推送后依赖仓库的自动 Codex Review 发起下一轮审查；仅当自动审查未触发时，才由人工评论 `@codex review`。

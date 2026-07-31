@@ -17,6 +17,7 @@ from data_agent.models.physical import (
     DDLPreview,
     DDLPreviewRelationship,
     PhysicalColumn,
+    PhysicalRelationship,
     PhysicalSchema,
     PhysicalTable,
 )
@@ -127,6 +128,29 @@ def _foreign_key_pairs(create: exp.Create) -> list[tuple[str, str, str]]:
                     )
                 )
     return pairs
+
+
+def _physical_relationships(
+    creates: list[exp.Create],
+    tables: list[PhysicalTable],
+) -> list[PhysicalRelationship]:
+    """把表级与列级外键约束规范化为字段引用边。"""
+    relationships: list[PhysicalRelationship] = []
+    for create, table in zip(creates, tables, strict=True):
+        columns = {column.name.casefold(): column for column in table.columns}
+        for source_name, target_table, target_column in _foreign_key_pairs(create):
+            source_column = columns.get(source_name.casefold())
+            if source_column is None:
+                continue
+            relationships.append(
+                PhysicalRelationship(
+                    source_table_id=table.id,
+                    source_column_id=source_column.id,
+                    target_table=target_table,
+                    target_column=target_column,
+                )
+            )
+    return relationships
 
 
 def _inline_role(
@@ -346,9 +370,11 @@ def _parse_ddl_document_sync(
         create.sql(dialect="mysql", pretty=True) for create in creates
     )
     ddl_hash = hashlib.sha256(canonical_ddl.encode()).hexdigest()
+    relationships = _physical_relationships(creates, tables)
     physical_json = json.dumps(
-        [
-            {
+        {
+            "tables": [
+                {
                 "qualified_name": table.qualified_name,
                 "comment": table.comment,
                 "columns": [
@@ -361,9 +387,14 @@ def _parse_ddl_document_sync(
                     }
                     for column in table.columns
                 ],
-            }
-            for table in tables
-        ],
+                }
+                for table in tables
+            ],
+            "relationships": [
+                relationship.model_dump(mode="json")
+                for relationship in relationships
+            ],
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -376,6 +407,7 @@ def _parse_ddl_document_sync(
             ddl_hash=ddl_hash,
             schema_fingerprint=schema_fingerprint,
             tables=tables,
+            relationships=relationships,
         ),
         creates,
     )

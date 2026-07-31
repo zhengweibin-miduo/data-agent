@@ -16,9 +16,15 @@ from data_agent.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
+from data_agent.metadata_indexing.tables import (
+    metadata_index_outbox,
+    metadata_value_frequency,
+    metadata_value_publication,
+)
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (
     ColumnRole,
+    ColumnValueIndexProfile,
     MetricAnswer,
     MetricMetadata,
     MetricQuestion,
@@ -26,6 +32,8 @@ from data_agent.models.semantic import (
     SemanticMetadata,
     SemanticTable,
     TableRole,
+    ValueIndexDecision,
+    ValueSensitivity,
 )
 from data_agent.persistence.schema import metadata
 
@@ -68,6 +76,12 @@ def semantic_for(
             description=f"{column.name} accepted description",
             confidence=0.99,
             evidence=[column.id],
+            value_index=ColumnValueIndexProfile(
+                decision=ValueIndexDecision.INDEX,
+                sensitivity=ValueSensitivity.NON_SENSITIVE,
+                reason="测试字段可用于检索",
+                evidence=[table.id, column.id],
+            ),
         )
         for table in schema.tables
         for column in table.columns
@@ -165,7 +179,24 @@ async def cleanup_schema(schema: PhysicalSchema) -> None:
             await session.execute(
                 delete(metric_info).where(metric_info.c.id.in_(metric_ids))
             )
+        object_ids = table_ids | column_ids | metric_ids
+        if object_ids:
+            await session.execute(
+                delete(metadata_index_outbox).where(
+                    metadata_index_outbox.c.object_id.in_(object_ids)
+                )
+            )
         if table_ids:
+            await session.execute(
+                delete(metadata_value_publication).where(
+                    metadata_value_publication.c.table_id.in_(table_ids)
+                )
+            )
+            await session.execute(
+                delete(metadata_value_frequency).where(
+                    metadata_value_frequency.c.table_id.in_(table_ids)
+                )
+            )
             await session.execute(
                 delete(table_info).where(table_info.c.id.in_(table_ids))
             )

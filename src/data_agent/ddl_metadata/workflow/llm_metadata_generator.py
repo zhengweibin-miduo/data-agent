@@ -78,6 +78,10 @@ class LLMMetadataGenerator:
                 "foreign_key structural roles. Other columns are measure or "
                 "dimension. Return every object exactly once. Evidence entries "
                 "must be supplied table/column IDs. Never invent objects. "
+                "For every column also decide value_index using index/skip/unknown "
+                "and non_sensitive/sensitive/unknown from the whole table context, "
+                "comments, types and relationships. Names are evidence, never a "
+                "standalone sensitivity rule. Never use real row values. "
                 "Descriptions are concise accepted facts, not hidden reasoning."
             ),
             {

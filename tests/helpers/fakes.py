@@ -10,6 +10,7 @@ from data_agent.models.memory import (
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (
     ColumnRole,
+    ColumnValueIndexProfile,
     MetricAnswer,
     MetricMetadata,
     MetricOutput,
@@ -20,6 +21,8 @@ from data_agent.models.semantic import (
     SemanticTable,
     TableRole,
     ValidationIssue,
+    ValueIndexDecision,
+    ValueSensitivity,
 )
 
 FACT_DDL = """
@@ -155,6 +158,12 @@ class FakeMetadataGenerator:
                 description=column.name,
                 confidence=0.99,
                 evidence=[column.id],
+                value_index=ColumnValueIndexProfile(
+                    decision=ValueIndexDecision.INDEX,
+                    sensitivity=ValueSensitivity.NON_SENSITIVE,
+                    reason="测试字段可用于检索",
+                    evidence=[table.id, column.id],
+                ),
             )
             for table in schema.tables
             for column in table.columns

@@ -11,6 +11,7 @@ import pytest
 from data_agent.memory.application import search as search_module
 from data_agent.memory.application.search import MemorySearchService
 from data_agent.memory.domain.payloads import memory_content_hash
+from data_agent.memory.versions import search_category_versions
 from data_agent.models.memory import (
     BuiltinMemoryCategory,
     MemoryDetail,
@@ -122,6 +123,27 @@ class _FakeMemoryIndexOutboxRepository:
         return {}
 
 
+def test_search_versions_preserve_category_version_pairs() -> None:
+    """混合类别检索不得把旧 DDL 版本与 DDL 类别错误组合。"""
+    versions = search_category_versions(
+        {
+            BuiltinMemoryCategory.DDL_SEMANTIC.value,
+            BuiltinMemoryCategory.USER_PREFERENCE.value,
+        }
+    )
+
+    check_equal(
+        "DDL 语义使用独立契约版本",
+        versions[BuiltinMemoryCategory.DDL_SEMANTIC.value],
+        app_config.memory.ddl_semantic_content_version,
+    )
+    check_equal(
+        "用户偏好保持全局契约版本",
+        versions[BuiltinMemoryCategory.USER_PREFERENCE.value],
+        app_config.memory.content_version,
+    )
+
+
 @pytest.mark.asyncio
 async def test_search_returns_items_when_record_access_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -150,7 +172,7 @@ async def test_search_returns_items_when_record_access_fails(
         lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
         record_version=1,
         access_count=0,
-        content_version=app_config.memory.content_version,
+        content_version=app_config.memory.ddl_semantic_content_version,
         projection_version=app_config.memory.projection_version,
         created_at=datetime.now(UTC).replace(tzinfo=None),
         updated_at=datetime.now(UTC).replace(tzinfo=None),
@@ -254,7 +276,7 @@ async def test_search_returns_baseline_hit_with_stale_projection_version(
         lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
         record_version=1,
         access_count=0,
-        content_version=app_config.memory.content_version,
+        content_version=app_config.memory.ddl_semantic_content_version,
         projection_version="stale-projection-version",
         created_at=datetime.now(UTC).replace(tzinfo=None),
         updated_at=datetime.now(UTC).replace(tzinfo=None),

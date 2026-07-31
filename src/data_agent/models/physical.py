@@ -35,6 +35,15 @@ class PhysicalTable(ContractModel):
     )
 
 
+class PhysicalRelationship(ContractModel):
+    """由 DDL AST 唯一确定的外键引用边。"""
+
+    source_table_id: str = Field(description="引用方表的唯一标识。")
+    source_column_id: str = Field(description="引用方字段的唯一标识。")
+    target_table: str = Field(description="被引用表的限定名称。")
+    target_column: str = Field(description="被引用字段名称。")
+
+
 class PhysicalSchema(ContractModel):
     """规范化后的完整物理模式。"""
 
@@ -43,6 +52,10 @@ class PhysicalSchema(ContractModel):
     ddl_hash: str = Field(description="DDL 内容哈希。")
     schema_fingerprint: str = Field(description="结构指纹。")
     tables: list[PhysicalTable] = Field(description="表列表。")
+    relationships: list[PhysicalRelationship] = Field(
+        default_factory=list,
+        description="由外键约束规范化得到的字段引用边。",
+    )
 
 
 class DDLPreviewRelationship(ContractModel):

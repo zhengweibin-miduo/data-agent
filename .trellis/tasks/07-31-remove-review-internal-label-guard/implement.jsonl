@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现结构化审查回复发布器时遵守现有 Codex 委派、thread 状态和 Node 自测合同。"}
+{"file": ".trellis/tasks/07-31-remove-review-internal-label-guard/design.md", "reason": "实现必须遵守结构化接口、校验矩阵、幂等和 reply 后 resolve 顺序。"}

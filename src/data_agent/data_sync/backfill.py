@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import and_, column, delete, or_, table, text
+from sqlalchemy import and_, column, delete, or_, select, table, text
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -25,6 +25,11 @@ from data_agent.data_sync.repository import (
     DataSyncRepository,
 )
 from data_agent.errors import DataAgentError
+from data_agent.metadata_indexing.desired import enqueue_value_refresh
+from data_agent.metadata_indexing.value_refresh import (
+    apply_frequency_row_changes,
+    prepare_frequency_mutation,
+)
 
 
 async def read_backfill_batch(
@@ -75,6 +80,7 @@ async def apply_backfill_batch(
         return None
     repository = DataSyncRepository(session)
     values = [_desired_values(task.desired, row) for row in rows]
+    frequency_states = await prepare_frequency_mutation(session, task.desired)
     identities = [primary_key_identity(task.desired, row) for row in values]
     conflict = await repository.claim_key_owners(
         target_table=task.desired.target_table,
@@ -83,11 +89,32 @@ async def apply_backfill_batch(
     )
     if conflict is not None:
         raise _key_conflict_error(conflict)
+    before_rows = (
+        await _read_target_rows(
+            session,
+            task.desired,
+            values,
+            dw_database=dw_database,
+        )
+        if frequency_states
+        else []
+    )
     for chunk in _chunk_rows_by_payload(values):
         await session.execute(_upsert_statement(task.desired, chunk, dw_database))
+    await apply_frequency_row_changes(
+        session,
+        frequency_states,
+        before_rows,
+        values,
+    )
     last_key = tuple(values[-1][name] for name in task.desired.primary_key)
     if not await repository.record_backfill_cursor(task, last_key):
         raise RuntimeError("回填批次完成后同步任务租约已失效")
+    await enqueue_value_refresh(
+        session,
+        task.desired,
+        {"backfill_key": [encode_row_value(value) for value in last_key]},
+    )
     return last_key
 
 
@@ -130,6 +157,7 @@ async def reset_source_rows(
 ) -> bool:
     """有界清理一批旧行，返回是否已完成。"""
     repository = DataSyncRepository(session)
+    frequency_states = await prepare_frequency_mutation(session, task.desired)
     documents = await repository.source_key_documents(
         target_table=task.desired.target_table,
         source=task.desired.source,
@@ -145,17 +173,45 @@ async def reset_source_rows(
             and_(*(column(name) == row[name] for name in task.desired.primary_key))
         )
     if predicates:
+        before_rows = (
+            await _read_target_rows(
+                session,
+                task.desired,
+                [
+                    {
+                        name: decode_row_value(json.loads(document)[name])
+                        for name in task.desired.primary_key
+                    }
+                    for document in documents
+                ],
+                dw_database=dw_database,
+            )
+            if frequency_states
+            else []
+        )
         target = table(
             task.desired.target_table,
             *map(column, task.desired.primary_key),
         )
         target.schema = dw_database
         await session.execute(delete(target).where(or_(*predicates)))
+        await apply_frequency_row_changes(
+            session,
+            frequency_states,
+            before_rows,
+            [],
+        )
     await repository.tombstone_source_key_owners(
         target_table=task.desired.target_table,
         source=task.desired.source,
         primary_key_documents=documents,
     )
+    if documents:
+        await enqueue_value_refresh(
+            session,
+            task.desired,
+            {"reset_documents": documents},
+        )
     return len(documents) < limit
 
 
@@ -181,6 +237,25 @@ async def apply_buffered_event(
             details={"task_id": str(task.id)},
         )
     repository = DataSyncRepository(session)
+    frequency_states = await prepare_frequency_mutation(session, desired)
+    event_rows = [
+        _decoded_event_row(desired, row)
+        for row in (event.before, event.after)
+        if row is not None
+    ]
+    current_rows = (
+        await _read_target_rows(
+            session,
+            desired,
+            event_rows,
+            dw_database=dw_database,
+        )
+        if frequency_states
+        else []
+    )
+    current_by_key = {_primary_key_values(desired, row): row for row in current_rows}
+    before_changes: list[Mapping[str, object]] = []
+    after_changes: list[Mapping[str, object]] = []
     if event.operation == RowOperation.DELETE:
         before = _decoded_event_row(desired, event.before)
         _, key_hash = primary_key_identity(desired, before)
@@ -190,6 +265,9 @@ async def apply_buffered_event(
             source=desired.source,
         ):
             await session.execute(_delete_statement(desired, before, dw_database))
+            current = current_by_key.get(_primary_key_values(desired, before))
+            if current is not None:
+                before_changes.append(current)
     else:
         after = _decoded_event_row(desired, event.after)
         if event.operation == RowOperation.UPDATE and event.before is not None:
@@ -206,12 +284,57 @@ async def apply_buffered_event(
                     await session.execute(
                         _delete_statement(desired, before, dw_database)
                     )
+                    current = current_by_key.get(_primary_key_values(desired, before))
+                    if current is not None:
+                        before_changes.append(current)
+        current = current_by_key.get(_primary_key_values(desired, after))
+        if current is not None:
+            before_changes.append(current)
         await _claim_owner(repository, desired, after)
         await session.execute(_upsert_statement(desired, [after], dw_database))
+        after_changes.append(after)
+    await apply_frequency_row_changes(
+        session,
+        frequency_states,
+        before_changes,
+        after_changes,
+    )
     if not await repository.acknowledge_event(task.id, buffered.id):
         raise RuntimeError("Binlog 事件确认失败")
     if not await repository.advance_applied_coordinate(task, event.coordinate):
         raise RuntimeError("Binlog 事件应用后同步位点未推进")
+    await enqueue_value_refresh(
+        session,
+        desired,
+        {"coordinate": event.coordinate.model_dump(mode="json")},
+    )
+
+
+async def _read_target_rows(
+    session: AsyncSession,
+    desired: DesiredSyncTable,
+    keys: Sequence[Mapping[str, object]],
+    *,
+    dw_database: str,
+) -> list[dict[str, object]]:
+    """按有限主键集合锁定并读取 upsert/delete 前的 DW 行镜像。"""
+    if not keys:
+        return []
+    target = table(
+        desired.target_table,
+        *(column(item.name) for item in desired.columns),
+        schema=dw_database,
+    )
+    predicates = [
+        and_(*(target.c[name] == row[name] for name in desired.primary_key))
+        for row in keys
+    ]
+    rows = await session.execute(
+        select(*(target.c[item.name] for item in desired.columns))
+        .where(or_(*predicates))
+        .with_for_update()
+    )
+    return [dict(row) for row in rows.mappings()]
 
 
 def _desired_values(

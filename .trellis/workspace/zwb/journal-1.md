@@ -1525,7 +1525,172 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 48: 添加前端组合技能路由
+## Session 48: 建立 Meta 语义与字段值索引
+
+**Date**: 2026-07-30
+**Task**: 建立 Meta 语义与字段值索引
+**Branch**: `feature/metadata-semantic-value-index-20260730`
+
+### Summary
+
+实现 LLM 字段索引三态决策、Meta/Qdrant/Elasticsearch 投影、持久化 outbox、DW 增量刷新、内部检索和安全重建；Ruff、Pyright、compileall 与 290 个非集成测试通过，真实服务集成因 Docker 未运行未执行。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c247d61` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 49: 修复 PR #71 CDC 集成测试 CI
+
+**Date**: 2026-07-30
+**Task**: 修复 PR #71 CDC 集成测试 CI
+**Branch**: `fix/stabilize-ci-20260730`
+
+### Summary
+
+基于最新 master 与 PR #71 head 定位重复 CI 失败，补齐两条 CDC 集成测试的 Meta/desired 同事务前置和 scoped cleanup；真实 MySQL 定向测试 2 passed，完整 CI 等价测试 331 passed、1 deselected。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e7975f0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 50: 修复元数据索引长刷新无法收敛
+
+**Date**: 2026-07-30
+**Task**: 修复元数据索引长刷新无法收敛
+**Branch**: `fix/metadata-index-resumable-refresh-20260730`
+
+### Summary
+
+为 metadata_index_outbox 增加持久化字段游标，字段值索引按字段跨领取推进，最后独立清理旧版本；补齐租约竞态、取消恢复及真实 MySQL+Elasticsearch 集成验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `38a9b22` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 51: 完成元数据值索引有界可恢复刷新
+
+**Date**: 2026-07-30
+**Task**: 完成元数据值索引有界可恢复刷新
+**Branch**: `feature/metadata-semantic-value-index-20260730`
+
+### Summary
+
+实现精确频次、主键 keyset 扫描、CDC 同事务增量、有界 Elasticsearch 差量发布和可恢复状态机；补齐单元及真实服务集成故障测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `02a6c0d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 52: 让 Codex 安全处理远端分支干预
+
+**Date**: 2026-07-31
+**Task**: 让 Codex 安全处理远端分支干预
+**Branch**: `fix/codex-safe-push-workflow-20260731`
+
+### Summary
+
+统一 Git/PR 规则、Trellis Phase 3.4 与三类 GitHub 委派提示词：远端线性前进可安全同步并继续普通推送，分叉、冲突、未知范围或需要强推时停止；内置脚本测试通过并已更新 PR #71 原分支。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `08f4d7b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 53: 添加前端组合技能路由
 
 **Date**: 2026-07-31
 **Task**: 添加前端组合技能路由
@@ -1558,7 +1723,7 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 49: 安装规划与图表组合技能
+## Session 54: 安装规划与图表组合技能
 
 **Date**: 2026-07-31
 **Task**: 安装规划与图表组合技能
@@ -1591,7 +1756,38 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 - None - task complete
 
 
-## Session 50: 实现 Data Agent 语义数据画布与 AI 协作
+## Session 55: 完成值索引 V1 投影与有界读取
+
+**Date**: 2026-08-01
+**Task**: 完成值索引 V1 投影与有界读取
+**Branch**: `feature/metadata-semantic-value-index-20260730`
+
+### Summary
+
+修复共享目标同名字段的逐来源投影归属，给 SCAN 与 Top-N 增加 4 MiB 有界读取和 V1 断点游标；统一首版配置、移除旧升级 SQL，并补齐单元与集成验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8dcbf69` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+## Session 56: 实现 Data Agent 语义数据画布与 AI 协作
 
 **Date**: 2026-07-31
 **Task**: 实现 Data Agent 语义数据画布与 AI 协作

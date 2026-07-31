@@ -17,6 +17,7 @@ table_info = Table(
     Column("name", String(128)),
     Column("role", String(32)),
     Column("description", Text),
+    Column("alias", JSON),
 )
 column_info = Table(
     "column_info",
@@ -28,6 +29,7 @@ column_info = Table(
     Column("examples", JSON),
     Column("description", Text),
     Column("alias", JSON),
+    Column("index_profile", JSON, nullable=False),
     Column("table_id", String(64)),
 )
 metric_info = Table(
@@ -36,6 +38,7 @@ metric_info = Table(
     Column("id", String(64), primary_key=True),
     Column("name", String(128)),
     Column("description", Text),
+    Column("fact_table_id", String(64), nullable=False),
     Column("relevant_columns", JSON),
     Column("alias", JSON),
 )

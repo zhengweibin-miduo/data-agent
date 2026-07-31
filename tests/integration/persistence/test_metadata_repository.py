@@ -22,6 +22,7 @@ from data_agent.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
+from data_agent.metadata_indexing.tables import metadata_index_outbox
 from data_agent.models.memory import MemoryCandidate, MemoryStatus
 from data_agent.settings import app_config
 from tests.helpers.checks import check_equal, check_exception, fail_check
@@ -135,10 +136,24 @@ async def test_meta_memory_outbox_atomicity() -> None:
                 )
                 .where(agent_memory.c.source == source)
             )
+            object_ids = {
+                schema.tables[0].id,
+                *(column.id for column in schema.tables[0].columns),
+            }
+            metadata_outbox_count = await session.scalar(
+                select(func.count())
+                .select_from(metadata_index_outbox)
+                .where(metadata_index_outbox.c.object_id.in_(object_ids))
+            )
         check_equal(
             "test_meta_memory_outbox_atomicity 检查点 3",
             event_count,
             (memory_count or 0) * 2,
+        )
+        check_equal(
+            "Meta 语义与表值刷新 outbox 幂等",
+            metadata_outbox_count,
+            len(schema.tables[0].columns) + 2,
         )
 
         original = MemoryRepository.upsert_candidates
@@ -172,11 +187,27 @@ async def test_meta_memory_outbox_atomicity() -> None:
                 .select_from(table_info)
                 .where(table_info.c.id == rollback_schema.tables[0].id)
             )
+            rolled_back_outbox = await session.scalar(
+                select(func.count())
+                .select_from(metadata_index_outbox)
+                .where(
+                    metadata_index_outbox.c.object_id.in_(
+                        {
+                            rollback_schema.tables[0].id,
+                            *(
+                                column.id
+                                for column in rollback_schema.tables[0].columns
+                            ),
+                        }
+                    )
+                )
+            )
         check_equal(
             "test_meta_memory_outbox_atomicity 检查点 4",
             rolled_back,
             0,
         )
+        check_equal("Meta 失败同步回滚索引 outbox", rolled_back_outbox, 0)
     finally:
         await cleanup_schema(schema)
         await cleanup_schema(rollback_schema)

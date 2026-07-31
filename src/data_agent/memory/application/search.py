@@ -26,6 +26,7 @@ from data_agent.memory.mysql.index_outbox import (
     MemoryIndexOutboxRepository,
 )
 from data_agent.memory.mysql.repository import MemoryRepository
+from data_agent.memory.versions import category_content_version
 from data_agent.models.memory import (
     MemoryIndexTarget,
     MemorySearchHit,
@@ -185,7 +186,7 @@ class MemorySearchService:
                 detail.source != source
                 or detail.user_id != user_id
                 or detail.status != MemoryStatus.ACTIVE
-                or detail.content_version != app_config.memory.content_version
+                or detail.content_version != category_content_version(detail.category)
                 or memory_content_hash(detail.content) != detail.content_hash
             ):
                 continue

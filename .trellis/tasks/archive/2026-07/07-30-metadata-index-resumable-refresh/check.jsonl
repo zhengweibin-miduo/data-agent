@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "code_review.md", "reason": "按仓库唯一审查规范核验阻塞问题"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查 authority CAS、短事务、失败预算和 schema 契约"}
+{"file": ".trellis/tasks/07-30-metadata-index-resumable-refresh/prd.md", "reason": "逐项核对可恢复刷新验收条件"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/07-31-codex-safe-push-workflow/research/current-workflow-and-pr71-intervention.md", "reason": "实现前加载当前提交/推送停止点、GitHub 委派入口和 PR #71 线性干预证据。"}
+{"file": ".trellis/tasks/07-31-codex-safe-push-workflow/design.md", "reason": "实现必须遵守已评审的授权边界、判定矩阵、竞态处理和影响面。"}

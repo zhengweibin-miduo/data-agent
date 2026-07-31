@@ -23,6 +23,43 @@ class ColumnRole(StrEnum):
     DIMENSION = "dimension"
 
 
+class ValueIndexDecision(StrEnum):
+    """字段值是否值得进入问数检索索引。"""
+
+    INDEX = "index"
+    SKIP = "skip"
+    UNKNOWN = "unknown"
+
+
+class ValueSensitivity(StrEnum):
+    """字段值敏感度判断。"""
+
+    NON_SENSITIVE = "non_sensitive"
+    SENSITIVE = "sensitive"
+    UNKNOWN = "unknown"
+
+
+class ColumnValueIndexProfile(ContractModel):
+    """模型给出的字段值索引资格事实。"""
+
+    decision: ValueIndexDecision = Field(description="字段值索引三态决策。")
+    sensitivity: ValueSensitivity = Field(description="字段值敏感度三态判断。")
+    reason: str = Field(min_length=1, max_length=1000, description="决策原因。")
+    evidence: list[str] = Field(
+        min_length=1,
+        max_length=20,
+        description="支撑决策的当前表或字段标识。",
+    )
+
+    @property
+    def eligible(self) -> bool:
+        """返回字段是否满足值索引的严格资格门禁。"""
+        return (
+            self.decision == ValueIndexDecision.INDEX
+            and self.sensitivity == ValueSensitivity.NON_SENSITIVE
+        )
+
+
 class SemanticTable(ContractModel):
     """模型返回并待确定性校验的表语义。"""
 
@@ -55,6 +92,7 @@ class SemanticColumn(ContractModel):
     evidence: list[str] = Field(
         default_factory=list, max_length=20, description="判断依据列表。"
     )
+    value_index: ColumnValueIndexProfile = Field(description="字段值索引资格事实。")
 
 
 class SemanticMetadata(ContractModel):

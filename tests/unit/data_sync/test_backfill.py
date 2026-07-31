@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from tests.helpers.checks import check_equal
+from tests.helpers.checks import check_condition, check_equal
 
 from data_agent.data_sync import backfill
 from data_agent.data_sync.models import (
@@ -43,8 +43,21 @@ def _task() -> ClaimedSyncTask:
     )
 
 
+@pytest.fixture
+def value_refresh(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """隔离并记录与 DW 写入同事务触发的索引刷新。"""
+    refresh = AsyncMock()
+    mutation = AsyncMock(return_value=[])
+    apply_changes = AsyncMock()
+    monkeypatch.setattr(backfill, "enqueue_value_refresh", refresh)
+    monkeypatch.setattr(backfill, "prepare_frequency_mutation", mutation)
+    monkeypatch.setattr(backfill, "apply_frequency_row_changes", apply_changes)
+    return refresh
+
+
 async def test_reset_source_rows_is_bounded_and_resumable(
     monkeypatch: pytest.MonkeyPatch,
+    value_refresh: AsyncMock,
 ) -> None:
     """大 generation 清理每次只处理一批并通过墓碑续传。"""
     repository = AsyncMock()
@@ -69,6 +82,7 @@ async def test_reset_source_rows_is_bounded_and_resumable(
         "每批归属都持久化墓碑", repository.tombstone_source_key_owners.call_count, 2
     )
     check_equal("每批 DW 删除使用一条语句", session.execute.await_count, 2)
+    check_equal("每个非空清理批次触发值刷新", value_refresh.await_count, 2)
 
 
 def test_desired_values_normalizes_mysql_set_values() -> None:
@@ -119,6 +133,7 @@ def test_set_primary_key_has_one_identity_before_and_after_binding() -> None:
 
 async def test_apply_backfill_batch_claims_ownership_in_one_batch(
     monkeypatch: pytest.MonkeyPatch,
+    value_refresh: AsyncMock,
 ) -> None:
     """历史回填按块领取 ownership，而不是逐行执行数据库往返。"""
     repository = AsyncMock()
@@ -142,6 +157,11 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
         3,
     )
     repository.claim_key_owner.assert_not_awaited()
+    value_refresh.assert_awaited_once_with(
+        session,
+        task.desired,
+        {"backfill_key": [3]},
+    )
 
 
 def test_backfill_rows_are_chunked_by_encoded_payload_bytes() -> None:
@@ -170,6 +190,7 @@ def test_backfill_rejects_one_row_over_payload_budget() -> None:
 async def test_missing_old_key_does_not_claim_ownership(
     monkeypatch: pytest.MonkeyPatch,
     operation: RowOperation,
+    value_refresh: AsyncMock,
 ) -> None:
     """扫描前已删除或迁移的旧键不得被删除事件抢占归属。"""
     repository = AsyncMock()
@@ -203,3 +224,53 @@ async def test_missing_old_key_does_not_claim_ownership(
     else:
         repository.claim_key_owner.assert_awaited_once()
         check_equal("主键迁移只写入新键", session.execute.await_count, 1)
+    value_refresh.assert_awaited_once_with(
+        session,
+        _task().desired,
+        {"coordinate": coordinate.model_dump(mode="json")},
+    )
+
+
+async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回填已写入事件后镜像时，缓冲 INSERT 不得重复累计频次。"""
+    repository = AsyncMock()
+    repository.claim_key_owner.return_value = None
+    repository.acknowledge_event.return_value = True
+    repository.advance_applied_coordinate.return_value = True
+    monkeypatch.setattr(backfill, "DataSyncRepository", lambda session: repository)
+    monkeypatch.setattr(
+        backfill, "prepare_frequency_mutation", AsyncMock(return_value=[object()])
+    )
+    monkeypatch.setattr(
+        backfill, "_read_target_rows", AsyncMock(return_value=[{"id": 1}])
+    )
+    apply_changes = AsyncMock()
+    monkeypatch.setattr(backfill, "apply_frequency_row_changes", apply_changes)
+    monkeypatch.setattr(backfill, "enqueue_value_refresh", AsyncMock())
+    coordinate = BinlogCoordinate(file="mysql-bin.000001", position=121, row_index=0)
+    event = SyncRowEvent(
+        source="local",
+        source_schema="business",
+        source_table="fact_order",
+        coordinate=coordinate,
+        operation=RowOperation.INSERT,
+        before=None,
+        after={"id": 1},
+    )
+
+    await backfill.apply_buffered_event(
+        AsyncMock(),
+        _task(),
+        BufferedSyncEvent(id=2, event=event),
+        dw_database="dw",
+    )
+
+    apply_changes.assert_awaited_once()
+    call = apply_changes.await_args
+    check_condition("频次变化调用参数存在", call is not None)
+    if call is None:
+        return
+    check_equal("当前 DW 镜像作为扣减端", call.args[2], [{"id": 1}])
+    check_equal("事件后镜像作为增加端", call.args[3], [{"id": 1}])

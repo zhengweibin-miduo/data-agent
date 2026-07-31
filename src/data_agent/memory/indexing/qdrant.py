@@ -20,6 +20,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from data_agent.memory.versions import ddl_memory_categories, search_category_versions
 from data_agent.models.memory import MemoryProjection
 from data_agent.settings import app_config
 
@@ -38,9 +39,59 @@ def _filter_conditions(
     conditions: list[Condition] = [
         FieldCondition(key="source", match=MatchValue(value=source)),
         FieldCondition(key="status", match=MatchValue(value="ACTIVE")),
-        FieldCondition(
-            key="content_version",
-            match=MatchValue(value=app_config.memory.content_version),
+        Filter(
+            should=(
+                [
+                    Filter(
+                        must=[
+                            FieldCondition(
+                                key="category", match=MatchValue(value=category)
+                            ),
+                            FieldCondition(
+                                key="content_version", match=MatchValue(value=version)
+                            ),
+                        ]
+                    )
+                    for category, version in search_category_versions(
+                        categories
+                    ).items()
+                ]
+                if categories
+                else [
+                    *[
+                        Filter(
+                            must=[
+                                FieldCondition(
+                                    key="category", match=MatchValue(value=category)
+                                ),
+                                FieldCondition(
+                                    key="content_version",
+                                    match=MatchValue(value=version),
+                                ),
+                            ]
+                        )
+                        for category, version in search_category_versions(
+                            ddl_memory_categories()
+                        ).items()
+                    ],
+                    Filter(
+                        must=[
+                            FieldCondition(
+                                key="content_version",
+                                match=MatchValue(
+                                    value=app_config.memory.content_version
+                                ),
+                            )
+                        ],
+                        must_not=[
+                            FieldCondition(
+                                key="category",
+                                match=MatchAny(any=sorted(ddl_memory_categories())),
+                            )
+                        ],
+                    ),
+                ]
+            )
         ),
         FieldCondition(
             key="projection_version",

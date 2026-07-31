@@ -1,0 +1,29 @@
+{
+  "id": "value-index-v1-projection-chunking",
+  "name": "value-index-v1-projection-chunking",
+  "title": "将值索引简化为 V1 并修复投影与长文本读取",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-07-31",
+  "completedAt": "2026-08-01",
+  "branch": "feature/metadata-semantic-value-index-20260730",
+  "base_branch": "feature/metadata-semantic-value-index-20260730",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\07-30-metadata-index-bounded-refresh",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

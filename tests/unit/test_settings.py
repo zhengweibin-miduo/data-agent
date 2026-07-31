@@ -118,7 +118,7 @@ def test_default_app_config_loads_expected_values() -> None:
     check_equal(
         "test_default_app_config_loads_expected_values 记忆投影版本",
         app_config.memory.projection_version,
-        "v2",
+        "v1",
     )
     check_equal(
         "test_default_app_config_loads_expected_values SSE 心跳",

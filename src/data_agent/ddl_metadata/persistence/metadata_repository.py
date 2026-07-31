@@ -92,10 +92,11 @@ class MetadataRepository:
                     "name": table.qualified_name,
                     "role": semantic_tables[table.id].role.value,
                     "description": semantic_tables[table.id].description,
+                    "alias": semantic_tables[table.id].aliases,
                 }
                 for table in schema.tables
             ],
-            ("name", "role", "description"),
+            ("name", "role", "description", "alias"),
         )
         await self._upsert(
             column_info,
@@ -108,6 +109,9 @@ class MetadataRepository:
                     "examples": [],
                     "description": semantic_columns[column.id].description,
                     "alias": semantic_columns[column.id].aliases,
+                    "index_profile": semantic_columns[column.id].value_index.model_dump(
+                        mode="json"
+                    ),
                     "table_id": table.id,
                 }
                 for table in schema.tables
@@ -120,6 +124,7 @@ class MetadataRepository:
                 "examples",
                 "description",
                 "alias",
+                "index_profile",
                 "table_id",
             ),
         )
@@ -130,12 +135,13 @@ class MetadataRepository:
                     "id": metric.id,
                     "name": metric.name,
                     "description": metric.definition,
+                    "fact_table_id": metric.fact_table_id,
                     "relevant_columns": metric.relevant_column_ids,
                     "alias": metric.aliases,
                 }
                 for metric in metrics
             ],
-            ("name", "description", "relevant_columns", "alias"),
+            ("name", "description", "fact_table_id", "relevant_columns", "alias"),
         )
 
         # 步骤三：先移除范围内旧关联再按当前指标重建，避免指标列集合收缩后残留边；
@@ -183,6 +189,34 @@ class MetadataRepository:
                     ),
                 )
             )
+
+    async def semantic_scope_before_sync(
+        self,
+        schema: PhysicalSchema,
+    ) -> tuple[set[str], set[str]]:
+        """返回本次表范围内同步前的列与关联指标标识。"""
+        table_ids = {table.id for table in schema.tables}
+        column_ids = set(
+            (
+                await self._session.scalars(
+                    select(column_info.c.id).where(
+                        column_info.c.table_id.in_(table_ids)
+                    )
+                )
+            ).all()
+        )
+        if not column_ids:
+            return column_ids, set()
+        metric_ids = set(
+            (
+                await self._session.scalars(
+                    select(column_metric.c.metric_id).where(
+                        column_metric.c.column_id.in_(column_ids)
+                    )
+                )
+            ).all()
+        )
+        return column_ids, metric_ids
 
     async def fingerprint_expiration_memory_keys(
         self,

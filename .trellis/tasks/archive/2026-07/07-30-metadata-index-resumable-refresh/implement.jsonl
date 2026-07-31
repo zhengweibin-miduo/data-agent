@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "遵守 outbox 短事务、数据库时钟、租约 CAS 与 dead-letter 契约"}
+{"file": ".trellis/tasks/07-30-metadata-index-resumable-refresh/design.md", "reason": "实现逐字段持久化游标与最终清理状态机"}
+{"file": ".trellis/tasks/archive/2026-07/07-30-metadata-semantic-value-index/design.md", "reason": "保持原表级 desired state、索引可重建和完整性边界"}

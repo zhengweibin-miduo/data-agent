@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查跨库事务、outbox 租约、重试和 schema parity"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "检查索引 mapping、client timeout、rebuild 和 LLM structured output"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查索引失败隔离、dead-letter 和安全错误"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行项目完整质量门禁与集成验证"}
+{"file": ".trellis/tasks/07-30-metadata-semantic-value-index/research/repository-evidence.md", "reason": "按已核验代码锚点检查实现偏移"}

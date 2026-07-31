@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from tests.helpers.checks import check_condition, check_equal
+from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 
 from data_agent.data_sync.backfill import (
     apply_backfill_batch,
@@ -21,9 +22,12 @@ from data_agent.data_sync.models import (
     RowOperation,
     SyncPhase,
     SyncRowEvent,
+    build_desired_tables,
 )
 from data_agent.data_sync.repository import DataSyncRepository
 from data_agent.data_sync.schema_sync import DWSchemaSynchronizer
+from data_agent.ddl_metadata.parsing import parse_ddl
+from data_agent.ddl_metadata.persistence.metadata_repository import MetadataRepository
 from data_agent.errors import DataAgentError
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
@@ -33,9 +37,22 @@ from data_agent.settings import app_config
 async def test_backfill_then_binlog_converges() -> None:
     """分块历史行与后续写改删事件最终收敛到同一 DW 表。"""
     table_name = f"sync_fact_{uuid4().hex[:12]}"
+    source_name = f"cdc_backfill_{uuid4().hex}"
     source_settings = app_config.data_sync.sources["source_demo"]
+    schema = await parse_ddl(
+        source_name,
+        f"CREATE TABLE {table_name} "
+        "(id BIGINT PRIMARY KEY, amount INT NOT NULL) ENGINE=InnoDB",
+    )
+    semantic = semantic_for(schema, fact=True)
+    desired = build_desired_tables(
+        schema,
+        semantic,
+        [],
+        default_source_schema="source_demo",
+    )[0]
     source = MySQLSourceClient(
-        "source_demo",
+        source_name,
         source_settings,
         connect_timeout_seconds=5,
         read_timeout_seconds=5,
@@ -43,31 +60,8 @@ async def test_backfill_then_binlog_converges() -> None:
     source_writer = create_async_engine(
         make_url(app_config.mysql.url).set(database="source_demo")
     )
-    desired = DesiredSyncTable(
-        source="source_demo",
-        source_schema="source_demo",
-        source_table=table_name,
-        target_table=table_name,
-        columns=[
-            DesiredColumn(
-                id="id",
-                name="id",
-                data_type="BIGINT",
-                nullable=False,
-            ),
-            DesiredColumn(
-                id="amount",
-                name="amount",
-                data_type="INT",
-                nullable=False,
-            ),
-        ],
-        primary_key=["id"],
-        schema_fingerprint="a" * 64,
-    )
-    MySQLDatabase.initialize()
-    task_id: int | None = None
     try:
+        await ensure_schema()
         # 步骤一：创建本测试独占源表并在记录 Binlog 基线前写入历史行。
         async with source_writer.begin() as connection:
             await connection.execute(
@@ -84,8 +78,9 @@ async def test_backfill_then_binlog_converges() -> None:
         await source.check_capabilities()
         baseline = await source.current_coordinate()
 
-        # 步骤二：持久化并领取任务，创建 DW 结构后按主键回填历史数据。
+        # 步骤二：按生产顺序原子提交 Meta 与 desired state，再领取任务并回填。
         async with MySQLDatabase.session() as session:
+            await MetadataRepository(session).synchronize(schema, semantic, [])
             repository = DataSyncRepository(session)
             await repository.upsert_desired([desired])
             tasks = await repository.claim_tasks(
@@ -95,7 +90,11 @@ async def test_backfill_then_binlog_converges() -> None:
             )
         check_equal("领取一个同步任务", len(tasks), 1)
         task = tasks[0]
-        task_id = task.id
+        check_equal(
+            "领取 UUID 目标任务",
+            (task.desired.source, task.desired.target_table),
+            (source_name, table_name),
+        )
         async with MySQLDatabase.session() as session:
             await DWSchemaSynchronizer(
                 session,
@@ -104,6 +103,20 @@ async def test_backfill_then_binlog_converges() -> None:
             repository = DataSyncRepository(session)
             await repository.record_snapshot(task, baseline)
             await repository.advance_captured_coordinate(task, baseline)
+            meta_table_ids = (
+                await session.scalars(
+                    text(
+                        "SELECT table_id FROM column_info "
+                        "WHERE table_id=:table_id ORDER BY id"
+                    ),
+                    {"table_id": schema.tables[0].id},
+                )
+            ).all()
+            check_equal(
+                "回填前字段均映射到当前 Meta 表",
+                meta_table_ids,
+                [schema.tables[0].id] * len(desired.columns),
+            )
         rows = await read_backfill_batch(
             source.engine,
             desired,
@@ -228,7 +241,7 @@ async def test_backfill_then_binlog_converges() -> None:
                 await repository.append_event(
                     task.id,
                     SyncRowEvent(
-                        source="source_demo",
+                        source=source_name,
                         source_schema="source_demo",
                         source_table=table_name,
                         coordinate=BinlogCoordinate(
@@ -259,44 +272,74 @@ async def test_backfill_then_binlog_converges() -> None:
             )
             check_equal("失败预算耗尽进入死信", phase, SyncPhase.DEAD)
     finally:
-        # 步骤八：只清理本测试 UUID 命名的源表、目标表和控制状态。
-        async with source_writer.begin() as connection:
-            await connection.execute(
-                text(f"DROP TABLE IF EXISTS source_demo.{table_name}")
-            )
-        async with MySQLDatabase.session() as session:
-            if task_id is not None:
+        # 步骤八：只清理本测试 UUID 命名的源表、目标表、控制状态与 Meta。
+        try:
+            async with source_writer.begin() as connection:
+                await connection.execute(
+                    text(f"DROP TABLE IF EXISTS source_demo.{table_name}")
+                )
+            async with MySQLDatabase.session() as session:
+                task_scope = {"source": source_name, "target_table": table_name}
                 await session.execute(
                     text(
-                        "DELETE FROM data_sync.data_sync_event "
-                        "WHERE task_id=:task_id"
+                        "DELETE FROM data_sync.data_sync_event WHERE task_id IN "
+                        "(SELECT id FROM data_sync.data_sync_task "
+                        "WHERE source=:source AND target_table=:target_table)"
                     ),
-                    {"task_id": task_id},
+                    task_scope,
                 )
                 await session.execute(
-                    text("DELETE FROM data_sync.data_sync_task WHERE id=:task_id"),
-                    {"task_id": task_id},
+                    text(
+                        "DELETE FROM data_sync.data_sync_task "
+                        "WHERE source=:source AND target_table=:target_table"
+                    ),
+                    task_scope,
                 )
-            await session.execute(
-                text(
-                    "DELETE FROM data_sync.data_sync_key_owner "
-                    "WHERE target_table=:target_table"
-                ),
-                {"target_table": table_name},
-            )
-            await session.execute(text(f"DROP TABLE IF EXISTS dw.{table_name}"))
-        await source.close()
-        await source_writer.dispose()
-        await MySQLDatabase.close()
+                await session.execute(
+                    text(
+                        "DELETE FROM data_sync.data_sync_key_owner "
+                        "WHERE target_table=:target_table"
+                    ),
+                    {"target_table": table_name},
+                )
+                await session.execute(text(f"DROP TABLE IF EXISTS dw.{table_name}"))
+            await cleanup_schema(schema)
+        finally:
+            await source.close()
+            await source_writer.dispose()
+            await MySQLDatabase.close()
 
 
 @pytest.mark.integration
 async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> None:
     """JSON SQL NULL 与 literal null 经真实 FULL ROW CDC 后保持不同语义。"""
     table_name = f"sync_json_null_{uuid4().hex}"
+    source_name = f"cdc_json_null_{uuid4().hex}"
     source_settings = app_config.data_sync.sources["source_demo"]
+    schema = await parse_ddl(
+        source_name,
+        f"CREATE TABLE {table_name} "
+        "(id BIGINT PRIMARY KEY, payload JSON NULL) ENGINE=InnoDB",
+    )
+    semantic = semantic_for(schema, fact=False)
+    desired = build_desired_tables(
+        schema,
+        semantic,
+        [],
+        default_source_schema="source_demo",
+    )[0]
+    desired = desired.model_copy(
+        update={
+            "columns": [
+                column.model_copy(update={"nullable": True})
+                if column.name == "payload"
+                else column
+                for column in desired.columns
+            ]
+        }
+    )
     source = MySQLSourceClient(
-        "source_demo",
+        source_name,
         source_settings,
         connect_timeout_seconds=5,
         read_timeout_seconds=5,
@@ -304,31 +347,8 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
     source_writer = create_async_engine(
         make_url(app_config.mysql.url).set(database="source_demo")
     )
-    desired = DesiredSyncTable(
-        source="source_demo",
-        source_schema="source_demo",
-        source_table=table_name,
-        target_table=table_name,
-        columns=[
-            DesiredColumn(
-                id="id",
-                name="id",
-                data_type="BIGINT",
-                nullable=False,
-            ),
-            DesiredColumn(
-                id="payload",
-                name="payload",
-                data_type="JSON",
-                nullable=True,
-            ),
-        ],
-        primary_key=["id"],
-        schema_fingerprint="c" * 64,
-    )
-    MySQLDatabase.initialize()
-    task_id: int | None = None
     try:
+        await ensure_schema()
         # 步骤一：创建 UUID 独占 JSON 源表，并确认源库满足 ROW/FULL 捕获契约。
         async with source_writer.begin() as connection:
             await connection.execute(
@@ -340,8 +360,9 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
         await source.check_capabilities()
         baseline = await source.current_coordinate()
 
-        # 步骤二：持久化并领取本测试任务，在写源数据前创建对应 DW 结构和基线。
+        # 步骤二：按生产顺序原子提交 Meta 与 desired state，再领取本测试任务。
         async with MySQLDatabase.session() as session:
+            await MetadataRepository(session).synchronize(schema, semantic, [])
             repository = DataSyncRepository(session)
             await repository.upsert_desired([desired])
             tasks = await repository.claim_tasks(
@@ -351,8 +372,11 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
             )
         check_equal("领取 JSON 空值同步任务", len(tasks), 1)
         task = tasks[0]
-        check_equal("领取 UUID 目标任务", task.desired.target_table, table_name)
-        task_id = task.id
+        check_equal(
+            "领取 UUID 目标任务",
+            (task.desired.source, task.desired.target_table),
+            (source_name, table_name),
+        )
         async with MySQLDatabase.session() as session:
             await DWSchemaSynchronizer(
                 session,
@@ -361,6 +385,20 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
             repository = DataSyncRepository(session)
             await repository.record_snapshot(task, baseline)
             await repository.advance_captured_coordinate(task, baseline)
+            meta_table_ids = (
+                await session.scalars(
+                    text(
+                        "SELECT table_id FROM column_info "
+                        "WHERE table_id=:table_id ORDER BY id"
+                    ),
+                    {"table_id": schema.tables[0].id},
+                )
+            ).all()
+            check_equal(
+                "CDC 前字段均映射到当前 Meta 表",
+                meta_table_ids,
+                [schema.tables[0].id] * len(desired.columns),
+            )
 
         # 步骤三：分别写入 SQL NULL 与 JSON literal null，再从基线捕获 FULL ROW。
         async with source_writer.begin() as connection:
@@ -422,35 +460,42 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
                 [(1, 1, None), (2, 0, "NULL")],
             )
     finally:
-        # 步骤六：严格按本测试 UUID 表名和任务 ID 清理源、DW 与控制状态。
-        async with source_writer.begin() as connection:
-            await connection.execute(
-                text(f"DROP TABLE IF EXISTS source_demo.{table_name}")
-            )
-        async with MySQLDatabase.session() as session:
-            if task_id is not None:
+        # 步骤六：严格按本测试 UUID source 与表名清理源、DW、控制状态和 Meta。
+        try:
+            async with source_writer.begin() as connection:
+                await connection.execute(
+                    text(f"DROP TABLE IF EXISTS source_demo.{table_name}")
+                )
+            async with MySQLDatabase.session() as session:
+                task_scope = {"source": source_name, "target_table": table_name}
                 await session.execute(
                     text(
-                        "DELETE FROM data_sync.data_sync_event "
-                        "WHERE task_id=:task_id"
+                        "DELETE FROM data_sync.data_sync_event WHERE task_id IN "
+                        "(SELECT id FROM data_sync.data_sync_task "
+                        "WHERE source=:source AND target_table=:target_table)"
                     ),
-                    {"task_id": task_id},
+                    task_scope,
                 )
                 await session.execute(
-                    text("DELETE FROM data_sync.data_sync_task WHERE id=:task_id"),
-                    {"task_id": task_id},
+                    text(
+                        "DELETE FROM data_sync.data_sync_task "
+                        "WHERE source=:source AND target_table=:target_table"
+                    ),
+                    task_scope,
                 )
-            await session.execute(
-                text(
-                    "DELETE FROM data_sync.data_sync_key_owner "
-                    "WHERE target_table=:target_table"
-                ),
-                {"target_table": table_name},
-            )
-            await session.execute(text(f"DROP TABLE IF EXISTS dw.{table_name}"))
-        await source.close()
-        await source_writer.dispose()
-        await MySQLDatabase.close()
+                await session.execute(
+                    text(
+                        "DELETE FROM data_sync.data_sync_key_owner "
+                        "WHERE target_table=:target_table"
+                    ),
+                    {"target_table": table_name},
+                )
+                await session.execute(text(f"DROP TABLE IF EXISTS dw.{table_name}"))
+            await cleanup_schema(schema)
+        finally:
+            await source.close()
+            await source_writer.dispose()
+            await MySQLDatabase.close()
 
 
 @pytest.mark.integration

@@ -16,6 +16,7 @@ logging:
 qdrant:
   url: http://localhost:6333
   memory_collection: data_agent_memory
+  metadata_collection: data_agent_metadata_semantic
   vector_size: 1024
   distance: Cosine
   top_k: 20
@@ -24,6 +25,7 @@ qdrant:
 elasticsearch:
   url: http://localhost:9200
   memory_index: data_agent_memory
+  metadata_value_index: data_agent_metadata_column_values
   analyzer: ik_max_word
   top_k: 20
   request_timeout_seconds: 10
@@ -96,8 +98,9 @@ llm:
 
 memory:
   database: data_agent
-  content_version: v2
-  projection_version: v2
+  content_version: v1
+  ddl_semantic_content_version: v1
+  projection_version: v1
   source_lease_seconds: 3600
   rebuild_batch_size: 100
   outbox_batch_size: 100
@@ -106,6 +109,18 @@ memory:
   outbox_max_attempts: 10
   retrieval_timeout_seconds: 2
   rrf_constant: 60
+  search_limit: 20
+
+metadata_index:
+  projection_version: v1
+  value_top_n: 10000
+  value_scan_batch_size: 1000
+  value_bulk_batch_size: 500
+  dispatch_batch_size: 100
+  claim_lease_seconds: 300
+  retry_max_seconds: 3600
+  max_attempts: 10
+  debounce_seconds: 5
   search_limit: 20
 
 conversation:

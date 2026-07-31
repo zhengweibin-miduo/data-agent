@@ -12,6 +12,7 @@ from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.memory.indexing.dispatcher import MemoryIndexDispatcher
 from data_agent.memory.mysql.repository import MemoryRepository
+from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 
 
 def _log_checkpoint_cleanup_deferred(job_id: str) -> None:
@@ -77,6 +78,18 @@ async def report_memory_index_dead_letters(ctx: dict[Any, Any]) -> None:
     """周期性暴露已停止重试的记忆索引期望状态积压。"""
     del ctx
     await MemoryIndexDispatcher().report_dead_letters()
+
+
+async def dispatch_metadata_index_outbox(ctx: dict[Any, Any]) -> None:
+    """周期性同步可重建的 Meta 语义与字段值投影。"""
+    del ctx
+    await MetadataIndexDispatcher().dispatch()
+
+
+async def report_metadata_index_dead_letters(ctx: dict[Any, Any]) -> None:
+    """周期性暴露已停止重试的 Meta 索引期望状态。"""
+    del ctx
+    await MetadataIndexDispatcher().report_dead_letters()
 
 
 async def extract_conversation_memory(ctx: dict[Any, Any]) -> None:

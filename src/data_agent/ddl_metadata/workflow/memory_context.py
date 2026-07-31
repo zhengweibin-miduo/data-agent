@@ -9,7 +9,6 @@ from data_agent.ddl_metadata.validation import (
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import scope_fingerprint
 from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.memory.application.search import MemorySearchService
 from data_agent.memory.domain.payloads import memory_content_hash
 from data_agent.memory.mysql.repository import (
     MemoryRepository,
@@ -94,7 +93,7 @@ class MemoryContextLoader:
                 schema.source,
                 fingerprints,
                 BuiltinMemoryCategory.DDL_SEMANTIC.value,
-                app_config.memory.content_version,
+                app_config.memory.ddl_semantic_content_version,
             )
             grouped = {
                 scope: [
@@ -108,44 +107,15 @@ class MemoryContextLoader:
                 schema.source,
                 schema.schema_fingerprint,
                 {BuiltinMemoryCategory.DDL_METRIC.value},
-                app_config.memory.content_version,
+                app_config.memory.ddl_semantic_content_version,
             )
             metric_memories = [
                 memory
                 for memory in metric_memories
                 if memory_content_hash(memory.content) == memory.detail.content_hash
             ]
-        # 步骤三：以当前表列文本做混合检索，只用权威回查后的命中补齐精确查询空槽。
-        allowed_object_ids = set(fingerprints)
-        query = "；".join(
-            value
-            for table in schema.tables
-            for value in (
-                f"表 {table.qualified_name} {table.comment or ''}",
-                *(
-                    f"列 {table.qualified_name}.{column.name} "
-                    f"{column.data_type} {column.comment or ''}"
-                    for column in table.columns
-                ),
-            )
-        )[:2000]
-        hybrid = await MemorySearchService().search(
-            query,
-            schema.source,
-            categories={BuiltinMemoryCategory.DDL_SEMANTIC.value},
-            limit=app_config.memory.search_limit,
-            allowed_object_ids=allowed_object_ids,
-        )
-        for hit in hybrid.items:
-            scope = hit.memory.memory_key
-            if scope not in grouped or grouped[scope]:
-                continue
-            grouped[scope] = [
-                StoredMemory(
-                    id=0,
-                    detail=hit.memory,
-                )
-            ]
+        # 步骤三：只有当前作用域指纹精确匹配的权威记忆才能直接复用。混合检索
+        # 仅适合向分类器提供提示，不能补齐完整语义并绕过字段资格重新判定。
         # 步骤四：按作用域选择唯一可信内容并投影语义 capsule，冲突不允许静默覆盖。
         capsule: list[MemoryContent] = []
         tables: list[SemanticTable] = []

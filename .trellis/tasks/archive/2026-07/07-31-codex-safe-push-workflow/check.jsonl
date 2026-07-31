@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/07-31-codex-safe-push-workflow/design.md", "reason": "检查实现是否完整覆盖安全状态矩阵、停止条件和全部声明影响面。"}
+{"file": ".trellis/tasks/07-31-codex-safe-push-workflow/research/current-workflow-and-pr71-intervention.md", "reason": "检查新规则是否真正消除当前三个委派入口的无条件停止行为。"}

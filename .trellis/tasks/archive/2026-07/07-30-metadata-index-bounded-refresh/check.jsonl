@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对跨层事务、状态传播和故障边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对 schema、索引、事务和 SQLAlchemy Core 合规性"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "核对 ES 有界批处理、幂等和重试"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对崩溃恢复和错误分类"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对完整测试矩阵和质量门禁"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "核对模块职责与目录归属"}
+{"file": ".trellis/spec/backend/index.md", "reason": "核对后端规范覆盖完整性"}
+{"file": ".trellis/tasks/07-30-metadata-index-bounded-refresh/research/current-state.md", "reason": "核对改动是否覆盖已确认的当前缺口"}
+{"file": ".trellis/tasks/07-30-metadata-index-bounded-refresh/research/design-options.md", "reason": "核对实现没有偏离已评审取舍"}
+{"file": ".trellis/tasks/07-30-metadata-index-bounded-refresh/research/design-review.md", "reason": "回归检查已关闭的设计阻塞项没有重新出现"}
+{"file": "code_review.md", "reason": "按仓库唯一审查格式执行 Standards 和 Spec 双轴检查"}

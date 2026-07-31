@@ -52,13 +52,25 @@ def scope_fingerprint(schema: PhysicalSchema, scope_key: str) -> str:
     """为表/列生成局部指纹，其余作用域复用完整模式指纹。"""
     for table in schema.tables:
         if table.id == scope_key:
-            value = table.model_dump(mode="json")
+            value = {
+                "table": table.model_dump(mode="json"),
+                "relationships": [
+                    relationship.model_dump(mode="json")
+                    for relationship in schema.relationships
+                    if relationship.source_table_id == table.id
+                ],
+            }
             break
         for column in table.columns:
             if column.id == scope_key:
                 value = {
                     "table_id": table.id,
                     "column": column.model_dump(mode="json"),
+                    "relationships": [
+                        relationship.model_dump(mode="json")
+                        for relationship in schema.relationships
+                        if relationship.source_column_id == column.id
+                    ],
                 }
                 break
         else:
