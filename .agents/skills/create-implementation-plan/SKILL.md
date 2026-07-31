@@ -43,8 +43,9 @@ Plans must consist of discrete, atomic phases containing executable tasks. Each 
 
 ## Output File Specifications
 
-- Save implementation plan files in `/plan/` directory
-- Use naming convention: `[purpose]-[component]-[version].md`
+- In a Trellis-managed repository, run `python ./.trellis/scripts/task.py current --source` to resolve the active task. When it returns an active task directory, save the plan as `<active-task-directory>/implement.md`; this path and filename take precedence over the generic convention below.
+- When no active Trellis task exists, save the plan under the repository-local `plan/` directory. Never write to the filesystem-root `/plan/` directory.
+- For non-Trellis plans, use naming convention: `[purpose]-[component]-[version].md`
 - Purpose prefixes: `upgrade|refactor|feature|data|infrastructure|process|architecture|design`
 - Example: `upgrade-system-command-4.md`, `feature-auth-module-1.md`
 - File must be valid Markdown with proper front matter structure
@@ -68,7 +69,8 @@ Run these checks before finalizing the plan. Checks (1) and (2) target declarati
 
 ```bash
 # Set PLAN_FILE to the plan being validated.
-PLAN_FILE="/plan/<purpose>-<component>-<version>.md"
+# For an active Trellis task, use "<active-task-directory>/implement.md" instead.
+PLAN_FILE="plan/<purpose>-<component>-<version>.md"
 
 # 1) Duplicate TASK / GOAL declarations in table rows.
 grep -oE '\| (TASK|GOAL)-[0-9]+ \|' "$PLAN_FILE" \
