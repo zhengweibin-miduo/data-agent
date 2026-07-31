@@ -1,6 +1,6 @@
 """字段值精确频次与稳定发布身份契约。"""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -58,6 +58,40 @@ def _state(
             columns=(("region-id", "region", "VARCHAR(64)"),),
         ),
     )
+
+
+class _MappingResult:
+    """为 SQLAlchemy mappings 查询提供有序假结果。"""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def mappings(self) -> "_MappingResult":
+        """返回 mappings 结果自身。"""
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        """返回全部映射行。"""
+        return self._rows
+
+    def one_or_none(self) -> dict[str, object] | None:
+        """返回唯一映射行或空值。"""
+        return self._rows[0] if self._rows else None
+
+
+class _ScalarResult:
+    """为 SQLAlchemy scalars 查询提供可迭代假结果。"""
+
+    def __init__(self, values: list[object]) -> None:
+        self._values = values
+
+    def __iter__(self) -> Iterator[object]:
+        """按 SQLAlchemy ScalarResult 语义返回迭代器。"""
+        return iter(self._values)
+
+    def all(self) -> list[object]:
+        """返回全部标量。"""
+        return self._values
 
 
 async def test_cdc_update_applies_old_minus_one_and_new_plus_one(
@@ -141,6 +175,161 @@ async def test_scan_cursor_only_applies_cdc_to_already_scanned_rows(
         ],
     )
     check_equal("SCAN 条件频次维护", calls, [("已扫描", 1)])
+
+
+async def test_prepare_frequency_mutation_keeps_only_current_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """共享目标的 CDC 只能维护当前物理来源对应的逻辑字段。"""
+    source_a = _state(MetadataValueRefreshPhase.COMPLETE).plan.desired
+    source_b = source_a.model_copy(
+        update={
+            "source": "source-b",
+            "source_table": "orders_peer",
+            "columns": [
+                source_a.columns[0].model_copy(update={"id": "peer-id"}),
+                source_a.columns[1].model_copy(update={"id": "peer-region-id"}),
+            ],
+        }
+    )
+    outbox_row = {
+        "frequency_version": "f" * 64,
+        "phase": MetadataValueRefreshPhase.COMPLETE.value,
+        "progress_column_id": None,
+        "last_primary_key": None,
+        "pending_desired_version": None,
+        "pending_frequency_version": None,
+    }
+
+    class FakeSession:
+        """按调用顺序返回 peer、Meta 表及 outbox 状态。"""
+
+        def __init__(self) -> None:
+            self.scalar_calls = 0
+
+        async def scalars(self, statement: ClauseElement) -> _ScalarResult:
+            del statement
+            self.scalar_calls += 1
+            if self.scalar_calls == 1:
+                return _ScalarResult(
+                    [
+                        source_a.model_dump(mode="json"),
+                        source_b.model_dump(mode="json"),
+                    ]
+                )
+            return _ScalarResult(["table-a", "table-b"])
+
+        async def execute(self, statement: ClauseElement) -> _MappingResult:
+            del statement
+            return _MappingResult([outbox_row])
+
+    class FakeProjectionRepository:
+        """按逻辑表返回各自来源的值投影计划。"""
+
+        def __init__(self, session: AsyncSession) -> None:
+            del session
+
+        async def value_projection_plan(self, table_id: str) -> ValueProjectionPlan:
+            desired = source_a if table_id == "table-a" else source_b
+            column = desired.columns[1]
+            return ValueProjectionPlan(
+                desired=desired,
+                columns=((column.id, column.name, column.data_type),),
+            )
+
+    monkeypatch.setattr(
+        value_refresh, "MetadataProjectionRepository", FakeProjectionRepository
+    )
+    states = await value_refresh.prepare_frequency_mutation(
+        cast(AsyncSession, FakeSession()), source_a
+    )
+
+    check_equal("当前来源状态数量", len(states), 1)
+    check_equal("当前来源逻辑表", states[0].table_id, "table-a")
+
+
+async def test_scan_preflights_length_and_filters_key_owner() -> None:
+    """SCAN 必须先读长度，再按主键 owner 只读取当前来源的正文。"""
+    plan = _state(MetadataValueRefreshPhase.SCAN).plan
+    owned_row = {"id": 1}
+    oversized_row = {"id": 2}
+    owned_hash = value_refresh.primary_key_identity(plan.desired, owned_row)[1]
+    oversized_hash = value_refresh.primary_key_identity(plan.desired, oversized_row)[1]
+
+    class FakeSession:
+        """模拟轻量预检、owner 查询与正文回读。"""
+
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        async def execute(self, statement: ClauseElement) -> _MappingResult:
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return _MappingResult(
+                    [
+                        {"id": 1, "value_bytes": 16},
+                        {"id": 2, "value_bytes": 5_000_000},
+                        {"id": 3, "value_bytes": 16},
+                    ]
+                )
+            return _MappingResult([{"id": 1, "region": "华东"}])
+
+        async def scalars(self, statement: ClauseElement) -> _ScalarResult:
+            self.statements.append(statement)
+            return _ScalarResult([owned_hash, oversized_hash])
+
+    session = FakeSession()
+    result = await value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, session)
+    ).scan_rows(plan, plan.columns[0], None)
+
+    check_equal("仅回读当前来源预算内正文", result.rows, ({"id": 1, "region": "华东"},))
+    check_equal("游标越过超限值与外源行", result.last_primary_key, (3,))
+    preflight_sql = str(session.statements[0]).lower()
+    check_condition(
+        "预检只通过 OCTET_LENGTH 读取正文长度",
+        "octet_length" in preflight_sql and "region AS" not in preflight_sql,
+        actual=preflight_sql,
+        expected="主键加 OCTET_LENGTH(value)",
+    )
+
+
+async def test_scan_stops_before_value_that_exceeds_remaining_batch_budget() -> None:
+    """SCAN 总预算不足时必须停在前一主键并留待下一 claim。"""
+    plan = _state(MetadataValueRefreshPhase.SCAN).plan
+    hashes = [
+        value_refresh.primary_key_identity(plan.desired, {"id": value})[1]
+        for value in (1, 2)
+    ]
+
+    class FakeSession:
+        """返回两个单独可索引但合计超出批次预算的值。"""
+
+        def __init__(self) -> None:
+            self.execute_calls = 0
+
+        async def execute(self, statement: ClauseElement) -> _MappingResult:
+            del statement
+            self.execute_calls += 1
+            if self.execute_calls == 1:
+                return _MappingResult(
+                    [
+                        {"id": 1, "value_bytes": 2_500_000},
+                        {"id": 2, "value_bytes": 2_000_000},
+                    ]
+                )
+            return _MappingResult([{"id": 1, "region": "a"}])
+
+        async def scalars(self, statement: ClauseElement) -> _ScalarResult:
+            del statement
+            return _ScalarResult(list(hashes))
+
+    result = await value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, FakeSession())
+    ).scan_rows(plan, plan.columns[0], None)
+
+    check_equal("批次预算前缀正文", result.rows, ({"id": 1, "region": "a"},))
+    check_equal("预算边界游标", result.last_primary_key, (1,))
 
 
 async def test_scan_cursor_uses_mysql_enum_and_set_order() -> None:
@@ -351,8 +540,126 @@ def test_document_id_is_scoped_by_table_column_and_value_hash() -> None:
     check_equal("稳定 ID 同时包含三层身份", len(identifiers), 3)
 
 
+async def test_select_top_n_persists_byte_bounded_rank_cursor() -> None:
+    """Top-N 必须按稳定排名持久化一个字节预算内的 V1 前缀。"""
+    plan = _state(MetadataValueRefreshPhase.COMPLETE).plan
+    item = value_refresh.ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-a",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="desired-v1",
+        frequency_version="frequency-v1",
+        lease_token="a" * 32,
+        phase=MetadataValueRefreshPhase.SELECT_TOP_N,
+        index_generation="generation-v1",
+    )
+
+    class FakeSession:
+        """返回合计超过单 claim 预算的稳定排名行。"""
+
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        async def execute(self, statement: ClauseElement) -> _MappingResult:
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return _MappingResult(
+                    [
+                        {
+                            "value_hash": "a" * 64,
+                            "frequency": 20,
+                            "estimated_bytes": 3_000_000,
+                        },
+                        {
+                            "value_hash": "b" * 64,
+                            "frequency": 10,
+                            "estimated_bytes": 3_000_000,
+                        },
+                    ]
+                )
+            if len(self.statements) == 2:
+                return _MappingResult(
+                    [
+                        {
+                            "value_hash": "a" * 64,
+                            "value_text": "华东",
+                            "frequency": 20,
+                        }
+                    ]
+                )
+            return _MappingResult([])
+
+    session = FakeSession()
+    result = await value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, session)
+    ).materialize_top_n(item, plan, plan.columns[0])
+
+    check_equal("Top-N 首批尚未完成", result.completed, False)
+    check_equal("Top-N V1 游标版本", result.cursor and result.cursor["v"], 1)
+    check_equal(
+        "Top-N 稳定排名游标",
+        result.cursor and result.cursor["last_value_hash"],
+        "a" * 64,
+    )
+    check_equal(
+        "Top-N 已检查排名数", result.cursor and result.cursor["ranked_count"], 1
+    )
+    preflight_sql = str(session.statements[0]).lower()
+    check_condition(
+        "Top-N 预检不直接选择 LONGTEXT",
+        "octet_length" in preflight_sql and "value_text," not in preflight_sql,
+        actual=preflight_sql,
+        expected="hash、frequency 与 OCTET_LENGTH(value_text)",
+    )
+
+
+async def test_select_top_n_skips_single_oversized_value_without_payload_read() -> None:
+    """单个超限 Top-N 值必须推进排名且不读取正文或无限重试。"""
+    plan = _state(MetadataValueRefreshPhase.COMPLETE).plan
+    item = value_refresh.ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-a",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="desired-v1",
+        frequency_version="frequency-v1",
+        lease_token="a" * 32,
+        phase=MetadataValueRefreshPhase.SELECT_TOP_N,
+        index_generation="generation-v1",
+    )
+
+    class FakeSession:
+        """仅返回一个确定性超限的轻量排名行。"""
+
+        def __init__(self) -> None:
+            self.execute_calls = 0
+
+        async def execute(self, statement: ClauseElement) -> _MappingResult:
+            del statement
+            self.execute_calls += 1
+            return _MappingResult(
+                [
+                    {
+                        "value_hash": "z" * 64,
+                        "frequency": 1,
+                        "estimated_bytes": value_refresh._VALUE_READ_BYTE_LIMIT + 1,
+                    }
+                ]
+            )
+
+    session = FakeSession()
+    result = await value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, session)
+    ).materialize_top_n(item, plan, plan.columns[0])
+
+    check_equal("超限值后字段收敛", result.completed, True)
+    check_equal("超限值未读取正文", session.execute_calls, 1)
+
+
 async def test_publication_candidate_ids_budget_before_payload_read() -> None:
     """发布候选必须先用轻量长度查询裁剪，再读取 LONGTEXT/JSON 正文。"""
+
     class FakeMappings:
         def __init__(self, rows: list[dict[str, object]]) -> None:
             self.rows = rows
@@ -406,6 +713,7 @@ async def test_publication_candidate_ids_budget_before_payload_read() -> None:
 
 async def test_publication_candidate_ids_seek_after_persisted_cursor() -> None:
     """已结算发布批次后的候选查询必须从持久化文档游标继续。"""
+
     class FakeMappings:
         def __init__(self, rows: list[dict[str, object]]) -> None:
             self.rows = rows
@@ -457,6 +765,7 @@ async def test_publication_candidate_ids_seek_after_persisted_cursor() -> None:
 
 async def test_cleanup_deletes_stale_never_published_rows_locally() -> None:
     """过期且从未发布的 membership 必须有界本地回收。"""
+
     class FakeScalars:
         def all(self) -> list[str]:
             return ["doc-old"]

@@ -151,9 +151,17 @@ previously published ID set, and pending remote actions.
 
 ### 3. Contracts
 
-- `SCAN` reads raw DW rows by ordered primary-key keyset and advances
-  `last_primary_key` in the same transaction that updates exact frequency.
-  One claim reads at most `value_scan_batch_size` rows. The cursor is a
+- `SCAN` first reads only ordered DW primary keys plus `OCTET_LENGTH(value)`.
+  It calculates the canonical `primary_key_identity()`, batch-loads active
+  `data_sync_key_owner` rows, and fetches complete values only for keys owned by
+  the plan's physical source. Same-name peer columns keep independent
+  `(table_id, column_id)` frequencies; CDC/backfill deltas update only the peer
+  state whose source/schema/table matches the current DML task.
+- One SCAN claim inspects at most `value_scan_batch_size` rows and fetches only
+  an ordered prefix whose estimated text bytes fit the 4 MiB read budget. A
+  foreign-owner, `NULL`, or individually oversized value advances the inspected
+  primary-key cursor without being fetched or truncated. `last_primary_key`
+  advances in the same transaction that updates exact frequency. The cursor is a
   versioned envelope containing `v`, `schema_fingerprint`, ordered primary-key
   column names, their MySQL types, and encoded values; recovery rejects the
   cursor unless every identity field matches the current plan.
@@ -163,9 +171,13 @@ previously published ID set, and pending remote actions.
 - Existing CDC coordinates and backfill cursors are the only delivery
   idempotency source. A count reaching zero is deleted; an unapplied event
   producing a negative count aborts the transaction.
-- `SELECT_TOP_N` handles one stable column per claim and reads
-  `frequency DESC, value_hash ASC` from the ordering index. At most N selected
-  rows are fetched for `value_text`; no full-table aggregation is performed.
+- `SELECT_TOP_N` reads only `value_hash`, `frequency`, and
+  `OCTET_LENGTH(value_text)` in stable `frequency DESC, value_hash ASC` order.
+  Its V1 field-internal keyset cursor lives in `bulk_cursor` and binds desired,
+  frequency, generation, column, last rank, and ranked count. Each claim fetches
+  complete text for only one 4 MiB prefix; an individually oversized value
+  counts toward Top-N rank but is not fetched or published. No full-table
+  aggregation or 10,000-value `.all()` is permitted.
 - Current membership is exactly
   `desired_membership_version == desired_version`. Older membership is an
   executable tombstone, not an implicit refresh-version query.
@@ -186,6 +198,10 @@ previously published ID set, and pending remote actions.
 | Worker exits before SCAN commit | Frequency and cursor roll back together |
 | Worker exits after SCAN commit | Resume strictly after `last_primary_key` |
 | Cursor schema, PK order, or PK type differs | Reject recovery; never reuse values by length alone |
+| DW row owner belongs to another source | Advance that peer's SCAN cursor without counting or fetching the value |
+| SCAN/Top-N next accepted value exceeds the remaining byte budget | Stop before it and persist the preceding stable cursor |
+| One value exceeds the complete read/document budget | Advance rank/key cursor, publish no truncated document, and converge without retrying it forever |
+| Top-N cursor identity differs from the claimed generation or column | Restart that field from rank zero under current authority |
 | Bulk outcome is unknown | Replay the persisted stable-ID action |
 | Bulk succeeds but settle fails | Pending action remains and is replayed |
 | Desired version changes during a unit | Promote at the unit boundary |
@@ -195,12 +211,15 @@ previously published ID set, and pending remote actions.
 
 ### 5. Good / Base / Bad Cases
 
-- Good: every claim performs one row batch, one field Top-N, or one bounded
-  remote batch and eventually reaches `COMPLETE`.
+- Good: every claim performs one owner-scoped byte-bounded SCAN prefix, one
+  byte-bounded Top-N keyset page, or one bounded remote batch and eventually
+  reaches `COMPLETE`.
 - Base: stable IDs and a persisted action journal make remote retries
   idempotent.
-- Bad: full-field `GROUP BY`, offset pagination, all-table cleanup, or a
-  transaction held open across Elasticsearch I/O.
+- Bad: full-field `GROUP BY`, offset pagination, selecting a batch of complete
+  `LONGTEXT` values before checking bytes, counting one source's CDC row for
+  every same-name peer, all-table cleanup, or a transaction held open across
+  Elasticsearch I/O.
 
 ### 6. Tests Required
 
@@ -211,9 +230,11 @@ uv run pytest tests/unit/metadata_indexing/test_value_refresh.py
 uv run pytest tests/integration/test_metadata_index_resumable_refresh.py
 ```
 
-Tests assert keyset recovery, cursor-envelope identity rejection, CDC deltas,
-stable IDs, full-authority phase CAS, publish/cleanup interruption recovery,
-desired-version promotion, and final MySQL/Elasticsearch equality.
+Tests assert keyset recovery, cursor-envelope identity rejection, peer-source
+owner filtering, source-scoped CDC deltas, SCAN length preflight, total and
+single-value byte gates, V1 Top-N cursor recovery, stable IDs, full-authority
+phase CAS, publish/cleanup interruption recovery, desired-version promotion,
+and final MySQL/Elasticsearch equality.
 
 ### 7. Wrong vs Correct
 
@@ -223,6 +244,21 @@ await session.execute(text("SELECT value, COUNT(*) ... GROUP BY value LIMIT :n")
 
 # Correct: one deep module owns the durable phase and runs one bounded unit.
 await MetadataValueRefresh().run_next_unit(claimed_work)
+```
+
+Wrong: load complete values before checking memory or owner scope.
+
+```python
+rows = (await session.execute(select(primary_key, longtext_value).limit(10_000))).all()
+```
+
+Correct: preflight small identities and lengths, select one owner-scoped byte
+prefix, then fetch only that prefix's complete values.
+
+```python
+batch = await frequency.scan_rows(plan, column_item, last_primary_key)
+await frequency.add_scan_values(rows=batch.rows, ...)
+await outbox.advance_value_state(last_primary_key=batch.last_primary_key, ...)
 ```
 
 ### Re-verify a lockless scan under lock before acting on it

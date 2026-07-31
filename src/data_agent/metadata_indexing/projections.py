@@ -44,8 +44,7 @@ def _pending_value_scope_statement(table_ids: set[str]) -> Select[tuple[str]]:
                     != MetadataValueRefreshPhase.COMPLETE.value
                 )
             ),
-            metadata_index_outbox.c.operation
-            == MetadataIndexOperation.REBUILD.value,
+            metadata_index_outbox.c.operation == MetadataIndexOperation.REBUILD.value,
         ),
     )
 
@@ -66,13 +65,13 @@ def _stable_value_text(value: object, data_type: str | None = None) -> str:
     """把特殊 MySQL 值转换为跨进程稳定的可检索业务文本。"""
     if data_type and data_type.upper().startswith("BIT") and isinstance(value, bytes):
         return str(int.from_bytes(value, byteorder="big", signed=False))
-    if data_type and data_type.upper().split("(", 1)[0] == "TIME" and isinstance(
-        value, timedelta
+    if (
+        data_type
+        and data_type.upper().split("(", 1)[0] == "TIME"
+        and isinstance(value, timedelta)
     ):
         total_microseconds = (
-            value.days * 86_400_000_000
-            + value.seconds * 1_000_000
-            + value.microseconds
+            value.days * 86_400_000_000 + value.seconds * 1_000_000 + value.microseconds
         )
         sign = "-" if total_microseconds < 0 else ""
         absolute = abs(total_microseconds)
@@ -104,11 +103,11 @@ def _safe_shared_column_names(
     peer_column_ids_by_name: dict[str, set[str]],
     eligible_peer_ids: set[str],
 ) -> set[str]:
-    """仅保留来源归属唯一且通过资格门禁的物理列名。"""
+    """仅保留所有来源字段均通过资格门禁的共享物理列名。"""
     return {
         name
         for name, column_ids in peer_column_ids_by_name.items()
-        if len(column_ids) == 1 and column_ids <= eligible_peer_ids
+        if column_ids and column_ids <= eligible_peer_ids
     }
 
 
@@ -465,9 +464,7 @@ class MetadataProjectionRepository:
         }
         table_ids = {table_id for table_id, _ in resolved.values()}
         pending = set(
-            await self._session.scalars(
-                _pending_value_scope_statement(table_ids)
-            )
+            await self._session.scalars(_pending_value_scope_statement(table_ids))
         )
         complete = (
             len(resolved) == len(column_ids)

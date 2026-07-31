@@ -83,9 +83,7 @@ def test_single_value_bulk_budget_is_checked_before_publication() -> None:
     )
     check_equal(
         "超长字段值超过单文档预算",
-        metadata_value_projection_fits_bulk(
-            _value_projection("x" * (5 * 1024 * 1024))
-        ),
+        metadata_value_projection_fits_bulk(_value_projection("x" * (5 * 1024 * 1024))),
         False,
     )
 
@@ -272,16 +270,14 @@ def test_incomplete_value_search_preserves_authoritative_candidates() -> None:
     )
     scope = {"column-1": ("table-1", "schema-1")}
 
-    values, complete = _finalize_value_results(
-        [candidate], scope, scope, True, False
-    )
+    values, complete = _finalize_value_results([candidate], scope, scope, True, False)
 
     check_equal("不完整刷新保留有效候选", values, [candidate])
     check_equal("不完整刷新正确降级", complete, False)
 
 
-def test_shared_target_requires_unambiguous_column_ownership() -> None:
-    """共享 DW 同名列即使全部合格也不得把跨来源值归给单一字段。"""
+def test_shared_target_keeps_every_eligible_peer_column() -> None:
+    """共享 DW 同名列在所有 peer 合格时必须保留逐来源逻辑投影。"""
     safe = _safe_shared_column_names(
         {
             "region": {"source-a-region", "source-b-region"},
@@ -289,22 +285,31 @@ def test_shared_target_requires_unambiguous_column_ownership() -> None:
         },
         {"source-a-region", "source-b-region", "source-a-status"},
     )
-    check_equal("多来源同名字段被保守排除", safe, {"status"})
-
-
-def test_memory_content_version_rejects_pre_value_index_records() -> None:
-    """字段资格成为必填内容后必须隔离旧版语义记忆。"""
-    check_equal("用户记忆内容版本保持兼容", app_config.memory.content_version, "v2")
-    check_equal(
-        "DDL 语义记忆内容版本已提升",
-        app_config.memory.ddl_semantic_content_version,
-        "v3",
+    check_equal("多来源同名字段通过来源归属隔离", safe, {"region", "status"})
+    unsafe = _safe_shared_column_names(
+        {
+            "region": {"source-a-region", "source-b-region"},
+            "status": {"source-a-status"},
+        },
+        {"source-a-region", "source-a-status"},
     )
+    check_equal("任一 peer 不合格时共享字段整体关闭", unsafe, {"status"})
 
 
-def test_graph_version_rejects_pre_value_index_checkpoints() -> None:
-    """字段语义契约变化必须隔离旧 LangGraph 检查点。"""
-    check_equal("工作流图版本已提升", app_config.llm.graph_version, "v2")
+def test_fresh_start_uses_first_memory_versions() -> None:
+    """无旧数据的新环境必须统一使用首个正式记忆版本。"""
+    check_equal("用户记忆内容版本", app_config.memory.content_version, "v1")
+    check_equal(
+        "DDL 语义记忆内容版本",
+        app_config.memory.ddl_semantic_content_version,
+        "v1",
+    )
+    check_equal("记忆投影版本", app_config.memory.projection_version, "v1")
+
+
+def test_fresh_start_uses_first_graph_version() -> None:
+    """无旧检查点的新环境必须使用首个正式工作流图版本。"""
+    check_equal("工作流图版本", app_config.llm.graph_version, "v1")
 
 
 async def test_destructive_rebuild_persists_recovery_before_reset(
@@ -321,9 +326,7 @@ async def test_destructive_rebuild_persists_recovery_before_reset(
             del cls
             return _SessionContext({"depth": 0})
 
-    async def fake_enqueue(
-        self: object, desired: list[MetadataIndexDesired]
-    ) -> None:
+    async def fake_enqueue(self: object, desired: list[MetadataIndexDesired]) -> None:
         del self
         enqueued.extend(desired)
 
@@ -593,6 +596,7 @@ async def test_value_refresh_advances_one_column_then_finalizes(
         desired_version="v" * 64,
         lease_token="l" * 32,
     )
+
     class FakeMySQLDatabase:
         """为多次领取提供独立短事务与无状态命名锁。"""
 
@@ -625,9 +629,7 @@ async def test_value_refresh_advances_one_column_then_finalizes(
             if cast(int, state["acknowledged"]):
                 return []
             return [
-                base_item.model_copy(
-                    update={"progress_column_id": state["progress"]}
-                )
+                base_item.model_copy(update={"progress_column_id": state["progress"]})
             ]
 
         async def is_authoritative(self, item: ClaimedMetadataIndexWork) -> bool:

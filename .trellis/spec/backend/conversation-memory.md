@@ -103,8 +103,8 @@ Required YAML keys are:
 
 ```yaml
 memory:
-  content_version: v2
-  projection_version: v2
+  content_version: v1
+  projection_version: v1
 conversation:
   max_message_chars: 32768
   context_message_limit: 20

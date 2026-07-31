@@ -15,6 +15,7 @@ from data_agent.data_sync.models import (
     RowOperation,
     SyncPhase,
     SyncRowEvent,
+    primary_key_identity,
 )
 from data_agent.data_sync.repository import BufferedSyncEvent, ClaimedSyncTask
 from data_agent.data_sync.tables import (
@@ -225,6 +226,22 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
                     f"`{target_table}` (id, region, status) VALUES "
                     "(1, '华东', '启用'), (2, '华东', '启用'), (3, '华西', '停用')"
                 )
+            )
+            await session.execute(
+                insert(data_sync_key_owner),
+                [
+                    {
+                        "target_table": target_table,
+                        "primary_key_hash": key_hash,
+                        "primary_key_json": document,
+                        "source": source,
+                        "deleted": False,
+                    }
+                    for document, key_hash in (
+                        primary_key_identity(desired, {"id": row_id})
+                        for row_id in (1, 2, 3)
+                    )
+                ],
             )
             await session.execute(
                 insert(table_info).values(

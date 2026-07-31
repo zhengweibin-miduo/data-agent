@@ -30,8 +30,9 @@ from data_agent.data_sync.models import (
     DesiredSyncTable,
     decode_row_value,
     encode_row_value,
+    primary_key_identity,
 )
-from data_agent.data_sync.tables import data_sync_task
+from data_agent.data_sync.tables import data_sync_key_owner, data_sync_task
 from data_agent.ddl_metadata.persistence.tables import column_info
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.mysql import MySQLDatabase
@@ -63,6 +64,7 @@ from data_agent.metadata_indexing.tables import (
 from data_agent.settings import app_config
 
 _ACTION_PAYLOAD_BYTE_LIMIT = 4 * 1024 * 1024
+_VALUE_READ_BYTE_LIMIT = _ACTION_PAYLOAD_BYTE_LIMIT
 
 
 class ValueRefreshPersistenceError(RuntimeError):
@@ -140,6 +142,27 @@ class FrequencyMutationState:
     plan: ValueProjectionPlan
 
 
+@dataclass(frozen=True)
+class ScanRowsResult:
+    """一个有界 SCAN 前缀的正文行与最后已检查主键。"""
+
+    rows: tuple[dict[str, object], ...]
+    last_primary_key: tuple[object, ...] | None
+
+
+@dataclass(frozen=True)
+class TopNMaterializationResult:
+    """一个字段 Top-N 有界分页的完成状态与恢复游标。"""
+
+    completed: bool
+    cursor: dict[str, object] | None
+
+
+def _estimated_value_bytes(raw_bytes: int) -> int:
+    """估算原值及固定投影字段进入当前读取批次后的字节数。"""
+    return raw_bytes + 2048
+
+
 async def prepare_frequency_mutation(
     session: AsyncSession,
     desired: DesiredSyncTable,
@@ -194,6 +217,14 @@ async def prepare_frequency_mutation(
             # 物化后的全量行建立精确基线，不能让 CDC 事务被索引投影阻塞。
             continue
         if plan is None or plan.desired.target_table != desired.target_table:
+            continue
+        if (
+            plan.desired.source,
+            plan.desired.source_schema,
+            plan.desired.source_table,
+        ) != (desired.source, desired.source_schema, desired.source_table):
+            # 步骤三：同一 DW 目标的 peer 各自维护逻辑字段频次，当前来源的
+            # CDC/backfill 行不能被重复计入其他来源的 VALUES 状态。
             continue
         states.append(
             FrequencyMutationState(
@@ -400,8 +431,8 @@ class MetadataValueFrequencyRepository:
         plan: ValueProjectionPlan,
         column_item: tuple[str, str, str],
         after_key: Mapping[str, object] | None,
-    ) -> list[dict[str, object]]:
-        """按 DW 主键读取一个有限批次并锁定这些行。"""
+    ) -> ScanRowsResult:
+        """按主键、来源归属及字节预算读取一个稳定 DW 前缀。"""
         _, value_name, _ = column_item
         names = list(dict.fromkeys([*plan.desired.primary_key, value_name]))
         target = table(
@@ -410,7 +441,11 @@ class MetadataValueFrequencyRepository:
             schema=app_config.data_sync.dw_database,
         )
         primary_keys = [target.c[name] for name in plan.desired.primary_key]
-        statement = select(*(target.c[name] for name in names)).order_by(*primary_keys)
+        # 步骤一：先锁定轻量主键与正文长度，不能在字节门禁前读取 LONGTEXT。
+        statement = select(
+            *primary_keys,
+            func.octet_length(target.c[value_name]).label("value_bytes"),
+        ).order_by(*primary_keys)
         decoded = _decoded_cursor(plan, after_key)
         if decoded is not None:
             if len(decoded) != len(primary_keys):
@@ -418,10 +453,78 @@ class MetadataValueFrequencyRepository:
             statement = statement.where(
                 tuple_(*primary_keys) > tuple_(*(literal(value) for value in decoded))
             )
-        rows = await self._session.execute(
-            statement.limit(app_config.metadata_index.value_scan_batch_size).with_for_update()
+        preflight_result = (
+            (
+                await self._session.execute(
+                    statement.limit(
+                        app_config.metadata_index.value_scan_batch_size
+                    ).with_for_update()
+                )
+            )
+            .mappings()
+            .all()
         )
-        return [dict(row) for row in rows.mappings()]
+        preflight_rows = [dict(row) for row in preflight_result]
+        if not preflight_rows:
+            return ScanRowsResult(rows=(), last_primary_key=None)
+
+        # 步骤二：复用 data-sync 的规范主键哈希，批量确认每行属于当前 peer。
+        key_hashes = {
+            primary_key_identity(plan.desired, row)[1] for row in preflight_rows
+        }
+        owned_hashes = set(
+            await self._session.scalars(
+                select(data_sync_key_owner.c.primary_key_hash)
+                .where(
+                    data_sync_key_owner.c.target_table == plan.desired.target_table,
+                    data_sync_key_owner.c.source == plan.desired.source,
+                    data_sync_key_owner.c.deleted.is_(False),
+                    data_sync_key_owner.c.primary_key_hash.in_(key_hashes),
+                )
+                .with_for_update()
+            )
+        )
+
+        # 步骤三：按主键顺序选择一个总字节有界的前缀；外源或单值超限行
+        # 仍属于已检查进度，避免恢复时永久重试，但从不截断或读取正文。
+        selected_keys: list[tuple[object, ...]] = []
+        selected_bytes = 0
+        last_scanned: Mapping[str, object] | None = None
+        for row in preflight_rows:
+            key_values = tuple(row[name] for name in plan.desired.primary_key)
+            key_hash = primary_key_identity(plan.desired, row)[1]
+            raw_bytes = row["value_bytes"]
+            if key_hash in owned_hashes and raw_bytes is not None:
+                estimated_bytes = _estimated_value_bytes(int(str(raw_bytes)))
+                if estimated_bytes <= _VALUE_READ_BYTE_LIMIT:
+                    if (
+                        selected_keys
+                        and selected_bytes + estimated_bytes > _VALUE_READ_BYTE_LIMIT
+                    ):
+                        break
+                    selected_keys.append(key_values)
+                    selected_bytes += estimated_bytes
+            last_scanned = row
+
+        if last_scanned is None:
+            raise RuntimeError("字段值 SCAN 未能推进轻量主键前缀")
+
+        # 步骤四：只回读已通过来源和字节门禁的正文，批次估算总量不超过预算。
+        payload_rows: tuple[dict[str, object], ...] = ()
+        if selected_keys:
+            payload_result = await self._session.execute(
+                select(*(target.c[name] for name in names))
+                .where(tuple_(*primary_keys).in_(selected_keys))
+                .order_by(*primary_keys)
+                .with_for_update()
+            )
+            payload_rows = tuple(dict(row) for row in payload_result.mappings().all())
+        return ScanRowsResult(
+            rows=payload_rows,
+            last_primary_key=tuple(
+                last_scanned[name] for name in plan.desired.primary_key
+            ),
+        )
 
     async def add_scan_values(
         self,
@@ -522,8 +625,7 @@ class MetadataValueFrequencyRepository:
                 .where(
                     metadata_value_frequency.c.table_id == table_id,
                     metadata_value_frequency.c.column_id == column_id,
-                    metadata_value_frequency.c.frequency_version
-                    == frequency_version,
+                    metadata_value_frequency.c.frequency_version == frequency_version,
                     metadata_value_frequency.c.value_hash.in_(negative),
                 )
                 .values(
@@ -549,49 +651,129 @@ class MetadataValueFrequencyRepository:
         item: ClaimedMetadataIndexWork,
         plan: ValueProjectionPlan,
         column_item: tuple[str, str, str],
-    ) -> None:
-        """物化一个字段当前版本的精确 Top-N membership。"""
+    ) -> TopNMaterializationResult:
+        """按 V1 keyset 游标物化一个字节有界的 Top-N membership 前缀。"""
         if item.frequency_version is None or item.index_generation is None:
             raise ValueError("字段值刷新缺少 generation")
         column_id, _, _ = column_item
-        rows = (
+        cursor = item.bulk_cursor or {}
+        cursor_matches = (
+            cursor.get("v") == 1
+            and cursor.get("phase") == MetadataValueRefreshPhase.SELECT_TOP_N.value
+            and cursor.get("desired_version") == item.desired_version
+            and cursor.get("frequency_version") == item.frequency_version
+            and cursor.get("index_generation") == item.index_generation
+            and cursor.get("column_id") == column_id
+            and isinstance(cursor.get("last_frequency"), int)
+            and isinstance(cursor.get("last_value_hash"), str)
+            and isinstance(cursor.get("ranked_count"), int)
+        )
+        ranked_count = int(str(cursor["ranked_count"])) if cursor_matches else 0
+        remaining = app_config.metadata_index.value_top_n - ranked_count
+        if remaining <= 0:
+            return TopNMaterializationResult(completed=True, cursor=None)
+        page_limit = min(app_config.metadata_index.value_scan_batch_size, remaining)
+        statement = select(
+            metadata_value_frequency.c.value_hash,
+            metadata_value_frequency.c.frequency,
+            (func.octet_length(metadata_value_frequency.c.value_text) + 2048).label(
+                "estimated_bytes"
+            ),
+        ).where(
+            metadata_value_frequency.c.table_id == item.object_id,
+            metadata_value_frequency.c.column_id == column_id,
+            metadata_value_frequency.c.frequency_version == item.frequency_version,
+        )
+        if cursor_matches:
+            last_frequency = int(str(cursor["last_frequency"]))
+            last_value_hash = str(cursor["last_value_hash"])
+            statement = statement.where(
+                or_(
+                    metadata_value_frequency.c.frequency < last_frequency,
+                    (metadata_value_frequency.c.frequency == last_frequency)
+                    & (metadata_value_frequency.c.value_hash > last_value_hash),
+                )
+            )
+        ranked_result = (
             (
                 await self._session.execute(
-                    select(
-                        metadata_value_frequency.c.value_hash,
-                        metadata_value_frequency.c.value_text,
-                        metadata_value_frequency.c.frequency,
-                    )
-                    .where(
-                        metadata_value_frequency.c.table_id == item.object_id,
-                        metadata_value_frequency.c.column_id == column_id,
-                        metadata_value_frequency.c.frequency_version
-                        == item.frequency_version,
-                    )
-                    .order_by(
+                    statement.order_by(
                         metadata_value_frequency.c.frequency.desc(),
                         metadata_value_frequency.c.value_hash,
                     )
-                    .limit(app_config.metadata_index.value_top_n)
+                    .limit(page_limit)
+                    .with_for_update()
                 )
             )
             .mappings()
             .all()
         )
-        values: list[dict[str, object]] = []
+        rows = [dict(row) for row in ranked_result]
+        if not rows:
+            return TopNMaterializationResult(completed=True, cursor=None)
+
+        # 步骤一：只从稳定排名页中选择一个字节预算内前缀；单值超限占据
+        # 原有 Top-N 排名但不读取正文，与既有不可索引输入语义一致。
+        processed_rows: list[Mapping[str, object]] = []
+        payload_hashes: list[str] = []
+        payload_bytes = 0
         for row in rows:
+            estimated_bytes = int(str(row["estimated_bytes"]))
+            if estimated_bytes <= _VALUE_READ_BYTE_LIMIT:
+                if (
+                    payload_hashes
+                    and payload_bytes + estimated_bytes > _VALUE_READ_BYTE_LIMIT
+                ):
+                    break
+                payload_hashes.append(str(row["value_hash"]))
+                payload_bytes += estimated_bytes
+            processed_rows.append(row)
+        if not processed_rows:
+            raise RuntimeError("字段值 Top-N 未能推进有界排名前缀")
+
+        # 步骤二：只读取预算内的正文，并按轻量排名结果恢复稳定顺序。
+        payload_by_hash: dict[str, dict[str, object]] = {}
+        if payload_hashes:
+            payload_rows = (
+                (
+                    await self._session.execute(
+                        select(
+                            metadata_value_frequency.c.value_hash,
+                            metadata_value_frequency.c.value_text,
+                            metadata_value_frequency.c.frequency,
+                        )
+                        .where(
+                            metadata_value_frequency.c.table_id == item.object_id,
+                            metadata_value_frequency.c.column_id == column_id,
+                            metadata_value_frequency.c.frequency_version
+                            == item.frequency_version,
+                            metadata_value_frequency.c.value_hash.in_(payload_hashes),
+                        )
+                        .with_for_update()
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            payload_by_hash = {
+                str(row["value_hash"]): dict(row) for row in payload_rows
+            }
+        values: list[dict[str, object]] = []
+        for ranked_row in processed_rows:
+            row = payload_by_hash.get(str(ranked_row["value_hash"]))
+            if row is None:
+                continue
             projection = MetadataValueProjection(
                 column_id=column_id,
                 table_id=item.object_id,
                 value_text=str(row["value_text"]),
                 value_keyword=str(row["value_text"]),
-                frequency=int(row["frequency"]),
+                frequency=int(str(row["frequency"])),
                 refresh_version=item.desired_version,
                 schema_fingerprint=plan.desired.schema_fingerprint,
             )
-            # 超过 Elasticsearch 单文档预算的值是确定性的不可索引输入，
-            # 不应进入 publication 后作为远程失败反复重试。未写入本代
-            # membership 也会让曾发布的同值文档在 CLEANUP 中收敛删除。
+            # 步骤三：最终用真实投影再次执行 ES 单文档门禁；未写入本代
+            # membership 的旧文档会在 CLEANUP 中确定性收敛删除。
             if not metadata_value_projection_fits_bulk(projection):
                 continue
             payload = projection.model_dump(mode="json")
@@ -631,6 +813,27 @@ class MetadataValueFrequencyRepository:
                     desired_payload_hash=statement.inserted.desired_payload_hash,
                 )
             )
+        new_ranked_count = ranked_count + len(processed_rows)
+        completed = new_ranked_count >= app_config.metadata_index.value_top_n or (
+            len(rows) < page_limit and len(processed_rows) == len(rows)
+        )
+        if completed:
+            return TopNMaterializationResult(completed=True, cursor=None)
+        last = processed_rows[-1]
+        return TopNMaterializationResult(
+            completed=False,
+            cursor={
+                "v": 1,
+                "phase": MetadataValueRefreshPhase.SELECT_TOP_N.value,
+                "desired_version": item.desired_version,
+                "frequency_version": item.frequency_version,
+                "index_generation": item.index_generation,
+                "column_id": column_id,
+                "last_frequency": int(str(last["frequency"])),
+                "last_value_hash": str(last["value_hash"]),
+                "ranked_count": new_ranked_count,
+            },
+        )
 
     async def prepare_publish(
         self,
@@ -807,34 +1010,37 @@ class MetadataValueFrequencyRepository:
         if item.index_generation is None:
             raise ValueError("字段值刷新缺少 index_generation")
         document_ids = (
-            await self._session.execute(
-                select(metadata_value_publication.c.document_id)
-                .where(
-                    metadata_value_publication.c.table_id == item.object_id,
-                    metadata_value_publication.c.index_generation
-                    == item.index_generation,
-                    or_(
-                        metadata_value_publication.c.desired_membership_version.is_(
-                            None
+            (
+                await self._session.execute(
+                    select(metadata_value_publication.c.document_id)
+                    .where(
+                        metadata_value_publication.c.table_id == item.object_id,
+                        metadata_value_publication.c.index_generation
+                        == item.index_generation,
+                        or_(
+                            metadata_value_publication.c.desired_membership_version.is_(
+                                None
+                            ),
+                            metadata_value_publication.c.desired_membership_version
+                            != item.desired_version,
                         ),
-                        metadata_value_publication.c.desired_membership_version
-                        != item.desired_version,
-                    ),
-                    metadata_value_publication.c.published_payload_hash.is_(None),
-                    metadata_value_publication.c.pending_action.is_(None),
+                        metadata_value_publication.c.published_payload_hash.is_(None),
+                        metadata_value_publication.c.pending_action.is_(None),
+                    )
+                    .order_by(metadata_value_publication.c.document_id)
+                    .limit(app_config.metadata_index.value_bulk_batch_size)
+                    .with_for_update()
                 )
-                .order_by(metadata_value_publication.c.document_id)
-                .limit(app_config.metadata_index.value_bulk_batch_size)
-                .with_for_update()
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not document_ids:
             return 0
         await self._session.execute(
             delete(metadata_value_publication).where(
                 metadata_value_publication.c.table_id == item.object_id,
-                metadata_value_publication.c.index_generation
-                == item.index_generation,
+                metadata_value_publication.c.index_generation == item.index_generation,
                 metadata_value_publication.c.document_id.in_(document_ids),
                 metadata_value_publication.c.published_payload_hash.is_(None),
                 metadata_value_publication.c.pending_action.is_(None),
@@ -1006,9 +1212,7 @@ class MetadataValueFrequencyRepository:
         if not rows:
             return 0
         await self._session.execute(
-            delete(metadata_value_frequency).where(
-                tuple_(*identity_columns).in_(rows)
-            )
+            delete(metadata_value_frequency).where(tuple_(*identity_columns).in_(rows))
         )
         return len(rows)
 
@@ -1065,23 +1269,23 @@ class MetadataValueRefresh:
                     return
                 index, column_item = current
                 frequency = MetadataValueFrequencyRepository(session)
-                rows = await frequency.scan_rows(
+                batch = await frequency.scan_rows(
                     plan,
                     column_item,
                     item.last_primary_key,
                 )
-                if rows:
+                if batch.last_primary_key is not None:
                     assert item.frequency_version is not None
-                    await frequency.add_scan_values(
-                        table_id=item.object_id,
-                        frequency_version=item.frequency_version,
-                        column_item=column_item,
-                        rows=rows,
-                    )
-                    last = rows[-1]
+                    if batch.rows:
+                        await frequency.add_scan_values(
+                            table_id=item.object_id,
+                            frequency_version=item.frequency_version,
+                            column_item=column_item,
+                            rows=batch.rows,
+                        )
                     cursor = _cursor_values(
                         plan,
-                        [last[name] for name in plan.desired.primary_key]
+                        batch.last_primary_key,
                     )
                     await outbox.advance_value_state(
                         item,
@@ -1133,11 +1337,21 @@ class MetadataValueRefresh:
                         phase=MetadataValueRefreshPhase.PUBLISH,
                     )
                     return
-                await MetadataValueFrequencyRepository(session).materialize_top_n(
+                result = await MetadataValueFrequencyRepository(
+                    session
+                ).materialize_top_n(
                     item,
                     plan,
                     columns[index],
                 )
+                if not result.completed:
+                    await outbox.advance_value_state(
+                        item,
+                        phase=MetadataValueRefreshPhase.SELECT_TOP_N,
+                        progress_column_id=item.progress_column_id,
+                        bulk_cursor=result.cursor,
+                    )
+                    return
                 await outbox.advance_value_state(
                     item,
                     phase=(
