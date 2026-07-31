@@ -1523,3 +1523,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 48: 添加前端组合技能路由
+
+**Date**: 2026-07-31
+**Task**: 添加前端组合技能路由
+**Branch**: `chore/frontend-skill-composition-20260731`
+
+### Summary
+
+安装 web-design-guidelines 项目技能，并在 AGENTS.md 中定义 frontend-design 到 web-design-guidelines 的设计、实现、审查与复查组合流程。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `202ce34` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
