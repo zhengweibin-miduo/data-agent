@@ -1,24 +1,25 @@
 # Frontend Directory Structure
 
-## Current Scope
-
-This repository has no frontend application. There is no `package.json`,
-JavaScript or TypeScript source tree, frontend build configuration, static asset
-directory, page directory, or component directory.
-
-The top-level `app/` directory is a Python backend package, not a web frontend.
-Its contents are documented under `.trellis/spec/backend/`.
-
 ## Current Layout
 
-No frontend layout or naming convention exists to document. Do not create
-`src/components`, `pages`, `hooks`, or similar directories merely to match this
-template. Until frontend files exist, there is no repository evidence from
-which to derive a framework or layout rule.
+```text
+src/data_agent/frontend/
+├── __init__.py
+├── index.html
+├── styles.css
+└── app.js
+tests/unit/test_frontend.py
+```
 
-## Evidence
+FastAPI mounts the directory at `/assets` and serves `index.html` for `/`,
+`/workbench`, `/workbench/{job_id}`, and `/knowledge`. The files are package
+data inside the Python distribution; there is no separate frontend build.
 
-- `pyproject.toml` is the only application dependency manifest.
-- `.github/workflows/ci.yml` runs only Python and backend integration checks.
-- `git ls-files` contains no `.js`, `.jsx`, `.ts`, `.tsx`, HTML, CSS, or
-  frontend manifest files.
+## Rules
+
+- Keep the application in this directory while it remains framework-free.
+- Add a file only when it owns a distinct runtime asset; do not create empty
+  component, hook, page, or utility trees.
+- Route ownership stays in `data_agent.application`; API calls stay relative so
+  the local browser uses the same origin.
+- Never commit generated caches such as `__pycache__`.

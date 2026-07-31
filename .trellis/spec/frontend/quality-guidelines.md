@@ -1,21 +1,27 @@
 # Frontend Quality Guidelines
 
-## Current Scope
+## Required Checks
 
-Not applicable yet. No frontend lint, type-check, unit-test, browser-test,
-build, bundle, or accessibility command exists.
+The frontend deliberately has no package manager or build command. Run:
 
-`.github/workflows/ci.yml` currently validates only the Python backend with
-Ruff, Pyright, `compileall`, configuration loading, and a MySQL integration
-test. Do not report npm, pnpm, yarn, frontend build, or accessibility checks as
-project quality gates.
+```powershell
+node --check src/data_agent/frontend/app.js
+node src/data_agent/frontend/app.js --self-check
+uv run pytest tests/unit/test_frontend.py
+uv build --wheel
+```
 
-## Review Boundary
+Inspect the wheel and confirm it contains `data_agent/frontend/index.html`,
+`styles.css`, and `app.js`. The repository-wide Ruff, Pyright, compileall, and
+non-integration pytest gates remain required because FastAPI owns static serving
+and chat orchestration.
 
-Until a frontend is introduced, frontend files should not appear in an ordinary
-backend task. This guide can name a frontend test or review command only after
-that command exists in a project manifest or CI configuration.
+## Review Checklist
 
-AI-generated review findings, including future frontend findings, must be in
-Simplified Chinese as required by `AGENTS.md`; code identifiers, paths,
-commands, configuration keys, logs, and original error text remain in English.
+- Test DDL byte counting, authoritative waiting-input refresh, stable chat retry
+  IDs, safe server-only LLM access, and static route serving.
+- Check 360px, 768px, and desktop layouts; keyboard-only operation; visible
+  focus; 200% zoom; and `prefers-reduced-motion`.
+- Review API errors by stable `code`, `stage`, and `retryable` fields. Do not
+  expose stack traces, model credentials, control-plane state, or raw model data.
+- Review findings are written in Simplified Chinese per `AGENTS.md`.

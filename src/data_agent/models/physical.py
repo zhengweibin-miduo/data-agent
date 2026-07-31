@@ -56,3 +56,26 @@ class PhysicalSchema(ContractModel):
         default_factory=list,
         description="由外键约束规范化得到的字段引用边。",
     )
+
+
+class DDLPreviewRelationship(ContractModel):
+    """由 DDL 外键约束确定的字段关系。"""
+
+    source_table_id: str = Field(description="外键所属表标识。")
+    source_column_id: str = Field(description="外键字段标识。")
+    target_table_id: str = Field(description="被引用表标识。")
+    target_column_id: str = Field(description="被引用字段标识。")
+    target_table_name: str = Field(description="被引用表限定名称。")
+    target_column_name: str = Field(description="被引用字段名称。")
+
+
+class DDLPreview(ContractModel):
+    """供只读结构画布使用的确定性 DDL 投影。"""
+
+    source: str = Field(description="数据来源标识。")
+    tables: list[PhysicalTable] = Field(description="按 DDL 顺序排列的表。")
+    relationships: list[DDLPreviewRelationship] = Field(
+        description="按 DDL 顺序排列的外键字段关系。"
+    )
+    table_count: int = Field(ge=0, description="表数量。")
+    column_count: int = Field(ge=0, description="字段数量。")

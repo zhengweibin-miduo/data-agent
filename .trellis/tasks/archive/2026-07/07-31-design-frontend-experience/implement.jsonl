@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "实施前读取前端规范索引"}
+{"file": ".trellis/tasks/07-31-design-frontend-experience/research/backend-capability-map.md", "reason": "确保界面能力不超过现有后端契约"}
+{"file": ".trellis/tasks/07-31-design-frontend-experience/research/chat-capability-gap.md", "reason": "实现 AI 聊天时遵守现有会话和 DDL 边界"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "聊天编排遵守后端模块边界"}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "复用会话上下文和长期记忆契约"}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "服务端复用 OpenAI 兼容 LLM 客户端"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "新增聊天 API 保持稳定错误投影"}
