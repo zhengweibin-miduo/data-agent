@@ -1,0 +1,29 @@
+{
+  "id": "frontend-skill-composition",
+  "name": "frontend-skill-composition",
+  "title": "在 AGENTS.md 中加入前端组合技能规则",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-07-31",
+  "completedAt": null,
+  "branch": "chore/frontend-skill-composition-20260731",
+  "base_branch": "master",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\07-31-frontend-skill-composition",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}
