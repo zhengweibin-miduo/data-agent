@@ -48,7 +48,7 @@ $env:DATA_AGENT_CONFIG = "D:\deploy\data-agent\conf\app_config.yaml"
 显式指定被静默忽略比启动失败更难排查。全部候选都缺失时，报错会列出实际查找过的
 绝对路径。
 
-worker 启动前还需在当前终端设置模型密钥：
+API 与 worker 启动前还需在各自终端设置模型密钥：
 
 ```powershell
 $env:DATA_AGENT_LLM_API_KEY = "your-api-key"
@@ -63,6 +63,8 @@ $env:DATA_AGENT_LLM_API_KEY = "your-api-key"
 ```powershell
 uv run data-agent-api
 ```
+
+API 启动后访问 `http://127.0.0.1:8000/workbench` 使用 Schema Loom 前端。
 
 ```powershell
 uv run arq data_agent.ddl_metadata.worker.settings.WorkerSettings

@@ -64,6 +64,7 @@ def _patch_api_startup(monkeypatch: MonkeyPatch) -> None:
         application.ElasticsearchClient,
         application.QdrantClient,
         application.TEIEmbeddingClient,
+        application.LLMClient,
     ):
         monkeypatch.setattr(manager, "initialize", Mock(return_value=object()))
 
@@ -90,6 +91,7 @@ def _patch_closes(
 
 
 _API_CLOSES = (
+    (application.LLMClient, "llm"),
     (application.TEIEmbeddingClient, "tei"),
     (application.QdrantClient, "qdrant"),
     (application.ElasticsearchClient, "elasticsearch"),
@@ -125,6 +127,7 @@ async def test_api_lifespan_drains_after_final_stopped_log(
         [
             "application.lifecycle.started",
             "body",
+            "llm",
             "tei",
             "qdrant",
             "elasticsearch",
@@ -167,7 +170,7 @@ async def test_api_lifespan_drains_when_close_fails(
     check_equal(
         "API 关闭失败仍排空",
         events,
-        ["application.lifecycle.started", "body", "tei", "complete"],
+        ["application.lifecycle.started", "body", "llm", "tei", "complete"],
     )
 
 

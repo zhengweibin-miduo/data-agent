@@ -247,6 +247,7 @@ metric answers, browser memory management, CORS, or safe error projection.
 ### 2. Signatures
 
 ```http
+POST /api/v1/metadata/ddl-preview
 POST /api/v1/metadata/ddl-jobs
 GET /api/v1/metadata/ddl-jobs/{job_id}
 GET /api/v1/metadata/ddl-jobs/{job_id}/events
@@ -260,6 +261,10 @@ DELETE /api/v1/metadata/memories/{memory_uid}
 
 ### 3. Contracts
 
+- Preview reuses the complete deterministic parser and returns only physical
+  tables, columns, and declared foreign-key coordinates. It does not create a
+  job, call an LLM, or write Redis/MySQL. Qualified external references remain
+  external even when a previewed table has the same unqualified name.
 - Submit returns `202` only after the Redis job record, source lease, and
   dispatch outbox are durable.
 - After acceptance is durable, submit and answer-submit also dispatch that one
@@ -317,6 +322,8 @@ DELETE /api/v1/metadata/memories/{memory_uid}
 
 | Condition | HTTP/result |
 |---|---|
+| Valid preview | `200` deterministic tables, columns, and declared relationships; no state change |
+| Invalid preview DDL, unknown request field, or non-MySQL dialect | `422` |
 | Accepted submit | `202 pending` with opaque job ID |
 | Unknown job or memory | `404` |
 | Stale answer, active source lease, immutable/deleted conflict | `409` |
@@ -348,7 +355,9 @@ uv run pytest tests/integration/test_ddl_metadata_flow.py
 
 Tests must assert `202/404/409/410/422/503`, answer compare-and-set, timeout
 cleanup, bounded memory projection, update reprocessing, loopback defaults,
-and rejection of non-local CORS origins.
+and rejection of non-local CORS origins. Preview tests additionally cover
+column-level, table-level, composite, qualified, and external foreign keys,
+strict request validation, and the absence of same-name relationship guessing.
 
 ### 7. Wrong vs Correct
 

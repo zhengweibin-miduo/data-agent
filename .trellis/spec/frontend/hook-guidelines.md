@@ -2,15 +2,10 @@
 
 ## Current Scope
 
-Not applicable yet. The repository has no React dependency, custom hooks,
-frontend data-fetching library, or shared stateful UI logic.
+Not applicable. The frontend has no React dependency, hooks, query cache, or
+framework lifecycle. Stateful behavior is implemented with small functions and
+native browser events in `app.js`.
 
-No `use*` naming rule, dependency-array policy, query-cache pattern, or hook
-test strategy is established. Do not infer a hook convention from the Python
-async client managers. Add concrete guidance only after hooks exist in a real
-frontend package.
-
-## Evidence
-
-`pyproject.toml` lists only Python backend dependencies, and the repository has
-no frontend package manifest or JavaScript/TypeScript hook modules.
+Do not introduce a hook abstraction or framework merely to organize the current
+static UI. Add hook conventions only if an approved implementation introduces a
+real hook runtime and tests.

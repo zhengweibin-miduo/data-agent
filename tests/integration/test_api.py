@@ -29,6 +29,12 @@ from tests.helpers.checks import (
 from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 
 
+@pytest.fixture(autouse=True)
+def _provide_llm_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """隔离 API 集成测试与真实模型凭据。"""
+    monkeypatch.setenv("DATA_AGENT_LLM_API_KEY", "test-only-key")
+
+
 class _UnavailableJobs:
     """注入提交时 Redis 故障。"""
 

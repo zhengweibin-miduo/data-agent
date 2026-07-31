@@ -473,6 +473,30 @@ class ConversationRepository:
         ).mappings().one()
         return _message(row)
 
+    async def assistant_message(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> MessageRecord | None:
+        """按用户、会话和轮次精确读取已经完成的助手消息。"""
+        # 步骤一：先以用户归属解析会话，跨用户访问与真实缺失都不返回消息。
+        conversation = await self.get(user_id, conversation_uid)
+        if conversation is None:
+            return None
+        # 步骤二：完整作用域下只读取助手角色，供上层避免重复模型调用。
+        row = (
+            await self._session.execute(
+                select(agent_message).where(
+                    agent_message.c.user_id == user_id,
+                    agent_message.c.conversation_id == int(conversation["id"]),
+                    agent_message.c.turn_uid == turn_uid,
+                    agent_message.c.role == MessageRole.ASSISTANT.value,
+                )
+            )
+        ).mappings().one_or_none()
+        return _message(row) if row is not None else None
+
     async def context_messages(
         self,
         user_id: str,

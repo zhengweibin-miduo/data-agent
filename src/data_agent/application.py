@@ -2,13 +2,19 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from redis.exceptions import RedisError
 
+from data_agent.answer_readiness.classifier import AnswerReadinessClassifier
+from data_agent.answer_readiness.service import AnswerReadinessService
+from data_agent.chat.api import router as chat_router
+from data_agent.chat.service import ChatService
 from data_agent.conversation.api import router as conversation_router
 from data_agent.conversation.service import ConversationService
 from data_agent.ddl_metadata.api.router import router as ddl_metadata_router
@@ -19,6 +25,7 @@ from data_agent.ddl_metadata.persistence.memory_references import (
 from data_agent.errors import DataAgentError
 from data_agent.infrastructure.elasticsearch import ElasticsearchClient
 from data_agent.infrastructure.job_queue import build_queue_pool
+from data_agent.infrastructure.llm_client import LLMClient
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
@@ -30,6 +37,8 @@ from data_agent.logging import (
 )
 from data_agent.memory.application.service import MemoryService
 from data_agent.settings import app_config
+
+_FRONTEND_DIR = Path(__file__).with_name("frontend")
 
 
 async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
@@ -46,6 +55,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     ElasticsearchClient.initialize()
     QdrantClient.initialize()
     TEIEmbeddingClient.initialize()
+    model = LLMClient.initialize()
     # 步骤三：构造 arq 队列客户端，使受理路径能立即调度激活而不必等待 worker 的
     # dispatch 周期；dispatch outbox 仍是崩溃兜底，入队失败时自动退回周期调度。
     # 这里走共享构造器而不用 arq.create_pool：后者在启动时就发起连接并带重试退避，
@@ -61,7 +71,13 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     jobs = DDLJobStore(redis, queue)
     app.state.jobs = jobs
     app.state.memories = MemoryService(jobs, MetadataMemoryReferenceValidator())
-    app.state.conversations = ConversationService()
+    conversations = ConversationService()
+    app.state.conversations = conversations
+    app.state.chat = ChatService(
+        conversations,
+        AnswerReadinessService(AnswerReadinessClassifier(model)),
+        model,
+    )
     # 步骤五：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
     logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")
     try:
@@ -69,6 +85,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     finally:
         # 步骤六：按初始化逆序关闭外部资源，避免先释放仍被下游客户端依赖的资源。
         try:
+            await LLMClient.close()
             await TEIEmbeddingClient.close()
             await QdrantClient.close()
             await ElasticsearchClient.close()
@@ -146,5 +163,21 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RedisError, _handle_redis_error)
     app.include_router(ddl_metadata_router)
     app.include_router(conversation_router)
+    app.include_router(chat_router)
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_DIR),
+        name="frontend-assets",
+    )
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/workbench", include_in_schema=False)
+    @app.get("/workbench/{job_id}", include_in_schema=False)
+    @app.get("/knowledge", include_in_schema=False)
+    async def frontend(job_id: str | None = None) -> FileResponse:
+        """返回本地 Schema Loom 单页工作台。"""
+        del job_id
+        return FileResponse(_FRONTEND_DIR / "index.html")
+
     # 步骤三：返回完成静态装配的应用；外部资源仍由启动阶段的 lifespan 初始化。
     return app

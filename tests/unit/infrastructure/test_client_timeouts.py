@@ -253,6 +253,7 @@ async def test_api_queue_pool_declares_socket_timeouts(
         application.ElasticsearchClient,
         application.QdrantClient,
         application.TEIEmbeddingClient,
+        application.LLMClient,
     ):
         monkeypatch.setattr(manager, "initialize", lambda: object())
         monkeypatch.setattr(manager, "close", _noop_close)
