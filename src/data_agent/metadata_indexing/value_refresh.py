@@ -737,16 +737,20 @@ class MetadataValueFrequencyRepository:
                     + 2048
                 ).label("estimated_bytes")
             )
-        rows = (
+        identity = (
+            metadata_value_publication.c.table_id == item.object_id,
+            metadata_value_publication.c.index_generation == item.index_generation,
+            membership,
+            predicate,
+        )
+        # 未结算动作必须优先重放，不能被成功批次留下的 keyset 游标跳过。
+        pending_rows = (
             (
                 await self._session.execute(
                     select(*columns)
                     .where(
-                        metadata_value_publication.c.table_id == item.object_id,
-                        metadata_value_publication.c.index_generation
-                        == item.index_generation,
-                        membership,
-                        predicate,
+                        *identity,
+                        metadata_value_publication.c.pending_action == action,
                     )
                     .order_by(metadata_value_publication.c.document_id)
                     .limit(app_config.metadata_index.value_bulk_batch_size)
@@ -756,6 +760,32 @@ class MetadataValueFrequencyRepository:
             .mappings()
             .all()
         )
+        rows = pending_rows
+        if not rows:
+            statement = select(*columns).where(*identity)
+            cursor = item.bulk_cursor or {}
+            cursor_phase = "publish" if action == "upsert" else "cleanup"
+            if (
+                cursor.get("phase") == cursor_phase
+                and cursor.get("desired_version") == item.desired_version
+                and cursor.get("index_generation") == item.index_generation
+                and isinstance(cursor.get("last_document_id"), str)
+            ):
+                statement = statement.where(
+                    metadata_value_publication.c.document_id
+                    > str(cursor["last_document_id"])
+                )
+            rows = (
+                (
+                    await self._session.execute(
+                        statement.order_by(metadata_value_publication.c.document_id)
+                        .limit(app_config.metadata_index.value_bulk_batch_size)
+                        .with_for_update()
+                    )
+                )
+                .mappings()
+                .all()
+            )
         document_ids: list[str] = []
         payload_bytes = 0
         for row in rows:
@@ -768,6 +798,49 @@ class MetadataValueFrequencyRepository:
             payload_bytes += estimated_bytes
             document_ids.append(str(row["document_id"]))
         return document_ids
+
+    async def delete_stale_unpublished_batch(
+        self,
+        item: ClaimedMetadataIndexWork,
+    ) -> int:
+        """有界回收从未发布且已退出当前 membership 的本地候选。"""
+        if item.index_generation is None:
+            raise ValueError("字段值刷新缺少 index_generation")
+        document_ids = (
+            await self._session.execute(
+                select(metadata_value_publication.c.document_id)
+                .where(
+                    metadata_value_publication.c.table_id == item.object_id,
+                    metadata_value_publication.c.index_generation
+                    == item.index_generation,
+                    or_(
+                        metadata_value_publication.c.desired_membership_version.is_(
+                            None
+                        ),
+                        metadata_value_publication.c.desired_membership_version
+                        != item.desired_version,
+                    ),
+                    metadata_value_publication.c.published_payload_hash.is_(None),
+                    metadata_value_publication.c.pending_action.is_(None),
+                )
+                .order_by(metadata_value_publication.c.document_id)
+                .limit(app_config.metadata_index.value_bulk_batch_size)
+                .with_for_update()
+            )
+        ).scalars().all()
+        if not document_ids:
+            return 0
+        await self._session.execute(
+            delete(metadata_value_publication).where(
+                metadata_value_publication.c.table_id == item.object_id,
+                metadata_value_publication.c.index_generation
+                == item.index_generation,
+                metadata_value_publication.c.document_id.in_(document_ids),
+                metadata_value_publication.c.published_payload_hash.is_(None),
+                metadata_value_publication.c.pending_action.is_(None),
+            )
+        )
+        return len(document_ids)
 
     async def _publication_candidates(
         self,
@@ -1132,9 +1205,10 @@ class MetadataValueRefresh:
                     session
                 ).prepare_cleanup(item)
                 if not document_ids:
-                    deleted = await MetadataValueFrequencyRepository(
-                        session
-                    ).delete_stale_frequency_batch(item)
+                    repository = MetadataValueFrequencyRepository(session)
+                    deleted = await repository.delete_stale_unpublished_batch(item)
+                    if not deleted:
+                        deleted = await repository.delete_stale_frequency_batch(item)
                     if deleted:
                         await outbox.advance_value_state(
                             item,

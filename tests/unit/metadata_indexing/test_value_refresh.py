@@ -404,6 +404,97 @@ async def test_publication_candidate_ids_budget_before_payload_read() -> None:
     )
 
 
+async def test_publication_candidate_ids_seek_after_persisted_cursor() -> None:
+    """已结算发布批次后的候选查询必须从持久化文档游标继续。"""
+    class FakeMappings:
+        def __init__(self, rows: list[dict[str, object]]) -> None:
+            self.rows = rows
+
+        def mappings(self) -> "FakeMappings":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return self.rows
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        async def execute(self, statement: ClauseElement) -> FakeMappings:
+            self.statements.append(statement)
+            return FakeMappings([])
+
+    session = FakeSession()
+    repository = value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, session)
+    )
+    item = value_refresh.ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-a",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="desired-v1",
+        frequency_version="frequency-v1",
+        lease_token="a" * 32,
+        phase=MetadataValueRefreshPhase.PUBLISH,
+        index_generation="generation-v1",
+        bulk_cursor={
+            "phase": "publish",
+            "desired_version": "desired-v1",
+            "index_generation": "generation-v1",
+            "last_document_id": "doc-500",
+        },
+    )
+
+    await repository._publication_candidate_ids(item, "upsert")
+
+    check_equal("先查询待重放动作再执行 keyset", len(session.statements), 2)
+    rendered = str(
+        session.statements[1].compile(compile_kwargs={"literal_binds": True})
+    )
+    check_condition("发布查询使用持久化游标", "doc-500" in rendered and ">" in rendered)
+
+
+async def test_cleanup_deletes_stale_never_published_rows_locally() -> None:
+    """过期且从未发布的 membership 必须有界本地回收。"""
+    class FakeScalars:
+        def all(self) -> list[str]:
+            return ["doc-old"]
+
+    class FakeResult:
+        def scalars(self) -> FakeScalars:
+            return FakeScalars()
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        async def execute(self, statement: ClauseElement) -> FakeResult:
+            self.statements.append(statement)
+            return FakeResult()
+
+    session = FakeSession()
+    repository = value_refresh.MetadataValueFrequencyRepository(
+        cast(AsyncSession, session)
+    )
+    item = value_refresh.ClaimedMetadataIndexWork(
+        target=MetadataIndexTarget.VALUES,
+        object_kind=MetadataObjectKind.TABLE,
+        object_id="table-a",
+        operation=MetadataIndexOperation.REFRESH,
+        desired_version="desired-v2",
+        frequency_version="frequency-v2",
+        lease_token="a" * 32,
+        phase=MetadataValueRefreshPhase.CLEANUP,
+        index_generation="generation-v1",
+    )
+
+    deleted = await repository.delete_stale_unpublished_batch(item)
+
+    check_equal("回收行数", deleted, 1)
+    check_equal("先锁定再删除", len(session.statements), 2)
+
+
 def test_scan_cursor_rejects_schema_or_primary_key_identity_mismatch() -> None:
     """恢复 SCAN 时不能把旧 schema 的同长度游标误当成当前游标。"""
     plan = _state(MetadataValueRefreshPhase.SCAN).plan
