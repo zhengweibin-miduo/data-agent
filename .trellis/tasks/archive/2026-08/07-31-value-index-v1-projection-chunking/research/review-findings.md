@@ -21,4 +21,3 @@
 - `desired_version`, `frequency_version`, and `index_generation` are SHA-256 identities for desired content, frequency baselines, and refresh generations. They are not release/schema versions and must remain hashes.
 - `llm.graph_version`, `memory.content_version`, `memory.ddl_semantic_content_version`, and `memory.projection_version` are project protocol/content versions and can be reset to `v1` because the user confirmed there is no data to preserve.
 - `docs/docker/mysql/upgrades/20260730_metadata_semantic_value_index.sql` is only for upgrading an existing environment. The canonical bootstrap SQL already owns a fresh schema, so the upgrade script is out of scope for a V1-only fresh start.
-

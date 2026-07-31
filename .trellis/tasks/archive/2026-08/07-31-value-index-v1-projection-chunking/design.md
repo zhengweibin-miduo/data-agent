@@ -81,4 +81,3 @@ The cursor envelope remains numeric `v: 1`. Content hashes and refresh generatio
 ## 6. Compatibility and migration
 
 There is intentionally no compatibility migration. Existing databases, indices, volumes, and remote PR state are not mutated by this task. If an environment later needs preservation, migration requires a separate explicit user request and design.
-

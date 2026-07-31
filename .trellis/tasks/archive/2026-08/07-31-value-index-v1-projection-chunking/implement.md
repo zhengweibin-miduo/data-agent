@@ -35,4 +35,3 @@
 - Top-N cursor comparisons must preserve `frequency DESC, value_hash ASC` ordering.
 - Do not persist a cursor past an accepted row whose frequency/publication update did not commit.
 - Revert the local task commits to roll back; no environment data migration is performed.
-
