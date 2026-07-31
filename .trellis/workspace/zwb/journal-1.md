@@ -1556,3 +1556,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 49: 安装规划与图表组合技能
+
+**Date**: 2026-07-31
+**Task**: 安装规划与图表组合技能
+**Branch**: `chore/install-diagram-plan-skills-20260731`
+
+### Summary
+
+安装 baoyu-diagram 与 create-implementation-plan 为项目级共享技能，并在 AGENTS.md 中补充按需组合规则；完成校验、归档和会话记录。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f868fff` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
