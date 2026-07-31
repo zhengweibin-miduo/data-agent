@@ -223,6 +223,12 @@ Determine this SKILL.md file's directory path as `{baseDir}`. Script path: `{bas
 
 Resolve `${BUN_X}` runtime: if `bun` installed → `bun`; if `npx` available → `npx -y bun`; else suggest installing bun.
 
+Install the script's locked runtime dependencies once (and whenever `bun.lock` changes):
+
+```bash
+${BUN_X} install --cwd {baseDir} --frozen-lockfile
+```
+
 ### SVG → @2x PNG
 
 After saving the SVG, convert it to a @2x PNG:
