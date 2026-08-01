@@ -14,9 +14,11 @@ export function App() {
   const [routePath, setRoutePath] = useState(window.location.pathname);
   const [unsavedWorkbench, setUnsavedWorkbench] = useState(false);
   const [workbenchNavigationBlocked, setWorkbenchNavigationBlocked] = useState(false);
+  const [knowledgeNavigationBlocked, setKnowledgeNavigationBlocked] = useState(false);
   const viewRef = useRef(view);
   const unsavedWorkbenchRef = useRef(unsavedWorkbench);
   const workbenchNavigationBlockedRef = useRef(workbenchNavigationBlocked);
+  const knowledgeNavigationBlockedRef = useRef(knowledgeNavigationBlocked);
   const routePathRef = useRef(routePath);
   const workbenchPathRef = useRef(
     window.location.pathname.startsWith("/workbench") ? window.location.pathname : "/workbench",
@@ -25,6 +27,7 @@ export function App() {
   viewRef.current = view;
   unsavedWorkbenchRef.current = unsavedWorkbench;
   workbenchNavigationBlockedRef.current = workbenchNavigationBlocked;
+  knowledgeNavigationBlockedRef.current = knowledgeNavigationBlocked;
   routePathRef.current = routePath;
 
   const canLeaveWorkbench = useCallback(() => {
@@ -33,6 +36,12 @@ export function App() {
       return false;
     }
     return !unsavedWorkbenchRef.current || window.confirm("当前 DDL 尚未提交，确定离开工作台？");
+  }, []);
+
+  const canLeaveKnowledge = useCallback(() => {
+    if (!knowledgeNavigationBlockedRef.current) return true;
+    window.alert("知识修正正在保存，请等待完成后再离开知识页。");
+    return false;
   }, []);
 
   useEffect(() => {
@@ -44,22 +53,26 @@ export function App() {
         window.history.pushState(null, "", workbenchPathRef.current);
         return;
       }
+      if (viewRef.current === "knowledge" && next !== "knowledge" && !canLeaveKnowledge()) {
+        window.history.pushState(null, "", routePathRef.current);
+        return;
+      }
       setView(next);
       setRoutePath(window.location.pathname);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [canLeaveWorkbench]);
+  }, [canLeaveKnowledge, canLeaveWorkbench]);
 
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!unsavedWorkbench && !workbenchNavigationBlocked) return;
+      if (!unsavedWorkbench && !workbenchNavigationBlocked && !knowledgeNavigationBlocked) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [unsavedWorkbench, workbenchNavigationBlocked]);
+  }, [knowledgeNavigationBlocked, unsavedWorkbench, workbenchNavigationBlocked]);
 
   const navigate = (next: View) => {
     if (
@@ -67,6 +80,7 @@ export function App() {
       && view === "workbench"
       && !canLeaveWorkbench()
     ) return;
+    if (next !== view && view === "knowledge" && !canLeaveKnowledge()) return;
     if (view === "workbench" && window.location.pathname.startsWith("/workbench")) {
       workbenchPathRef.current = window.location.pathname;
     }
@@ -97,7 +111,7 @@ export function App() {
           <a href="/knowledge" aria-current={view === "knowledge" ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate("knowledge"); }}>知识记忆</a>
         </nav>
       </header>
-      <main id="main-content" tabIndex={-1}>{view === "knowledge" ? <KnowledgePage /> : <WorkbenchPage key={routePath} onUnsavedChange={handleUnsavedWorkbenchChange} onNavigationBlockChange={setWorkbenchNavigationBlocked} />}</main>
+      <main id="main-content" tabIndex={-1}>{view === "knowledge" ? <KnowledgePage onNavigationBlockChange={setKnowledgeNavigationBlocked} /> : <WorkbenchPage key={routePath} onUnsavedChange={handleUnsavedWorkbenchChange} onNavigationBlockChange={setWorkbenchNavigationBlocked} />}</main>
     </div>
   );
 }

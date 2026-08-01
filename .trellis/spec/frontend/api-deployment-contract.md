@@ -54,6 +54,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   Persist a legacy submission as non-replayable immediately before dispatching
   its POST, not only after its response fails, because document teardown may
   prevent promise rejection handlers from updating the recovery marker.
+  Capability discovery shares the submission cancellation signal and must check
+  cancellation again before the dispatch callback and POST, so an unmounted
+  workbench cannot persist a non-replayable marker for a request never sent.
   Keep that coordinate outside the individual request call until acceptance is
   confirmed, including across repeated timeouts and SPA workbench remounts.
   Do not replace an unconfirmed coordinate when editable input changes; recover

@@ -27,6 +27,28 @@ describe("DDL job submission", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not dispatch after capability discovery is cancelled", async () => {
+    let resolveHealth!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => {
+      resolveHealth = resolve;
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const onDispatch = vi.fn();
+
+    const request = submitDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)", submission_id: "job-1",
+    }, controller.signal, onDispatch);
+    controller.abort();
+    resolveHealth(new Response(JSON.stringify({ detail: "Not Found" }), {
+      status: 404, headers: { "Content-Type": "application/json" },
+    }));
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onDispatch).not.toHaveBeenCalled();
+  });
+
   it.each([
     {},
     null,

@@ -2,11 +2,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { createConversation, getJob, previewDDL, sendChatTurn, submitDDL } from "./api/dataAgent";
+import {
+  createConversation, getJob, getMemory, getMemoryHistory, previewDDL, sendChatTurn, submitDDL,
+  updateMemory,
+} from "./api/dataAgent";
 
 vi.mock("./api/dataAgent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/dataAgent")>();
-  return { ...actual, createConversation: vi.fn(), getJob: vi.fn(), previewDDL: vi.fn(), sendChatTurn: vi.fn(), submitDDL: vi.fn() };
+  return {
+    ...actual, createConversation: vi.fn(), getJob: vi.fn(), getMemory: vi.fn(),
+    getMemoryHistory: vi.fn(), previewDDL: vi.fn(), sendChatTurn: vi.fn(), submitDDL: vi.fn(),
+    updateMemory: vi.fn(),
+  };
 });
 vi.mock("./api/jobEvents", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/jobEvents")>();
@@ -22,6 +29,9 @@ describe("application shell", () => {
     vi.mocked(getJob).mockReset();
     vi.mocked(createConversation).mockReset().mockResolvedValue({ uid: "conversation-1" });
     vi.mocked(sendChatTurn).mockReset();
+    vi.mocked(getMemory).mockReset();
+    vi.mocked(getMemoryHistory).mockReset();
+    vi.mocked(updateMemory).mockReset();
     vi.spyOn(window, "alert").mockImplementation(() => undefined);
   });
 
@@ -139,6 +149,33 @@ describe("application shell", () => {
     expect(window.alert).toHaveBeenCalledWith("AI 回复仍在生成或等待重试，请完成当前轮次后再离开工作台。");
     expect(window.location.pathname).toBe("/workbench");
     expect(screen.getByRole("heading", { name: "把物理结构织成语义" })).toBeInTheDocument();
+  });
+
+  it("keeps the knowledge page mounted while a correction is in flight", async () => {
+    let resolveUpdate!: (result: Awaited<ReturnType<typeof updateMemory>>) => void;
+    vi.mocked(getMemory).mockResolvedValue({
+      uid: "memory-1", source: "warehouse", category: "metadata", memory_key: "orders",
+      memory_text: "订单", content: { name: "订单" }, record_version: 1, status: "active",
+    });
+    vi.mocked(getMemoryHistory).mockResolvedValue({ items: [], offset: 0, limit: 50, has_more: false });
+    vi.mocked(updateMemory).mockImplementation(() => new Promise((resolve) => {
+      resolveUpdate = resolve;
+    }));
+    window.history.replaceState(null, "", "/knowledge?memory=memory-1");
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "修正内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存修正" }));
+
+    fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
+    expect(window.alert).toHaveBeenCalledWith("知识修正正在保存，请等待完成后再离开知识页。");
+    expect(window.location.pathname).toBe("/knowledge");
+
+    resolveUpdate({
+      memory_uid: "memory-1", event_id: 2, record_version: 2, requires_reprocess: true,
+    });
+    await screen.findByRole("status");
+    fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
+    expect(window.location.pathname).toBe("/workbench");
   });
 
   it("remounts the workbench when history changes its task coordinate", async () => {

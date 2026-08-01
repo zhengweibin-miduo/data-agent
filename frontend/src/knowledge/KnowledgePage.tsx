@@ -4,7 +4,11 @@ import { formatApiError } from "../api/client";
 import { deleteMemory, getMemory, getMemoryHistory, searchMemories, updateMemory } from "../api/dataAgent";
 import type { MemoryDetail, MemoryHistoryPage, MemorySearchResponse } from "../api/types";
 
-export function KnowledgePage() {
+interface KnowledgePageProps {
+  onNavigationBlockChange?: (blocked: boolean) => void;
+}
+
+export function KnowledgePage({ onNavigationBlockChange }: KnowledgePageProps) {
   const params = new URLSearchParams(window.location.search);
   const [source, setSource] = useState(params.get("source") ?? "commerce_prod");
   const [query, setQuery] = useState(params.get("query") ?? "");
@@ -51,7 +55,7 @@ export function KnowledgePage() {
     let parsed: Record<string, unknown>;
     try { parsed = JSON.parse(content) as Record<string, unknown>; }
     catch { setError("结构化内容不是有效 JSON。"); return; }
-    setBusy(true); setError("");
+    setBusy(true); setError(""); onNavigationBlockChange?.(true);
     try {
       const result = await updateMemory(selected.uid, parsed, selected.record_version);
       setReprocessNotice(result.requires_reprocess
@@ -60,6 +64,7 @@ export function KnowledgePage() {
       await openMemory(selected.uid);
     }
     catch (cause) { setError(formatApiError(cause, "修正未保存，若版本已变化请重新打开详情")); setBusy(false); }
+    finally { onNavigationBlockChange?.(false); }
   };
 
   const remove = async () => {

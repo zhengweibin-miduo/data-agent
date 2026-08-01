@@ -65,6 +65,9 @@
   POST and must not unlock the sample workbench or discard the job coordinate.
 - While a memory detail switch is loading, keep mutation controls disabled and
   identify the selected record in destructive confirmations.
+- Keep SPA navigation and document unload guarded while an authoritative memory
+  correction is pending, so its required DDL reprocessing notice remains owned
+  by a mounted page when the mutation settles.
 - When a persisted submission coordinate differs from the current task deep
   link, reconcile it first but retain the deep link as the fallback after an
   authoritative 404.

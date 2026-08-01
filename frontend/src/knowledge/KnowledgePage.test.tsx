@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deleteMemory, getMemory, getMemoryHistory, searchMemories, updateMemory } from "../api/dataAgent";
@@ -23,6 +23,23 @@ describe("knowledge corrections", () => {
     fireEvent.click(await screen.findByRole("button", { name: "修正内容" }));
     fireEvent.click(screen.getByRole("button", { name: "保存修正" }));
     expect(await screen.findByRole("status")).toHaveTextContent("重新载入并提交 DDL");
+  });
+
+  it("blocks navigation until an authoritative correction settles", async () => {
+    let resolveUpdate!: (result: Awaited<ReturnType<typeof updateMemory>>) => void;
+    vi.mocked(updateMemory).mockImplementation(() => new Promise((resolve) => {
+      resolveUpdate = resolve;
+    }));
+    const onNavigationBlockChange = vi.fn();
+    render(<KnowledgePage onNavigationBlockChange={onNavigationBlockChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: "修正内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存修正" }));
+
+    expect(onNavigationBlockChange).toHaveBeenLastCalledWith(true);
+    resolveUpdate({
+      memory_uid: "memory-1", event_id: 2, record_version: 2, requires_reprocess: true,
+    });
+    await waitFor(() => expect(onNavigationBlockChange).toHaveBeenLastCalledWith(false));
   });
 
   it("disables detail mutations while another memory detail is loading", async () => {

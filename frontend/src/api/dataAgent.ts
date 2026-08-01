@@ -140,9 +140,10 @@ const isHealthResponse = (payload: unknown): boolean =>
     || (isRecord(payload.capabilities)
       && typeof payload.capabilities.ddl_submission_idempotency === "boolean"));
 
-const supportsSubmissionIdempotency = async (): Promise<boolean> => {
+const supportsSubmissionIdempotency = async (signal?: AbortSignal): Promise<boolean> => {
   try {
     const health = await apiRequest<Record<string, unknown>>("/api/v1/health", {
+      signal,
       validateResponse: isHealthResponse,
     });
     return isRecord(health.capabilities)
@@ -221,9 +222,11 @@ export async function submitDDL(
       && (candidate.events_url === null || typeof candidate.events_url === "string");
   };
   const { submission_id: submissionId, ...legacyCompatibleInput } = input;
-  const idempotencySupported = await supportsSubmissionIdempotency();
+  const idempotencySupported = await supportsSubmissionIdempotency(signal);
   const submit = () => {
+    signal?.throwIfAborted();
     onDispatch?.(idempotencySupported);
+    signal?.throwIfAborted();
     return apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
       method: "POST",
       // Keep the JSON body compatible with backend versions released before
@@ -238,6 +241,7 @@ export async function submitDDL(
   try {
     return await submit();
   } catch (error) {
+    signal?.throwIfAborted();
     if (!idempotencySupported) {
       // Once a legacy POST has been dispatched, only a deterministic,
       // non-retryable 4xx proves that no acceptance needs reconciling. Network
