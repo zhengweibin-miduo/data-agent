@@ -133,11 +133,19 @@ const isMemoryDeleteResult = (payload: unknown): payload is MemoryMutationResult
   && typeof payload.memory_uid === "string" && payload.memory_uid.length > 0
   && payload.deleted === true;
 
+const isHealthResponse = (payload: unknown): boolean =>
+  isRecord(payload)
+  && payload.status === "ok"
+  && (payload.capabilities === undefined
+    || (isRecord(payload.capabilities)
+      && typeof payload.capabilities.ddl_submission_idempotency === "boolean"));
+
 const supportsSubmissionIdempotency = async (): Promise<boolean> => {
   try {
-    const health = await apiRequest<unknown>("/api/v1/health");
-    return isRecord(health)
-      && isRecord(health.capabilities)
+    const health = await apiRequest<Record<string, unknown>>("/api/v1/health", {
+      validateResponse: isHealthResponse,
+    });
+    return isRecord(health.capabilities)
       && health.capabilities.ddl_submission_idempotency === true;
   } catch (error) {
     // The backend version immediately preceding the health endpoint returns a

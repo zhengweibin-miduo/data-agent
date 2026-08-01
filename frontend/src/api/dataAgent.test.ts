@@ -27,6 +27,28 @@ describe("DDL job submission", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {},
+    null,
+    { status: "ready" },
+    { status: "ok", capabilities: null },
+    { status: "ok", capabilities: {} },
+    { status: "ok", capabilities: { ddl_submission_idempotency: "true" } },
+  ])("does not submit after an invalid successful capability response", async (payload) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(submitDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)", submission_id: "job-1",
+    })).rejects.toMatchObject({
+      status: 502, code: "invalid_response", stage: "response", retryable: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([{}, null, { job_id: 123 }, { job_id: "job-1", status: "pending" }])(
     "rejects invalid successful acceptance DTOs",
     async (payload) => {

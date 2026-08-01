@@ -39,6 +39,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   A health endpoint 404 is the definitive legacy-backend signal; timeouts, 5xx,
   and network failures are inconclusive and must block submission rather than
   silently discard the recoverable coordinate.
+  A successful health response must contain `status: "ok"` and either omit the
+  legacy capability map or provide a boolean idempotency capability; malformed
+  successful responses are inconclusive and must block submission.
   A timed-out acceptance request replays that coordinate, and the server returns
   the original job only when its source and DDL match the first submission.
   Keep that coordinate outside the individual request call until acceptance is
