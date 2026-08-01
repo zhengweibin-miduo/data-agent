@@ -202,6 +202,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   const handleSubmit = async () => {
     if (!inputValid) { setError("请先修正数据源命名或 DDL 字节限制。"); return; }
     if (!preview || previewStale) { setError("请先预览当前 source 和 DDL，再生成语义。"); return; }
+    if (pendingSubmissionAttempt && pendingSubmissionAttempt.fingerprint !== inputFingerprint) {
+      setError("上一份 DDL 的任务受理结果尚未确认，请恢复原输入并重试以找回任务坐标。");
+      return;
+    }
     setBusy("submit"); setError(""); setAnswers({});
     const controller = new AbortController();
     submitController.current?.abort();
@@ -294,7 +298,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       }
       setChatMessages((items) => [...items, { id: response.message.uid ?? randomId(), role: "assistant", content: response.message.content }]);
       if (attempt.draftQuestion) {
-        setAnswers((items) => items[attempt.draftQuestion!.question_id] === attempt.draftAnswerSnapshot
+        setAnswers((items) => (items[attempt.draftQuestion!.question_id] ?? "") === attempt.draftAnswerSnapshot
           ? { ...items, [attempt.draftQuestion!.question_id]: response.message.content }
           : items);
       }
@@ -318,6 +322,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     const ddlContext = draftQuestion ? submittedDDLContext.current : null;
     if (draftQuestion && !ddlContext) {
       setError("当前任务缺少已提交的 DDL 上下文，无法起草澄清答案。");
+      setDraftQuestion(null);
       return;
     }
     void sendChatAttempt({
@@ -328,6 +333,14 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   };
 
   const askToDraft = (question: MetricQuestion) => {
+    if (!submittedDDLContext.current && restoredJob.current) {
+      if (!job || source.trim() !== job.source || !ddl.trim()) {
+        setDraftQuestion(null);
+        setError("请先重新载入当前任务的原始 DDL，再让 AI 起草澄清答案。");
+        return;
+      }
+      submittedDDLContext.current = { source: source.trim(), dialect: "mysql", ddl };
+    }
     setDraftQuestion(question);
     setChatInput(`请根据当前 DDL 起草这个问题的回答：${question.prompt}`);
   };

@@ -172,6 +172,35 @@ describe("workbench chat", () => {
     expect(vi.mocked(submitDDL).mock.calls[2]?.[0].submission_id).toBe(firstCoordinate);
   });
 
+  it("preserves an unconfirmed acceptance coordinate when the DDL changes", async () => {
+    vi.mocked(previewDDL).mockImplementation(async ({ source }) => ({
+      source, tables: [], relationships: [], table_count: 0, column_count: 0,
+    }));
+    vi.mocked(submitDDL)
+      .mockRejectedValueOnce(new ApiError(0, { error: { code: "request_timeout", retryable: true } }))
+      .mockResolvedValueOnce({ job_id: "recovered-job", status: "pending", status_url: "/jobs/recovered-job", events_url: null });
+    render(<WorkbenchPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await screen.findByText(/任务提交失败/);
+    const originalDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE changed (id INT);" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    expect(submitDDL).toHaveBeenCalledOnce();
+    expect(screen.getByRole("alert")).toHaveTextContent("上一份 DDL 的任务受理结果尚未确认");
+
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: originalDDL } });
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/workbench/recovered-job"));
+  });
+
   it("accepts a task submission after StrictMode replays effects", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "strict-job", status: "pending", status_url: "/jobs/strict-job", events_url: null });
@@ -325,6 +354,25 @@ describe("workbench chat", () => {
 
     await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
     expect(vi.mocked(sendChatTurn).mock.calls[0]?.[1].ddl_context.ddl).toBe(submittedDDL);
+  });
+
+  it("freezes reloaded DDL for clarification drafts on a restored task", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "恢复任务草稿" } });
+    render(<WorkbenchPage />);
+
+    const answer = await screen.findByLabelText("第二轮问题");
+    const restoredDDL = "CREATE TABLE orders (id INT);";
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: restoredDDL } });
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+
+    await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
+    expect(vi.mocked(sendChatTurn).mock.calls[0]?.[1].ddl_context).toEqual({
+      source: "warehouse", dialect: "mysql", ddl: restoredDDL,
+    });
+    await waitFor(() => expect(answer).toHaveValue("恢复任务草稿"));
   });
 
   it("blocks clarification submission while an AI draft is pending", async () => {

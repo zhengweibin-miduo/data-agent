@@ -39,6 +39,9 @@
 - Do not let a late AI clarification draft overwrite an answer changed after
   the request began. Apply the draft only while the target answer still matches
   the request-time snapshot.
+- A restored waiting-input task freezes the reloaded source and DDL when the
+  user explicitly requests an AI draft. Missing context must leave draft mode
+  so ordinary chat remains recoverable.
 - Workbench operations share one interaction gate. Every handler and control
   must reject a new operation while another request owns that gate so one
   request cannot release or replace another request's busy state.
