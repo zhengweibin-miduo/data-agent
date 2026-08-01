@@ -337,7 +337,8 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       setConnection("任务已受理，正在连接事件流");
       watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
     } catch (cause) {
-      if (cause instanceof ApiError && cause.code === "legacy_submission_timeout"
+      if (cause instanceof ApiError
+        && (cause.code === "legacy_submission_timeout" || cause.code === "legacy_submission_uncertain")
         && pendingSubmissionAttempt?.submissionId === submissionId) {
         pendingSubmissionAttempt.replayable = false;
         persistSubmissionAttempt(submissionId, false);

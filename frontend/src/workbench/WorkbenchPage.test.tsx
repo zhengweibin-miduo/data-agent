@@ -366,19 +366,20 @@ describe("workbench chat", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/workbench/recovered-job"));
   });
 
-  it("does not manually replay an uncertain legacy submission", async () => {
+  it.each(["legacy_submission_timeout", "legacy_submission_uncertain"])(
+    "does not manually replay an uncertain legacy submission (%s)", async (code) => {
     vi.mocked(previewDDL).mockResolvedValue({
       source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0,
     });
     vi.mocked(submitDDL).mockRejectedValue(new ApiError(408, {
-      error: { code: "legacy_submission_timeout", stage: "acceptance", retryable: false },
+      error: { code, stage: "acceptance", retryable: false },
     }));
     const page = render(<WorkbenchPage />);
 
     fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
-    await screen.findByText(/legacy_submission_timeout/);
+    await screen.findByText(new RegExp(code));
     fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
 
     expect(submitDDL).toHaveBeenCalledOnce();

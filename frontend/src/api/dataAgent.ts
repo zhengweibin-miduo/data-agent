@@ -231,19 +231,29 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
   try {
     return await submit();
   } catch (error) {
-    if (!(error instanceof ApiError) || error.code !== "request_timeout" || signal?.aborted) throw error;
-    // A legacy backend creates its own job ID, so replaying a timed-out request
-    // cannot recover the original acceptance and may instead collide with its
-    // source lease. Only advertised idempotent submissions are safe to replay.
     if (!idempotencySupported) {
-      throw new ApiError(408, {
+      // Once a legacy POST has been dispatched, only a deterministic,
+      // non-retryable 4xx proves that no acceptance needs reconciling. Network
+      // failures, damaged success responses and proxy/server errors may all
+      // happen after the backend created a job with an unrelated ID, so they
+      // must permanently block replay of this client coordinate.
+      if (error instanceof ApiError
+        && error.status >= 400 && error.status < 500
+        && error.status !== 408 && !error.retryable) {
+        throw error;
+      }
+      throw new ApiError(error instanceof ApiError ? error.status : 0, {
         error: {
-          code: "legacy_submission_timeout",
+          code: error instanceof ApiError && error.code === "request_timeout"
+            ? "legacy_submission_timeout"
+            : "legacy_submission_uncertain",
           stage: "acceptance",
           retryable: false,
         },
       });
     }
+    if (!(error instanceof ApiError) || error.code !== "request_timeout" || signal?.aborted) throw error;
+    // Only advertised idempotent submissions are safe to replay after timeout.
     return submit();
   }
 }

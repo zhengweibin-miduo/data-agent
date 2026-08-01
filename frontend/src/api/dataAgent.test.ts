@@ -171,6 +171,33 @@ describe("DDL job submission", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
   });
+
+  it.each([
+    ["network failure", () => Promise.reject(new TypeError("connection reset"))],
+    ["malformed success", () => Promise.resolve(new Response("{}", {
+      status: 202, headers: { "Content-Type": "application/json" },
+    }))],
+    ["proxy failure", () => Promise.resolve(new Response(JSON.stringify({ error: { code: "upstream_error" } }), {
+      status: 503, headers: { "Content-Type": "application/json" },
+    }))],
+  ])("marks a legacy submission uncertain after %s", async (_label, submitResponse) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Not Found" }), {
+        status: 404, headers: { "Content-Type": "application/json" },
+      }))
+      .mockImplementationOnce(submitResponse);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(submitDDL({
+      source: "dw",
+      dialect: "mysql",
+      ddl: "CREATE TABLE t(id INT)",
+      submission_id: "11111111-1111-4111-8111-111111111111",
+    })).rejects.toMatchObject({
+      code: "legacy_submission_uncertain", stage: "acceptance", retryable: false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("conversation creation", () => {

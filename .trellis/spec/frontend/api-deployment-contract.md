@@ -47,8 +47,10 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   A timed-out acceptance request replays that coordinate only when the backend
   advertised idempotency support, and the server returns the original job only
   when its source and DDL match the first submission. A legacy submission must
-  remain uncertain after timeout rather than issuing a second non-idempotent POST,
-  including a user-triggered retry from the workbench.
+  remain uncertain after any post-dispatch failure that does not prove rejection,
+  including timeout, network failure, malformed success, or proxy/server error,
+  rather than issuing a second non-idempotent POST. Only a deterministic,
+  non-retryable 4xx may release the coordinate.
   Keep that coordinate outside the individual request call until acceptance is
   confirmed, including across repeated timeouts and SPA workbench remounts.
   Do not replace an unconfirmed coordinate when editable input changes; recover
