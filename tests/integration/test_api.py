@@ -137,10 +137,11 @@ async def _test_api() -> None:
             transport=transport,
             base_url="http://test",
         ) as client:
+            allowed_origin = str(app_config.api.cors_origins[0]).rstrip("/")
             allowed = await client.options(
                 "/api/v1/metadata/ddl-jobs",
                 headers={
-                    "Origin": "http://127.0.0.1:3000",
+                    "Origin": allowed_origin,
                     "Access-Control-Request-Method": "POST",
                 },
             )
@@ -148,7 +149,7 @@ async def _test_api() -> None:
             check_equal(
                 "_test_api 检查点 3",
                 allowed.headers["access-control-allow-origin"],
-                "http://127.0.0.1:3000",
+                allowed_origin,
             )
             denied = await client.options(
                 "/api/v1/metadata/ddl-jobs",
