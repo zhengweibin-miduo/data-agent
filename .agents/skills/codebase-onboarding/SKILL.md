@@ -1,6 +1,6 @@
 ---
 name: codebase-onboarding
-description: Analyze an unfamiliar codebase and generate a structured onboarding guide with architecture map, key entry points, conventions, and a starter CLAUDE.md. Use when joining a new project or setting up Claude Code for the first time in a repo.
+description: Analyze an unfamiliar codebase and generate a structured onboarding guide with architecture map, key entry points, and conventions. Generate or update CLAUDE.md only when the user explicitly requests that file. Use when joining a new project or setting up Claude Code for the first time in a repo.
 metadata:
   origin: ECC
 ---
@@ -107,7 +107,7 @@ Identify patterns the codebase already follows:
 
 ### Phase 4: Generate Onboarding Artifacts
 
-Produce two outputs:
+Produce the onboarding guide by default. Generate or update `CLAUDE.md` only when the user explicitly requests that file; explanatory requests such as "help me understand this codebase," "onboard me," or "walk me through this repo" are read-only and must not modify repository files.
 
 #### Output 1: Onboarding Guide
 
@@ -168,9 +168,9 @@ Produce two outputs:
 | Change build config | `next.config.ts` |
 ```
 
-#### Output 2: Starter CLAUDE.md
+#### Optional Output 2: Starter CLAUDE.md
 
-Generate or update a project-specific CLAUDE.md based on detected conventions. If `CLAUDE.md` already exists, read it first and enhance it — preserve existing project-specific instructions and clearly call out what was added or changed.
+When the user explicitly asks to generate or update `CLAUDE.md`, create a project-specific file based on detected conventions. If `CLAUDE.md` already exists, read it first and enhance it — preserve existing project-specific instructions and clearly call out what was added or changed. Do not create or modify `CLAUDE.md` for ordinary onboarding or codebase-explanation requests.
 
 ```markdown
 # Project Instructions
@@ -205,7 +205,7 @@ Generate or update a project-specific CLAUDE.md based on detected conventions. I
 
 1. **Don't read everything** — reconnaissance should use Glob and Grep, not Read on every file. Read selectively only for ambiguous signals.
 2. **Verify, don't guess** — if a framework is detected from config but the actual code uses something different, trust the code.
-3. **Respect existing CLAUDE.md** — if one already exists, enhance it rather than replacing it. Call out what's new vs existing.
+3. **Require explicit CLAUDE.md authorization** — only create or update the file when the user specifically requests it; if one already exists, enhance it rather than replacing it and call out what's new vs existing.
 4. **Stay concise** — the onboarding guide should be scannable in 2 minutes. Details belong in the code, not the guide.
 5. **Flag unknowns** — if a convention can't be confidently detected, say so rather than guessing. "Could not determine test runner" is better than a wrong answer.
 
@@ -220,8 +220,8 @@ Generate or update a project-specific CLAUDE.md based on detected conventions. I
 
 ### Example 1: First time in a new repo
 **User**: "Onboard me to this codebase"
-**Action**: Run full 4-phase workflow → produce Onboarding Guide + Starter CLAUDE.md
-**Output**: Onboarding Guide printed directly to the conversation, plus a `CLAUDE.md` written to the project root
+**Action**: Run full 4-phase workflow → produce the Onboarding Guide only
+**Output**: Onboarding Guide printed directly to the conversation; no repository files are created or modified
 
 ### Example 2: Generate CLAUDE.md for existing project
 **User**: "Generate a CLAUDE.md for this project"
