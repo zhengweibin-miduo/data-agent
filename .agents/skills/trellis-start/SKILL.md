@@ -47,7 +47,7 @@ From Step 1 you know the current task and status. Check the task directory:
   ```bash
   python ./.trellis/scripts/get_context.py --mode phase --step 2.1 --platform codex
   ```
-- **No active task** → classify first. For simple conversation / small task, ask only whether this turn should create a Trellis task. For complex work, ask whether you may create a Trellis task and enter planning. If the user says no, skip Trellis for this session. After consent in a Codex main session, load `trellis-create-task`; every non-Codex platform follows Phase 1.0's Trellis-managed `git worktree add` flow.
+- **No active task** → classify first. For simple conversation / small task, ask only whether this turn should create a Trellis task. For complex work, ask whether you may create a Trellis task and enter planning. If the user says no, skip Trellis for this session. After consent, every platform follows Phase 1.0's Trellis-managed `git worktree add` flow.
 
 ---
 
@@ -56,7 +56,6 @@ From Step 1 you know the current task and status. Check the task directory:
 | User intent | Skill |
 |---|---|
 | New feature / unclear requirements | `trellis-brainstorm` |
-| Approved new Trellis task in Codex main session | `trellis-create-task` |
 | About to write code | `trellis-before-dev` |
 | Done coding / quality check | `trellis-check` |
 | Stuck / fixed same bug multiple times | `trellis-break-loop` |

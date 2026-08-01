@@ -28,9 +28,8 @@ Use this skill during Phase 1 planning to turn the user's request into clear req
 Use this skill only after task-creation consent has been given and the user is ready to enter Trellis planning.
 
 If no task exists yet, return to Phase 1.0 in `.trellis/workflow.md`; do not run
-`task.py create` from the current checkout. In a Codex main session, load
-`trellis-create-task` so Codex creates the user-owned worktree task. Every other
-platform follows Phase 1.0's Trellis-managed `git worktree add` flow first.
+`task.py create` from the current checkout. Every platform must first follow
+Phase 1.0's Trellis-managed `git worktree add` flow.
 
 `task.py create` creates the default `prd.md`. Update that file with the current understanding before asking follow-up questions.
 

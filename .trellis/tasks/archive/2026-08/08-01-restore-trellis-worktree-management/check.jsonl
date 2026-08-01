@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/index.md","reason":"检查时执行 backend 规范索引的质量门禁并确认规范链接同步。"}
+{"file":".trellis/spec/backend/trellis-task-worktree.md","reason":"按统一 Trellis ownership、父子完整性和历史兼容契约审查实现。"}
+{"file":".trellis/tasks/08-01-restore-trellis-worktree-management/research/adaptive-worktree-rollback-evidence.md","reason":"核对实现 diff 是否严格落在已调查的语义回滚边界内。"}

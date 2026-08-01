@@ -4,8 +4,7 @@
 Task Management Script.
 
 Usage:
-    python task.py create "<title>" [task options]
-    python task.py create "<title>" --platform codex --base-branch <branch>
+    python task.py create "<title>" --base-branch <branch> [task options]
     python task.py add-context <dir> <file> <path> [reason] # Add jsonl entry
     python task.py validate <dir>              # Validate jsonl files
     python task.py list-context <dir>          # List jsonl entries
@@ -305,12 +304,13 @@ def show_usage() -> None:
     print("""Task Management Script
 
 Usage:
-  python task.py create <title>                     Create new task directory
-  python task.py create <title> --package <pkg>     Create task for a specific package
-  python task.py create <title> --parent <dir>      Create task as child of parent
-  python task.py create <title> --platform codex --base-branch <branch>
-      Bootstrap inside a Codex host worktree
-  python task.py create <title> --no-start
+  python task.py create <title> --base-branch <branch>
+                                                    Create new task directory
+  python task.py create <title> --package <pkg> --base-branch <branch>
+                                                    Create task for a specific package
+  python task.py create <title> --parent <dir> --base-branch <branch>
+                                                    Create task as child of parent
+  python task.py create <title> --no-start --base-branch <branch>
       Create without making it active in this session
   python task.py add-context <dir> <jsonl> <path> [reason]  Add entry to jsonl
   python task.py validate <dir>                     Validate jsonl files
@@ -335,9 +335,9 @@ List options:
   --status, -s <s>     Filter by status (planning, in_progress, review, completed)
 
 Examples:
-  python task.py create "Add login feature" --slug add-login
-  python task.py create "Add login feature" --slug add-login --package cli
-  python task.py create "Child task" --slug child --parent .trellis/tasks/01-21-parent
+  python task.py create "Login" --slug login --base-branch master
+  python task.py create "Login" --slug login --package cli --base-branch master
+  python task.py create "Child" --slug child --parent parent --base-branch master
   python task.py add-context <dir> implement .trellis/spec/cli/backend/auth.md "Auth guidelines"
   python task.py set-branch <dir> task/add-login
   python task.py start .trellis/tasks/01-21-add-login
@@ -404,16 +404,9 @@ def main() -> int:
     p_create.add_argument("--parent", help="Parent task directory (establishes subtask link)")
     p_create.add_argument("--package", help="Package name for monorepo projects")
     p_create.add_argument(
-        "--platform",
-        help=(
-            "Explicit task-creation platform marker. Codex selects the "
-            "host-managed linked-worktree guard; every other value uses "
-            "Trellis ownership."
-        ),
-    )
-    p_create.add_argument(
         "--base-branch",
-        help="Reviewed PR target branch (required for --platform codex)",
+        required=True,
+        help="Reviewed PR target branch",
     )
     p_create.add_argument(
         "--no-start",

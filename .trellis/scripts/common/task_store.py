@@ -55,12 +55,6 @@ from .task_utils import (
     resolve_task_dir,
     run_task_hooks,
 )
-from .worktree import (
-    WorktreeVerificationError,
-    resolve_task_creation_platform,
-    resolve_task_creation_policy,
-    verify_codex_host_worktree,
-)
 
 
 # =============================================================================
@@ -209,38 +203,28 @@ def _default_prd_content(title: str, description: str | None = None) -> str:
 def cmd_create(args: argparse.Namespace) -> int:
     """Create a new task."""
     repo_root = get_repo_root()
-    platform = resolve_task_creation_platform(getattr(args, "platform", None))
-    creation_policy = resolve_task_creation_policy(platform)
     requested_base_branch = getattr(args, "base_branch", None)
+    creation_policy = "trellis_managed"
+    worktree_owner = "trellis"
+    actual_worktree_root = repo_root.resolve(strict=False)
 
     if not args.title:
         print(colored("Error: title is required", Colors.RED), file=sys.stderr)
         return 1
 
-    if creation_policy == "codex_host_managed":
-        if not requested_base_branch:
-            print(
-                colored(
-                    "Error: Codex host-managed task creation requires "
-                    "--base-branch with the reviewed PR target.",
-                    Colors.RED,
-                ),
-                file=sys.stderr,
-            )
-            return 1
-        try:
-            worktree_state = verify_codex_host_worktree(repo_root)
-        except WorktreeVerificationError as exc:
-            print(colored(f"Error: {exc}", Colors.RED), file=sys.stderr)
-            return 1
-        actual_worktree_root = worktree_state.current_root
-        worktree_owner = "codex"
-    else:
-        actual_worktree_root = repo_root.resolve(strict=False)
-        worktree_owner = "trellis"
+    if not requested_base_branch:
+        print(
+            colored(
+                "Error: task creation requires --base-branch with the "
+                "reviewed PR target.",
+                Colors.RED,
+            ),
+            file=sys.stderr,
+        )
+        return 1
 
     # Record the checked-out branch before writing task files. A detached HEAD
-    # cannot satisfy the task metadata contract on either ownership path.
+    # cannot satisfy the task metadata contract.
     _, branch_out, branch_err = run_git(["branch", "--show-current"], cwd=repo_root)
     current_branch = branch_out.strip()
     if not current_branch:
@@ -279,15 +263,28 @@ def cmd_create(args: argparse.Namespace) -> int:
             print(colored("Error: No developer set. Run init_developer.py first or use --assignee", Colors.RED), file=sys.stderr)
             return 1
 
-    # A host-managed child must inherit a starting state that already contains
-    # its parent metadata; otherwise creation cannot establish both links.
-    if creation_policy == "codex_host_managed" and args.parent:
+    # A child must start from a state that already contains its parent metadata;
+    # otherwise creation cannot establish both links before writing child files.
+    parent_dir: Path | None = None
+    parent_data: dict | None = None
+    if args.parent:
         parent_dir = resolve_task_dir(args.parent, repo_root)
-        if not (parent_dir / FILE_TASK_JSON).is_file():
+        parent_json_path = parent_dir / FILE_TASK_JSON
+        parent_data = read_json(parent_json_path)
+        parent_children = (
+            parent_data.get("children", [])
+            if isinstance(parent_data, dict)
+            else None
+        )
+        if (
+            not isinstance(parent_data, dict)
+            or not parent_data
+            or not isinstance(parent_children, list)
+        ):
             print(
                 colored(
-                    "Error: Codex host-managed child creation requires the "
-                    f"parent task.json in the selected starting state: {args.parent}",
+                    "Error: child creation requires valid parent metadata in "
+                    f"the selected starting state: {args.parent}",
                     Colors.RED,
                 ),
                 file=sys.stderr,
@@ -387,7 +384,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         "createdAt": today,
         "completedAt": None,
         "branch": current_branch,
-        "base_branch": requested_base_branch or current_branch,
+        "base_branch": requested_base_branch,
         "worktree_path": str(actual_worktree_root),
         "commit": None,
         "pr_url": None,
@@ -421,26 +418,23 @@ def cmd_create(args: argparse.Namespace) -> int:
         seeded_jsonl = True
 
     # Handle --parent: establish bidirectional link
-    if args.parent:
-        parent_dir = resolve_task_dir(args.parent, repo_root)
+    if args.parent and parent_dir is not None and parent_data is not None:
         parent_json_path = parent_dir / FILE_TASK_JSON
-        if not parent_json_path.is_file():
-            print(colored(f"Warning: Parent task.json not found: {args.parent}", Colors.YELLOW), file=sys.stderr)
-        else:
-            parent_data = read_json(parent_json_path)
-            if parent_data:
-                # Add child to parent's children list
-                parent_children = parent_data.get("children", [])
-                if dir_name not in parent_children:
-                    parent_children.append(dir_name)
-                    parent_data["children"] = parent_children
-                    write_json(parent_json_path, parent_data)
+        # Add child to parent's children list
+        parent_children = parent_data.get("children", [])
+        if dir_name not in parent_children:
+            parent_children.append(dir_name)
+            parent_data["children"] = parent_children
+            write_json(parent_json_path, parent_data)
 
-                # Set parent in child's task.json
-                task_data["parent"] = parent_dir.name
-                write_json(task_json_path, task_data)
+        # Set parent in child's task.json
+        task_data["parent"] = parent_dir.name
+        write_json(task_json_path, task_data)
 
-                print(colored(f"Linked as child of: {parent_dir.name}", Colors.GREEN), file=sys.stderr)
+        print(
+            colored(f"Linked as child of: {parent_dir.name}", Colors.GREEN),
+            file=sys.stderr,
+        )
 
     # Auto-activate the new task so the per-turn breadcrumb fires planning
     # state. Best-effort: gracefully degrade if no session identity (CLI run

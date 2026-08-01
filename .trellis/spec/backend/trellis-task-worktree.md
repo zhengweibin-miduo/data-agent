@@ -1,27 +1,18 @@
 # Trellis Task Worktree Ownership
 
-## Scenario: Create a Trellis task through the active Agent platform
+## Scenario: Create a Trellis task on any supported Agent platform
 
 ### 1. Scope / Trigger
 
 - Trigger: a user approves creation of a new Trellis task while no task is
   active.
-- Codex is the only host-native adapter in the first version.
-- Every non-Codex platform retains the Trellis-managed Git worktree flow.
+- Every supported Agent platform uses the same Trellis-managed Git worktree
+  lifecycle.
 - Task-creation approval starts planning; it does not authorize implementation.
 
 ### 2. Signatures
 
-Codex child bootstrap:
-
-```text
-python ./.trellis/scripts/task.py create "<title>" \
-  --slug <slug> \
-  --platform codex \
-  --base-branch <pr-base>
-```
-
-Non-Codex bootstrap:
+Worktree and task bootstrap:
 
 ```text
 git worktree add -b "<task-branch>" "<trellis-worktree-path>" "<start-point>"
@@ -30,97 +21,86 @@ python ./.trellis/scripts/task.py create "<title>" \
   --base-branch <pr-base>
 ```
 
-Codex host action is a model tool call, not a Python interface:
+Child task bootstrap adds the parent argument:
 
-```json
-{
-  "prompt": "<complete Trellis bootstrap prompt>",
-  "target": {
-    "type": "project",
-    "projectId": "<saved project id>",
-    "environment": {
-      "type": "worktree",
-      "startingState": {
-        "type": "branch",
-        "branchName": "<existing start point>"
-      }
-    }
-  }
-}
+```text
+python ./.trellis/scripts/task.py create "<title>" \
+  --slug <slug> \
+  --parent <parent-dir> \
+  --base-branch <pr-base>
 ```
 
 ### 3. Contracts
 
-- The Codex main agent calls `list_projects` before `create_thread` and resolves
-  exactly one saved Git project for the current repository.
-- The Codex main checkout never runs `git worktree add` or `task.py create` for
-  the delegated task.
-- The Codex child verifies that its checkout is a registered linked worktree
-  before writing Trellis task files.
-- `--platform codex` is an explicit ownership marker. Session variables such as
-  `CODEX_SESSION_ID` do not select worktree ownership.
-- Every platform value other than `codex`, including an absent value, selects
-  `trellis_managed`.
-- `task.json` records the actual branch, explicit PR base, canonical worktree
-  root, `meta.worktree_owner`, and `meta.task_creation_policy`.
-- A Trellis-created worktree must never be labeled as Codex-managed.
-- A queued Codex task returns `clientThreadId`; it must not be passed to tools
-  requiring a ready `threadId`.
-- A Codex child task's selected `startingState` must already contain its parent
-  task directory and `task.json`; child creation fails before writing files if
-  the parent metadata is absent.
+- The main session verifies the workspace, PR base, start point, branch name,
+  target path, and Git worktree registry before creating anything.
+- Trellis creates `.trellis/worktrees/<MM-DD-task-slug>` with
+  `git worktree add`; task metadata is created only from inside that worktree.
+- `task.py create` requires the reviewed PR base and records the actual current
+  branch, canonical worktree root, `meta.worktree_owner=trellis`, and
+  `meta.task_creation_policy=trellis_managed`.
+- A detached checkout is rejected before task files are written.
+- Every child starting point must already contain the parent task directory and
+  a readable JSON-object `task.json`; when present, `children` must be a list.
+  Missing or invalid parent metadata fails before child files are written.
+- Recreating an existing task preserves unknown top-level and `meta` fields
+  while refreshing the authoritative creation metadata.
+- Historical `worktree_owner=codex` and
+  `task_creation_policy=codex_host_managed` values remain readable historical
+  facts. Trellis does not migrate them during list, current, or validation, and
+  preserves both values when an archive transition updates other task fields.
+- The retired task-creation CLI option `--platform` is rejected by argument
+  parsing. It must never silently degrade to Trellis ownership.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
 | --- | --- |
-| Codex marker in the primary checkout | Reject before creating task files |
-| Codex marker without `--base-branch` | Reject with the missing-base error |
-| Codex marker in a registered linked worktree | Permit metadata creation |
-| Claimed linked path absent from Git registry | Reject as unverified |
-| Detached checkout | Reject because task branch metadata is unavailable |
-| Non-Codex platform | Use the Trellis-managed Phase 1.0 flow |
-| Saved Codex project missing or ambiguous | Stop before `create_thread` |
-| Codex setup returns `clientThreadId` | Return the queued created-task directive |
-| Codex child source omits its parent `task.json` | Reject before creating child files |
+| Reviewed base is absent | Reject before creating task files |
+| Checkout is detached | Reject before creating task files |
+| Branch, path, or registry target conflicts | Stop before `git worktree add` |
+| Worktree preflight succeeds | Create the Trellis worktree and task metadata |
+| Parent `task.json` is absent, malformed, not an object, or has invalid `children` | Reject before creating child files |
+| Parent metadata exists | Write the bidirectional parent/child link |
+| Legacy `--platform codex` is supplied | Argparse rejects it before `cmd_create` |
+| Historical Codex owner/policy is read | Accept without migration |
 
 ### 5. Good/Base/Bad Cases
 
-- Good: the Codex main agent resolves the saved project, asks Codex to create a
-  worktree task, and the child creates Trellis metadata after linked-worktree
-  verification.
-- Base: Claude Code or another platform creates
-  `.trellis/worktrees/<MM-DD-task-slug>` through the established Trellis flow
-  and records `worktree_owner=trellis`.
-- Bad: local Python sees a Codex session variable and runs `git worktree add`
-  while claiming Codex ownership.
+- Good: the main session creates a rule-compliant Trellis worktree, switches all
+  later tool calls to that root, initializes the developer, and runs the shared
+  task bootstrap command with an explicit PR base.
+- Base: Codex and non-Codex platforms follow the same Phase 1.0 sequence and
+  produce identical Trellis ownership metadata.
+- Bad: an Agent asks its host to create a task worktree, passes the retired
+  `--platform codex` selector, or creates child files before proving the parent
+  metadata exists.
 
 ### 6. Tests Required
 
-- Assert explicit `codex` selects `codex_host_managed`.
-- Assert Codex session identity alone still selects `trellis_managed`.
-- Assert the primary checkout is rejected before `.trellis/tasks` is written.
-- Assert a disposable registered linked worktree is accepted.
-- Assert registry mismatch and Windows path mismatches fail closed.
-- Assert Codex and non-Codex task metadata records the correct owner, policy,
-  branch, base, and worktree root.
-- Assert filtered Phase 1.0 text exposes `create_thread` to Codex and
-  `git worktree add` to non-Codex platforms.
-- Assert the Codex skill preserves the ready and queued created-task directive
-  forms.
-- Assert a Codex child cannot be created from a state that omits its parent
-  metadata.
+- Assert filtered Phase 1.0 text for Codex and a non-Codex platform contains
+  `git worktree add` and excludes host task delegation terms.
+- Assert `task.py create --help` requires a reviewed base and exposes no
+  task-creation `--platform` option.
+- Assert the retired `--platform codex` command fails before task files exist.
+- Assert creation in a disposable linked worktree records actual branch, base,
+  canonical root, and Trellis owner/policy.
+- Assert duplicate creation preserves unknown top-level and `meta` fields.
+- Assert detached HEAD and missing or unreadable parent metadata fail before
+  task files are written.
+- Assert an existing parent receives the child link and the child records its
+  parent.
+- Assert a historical Codex-owned task remains readable without mutation.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
-Use `.codex/` directory presence or `CODEX_SESSION_ID` as permission for local
-Python to create a worktree, then label it Codex-managed.
+Route Codex through a host worktree API or accept a platform selector that
+changes task ownership.
 
 #### Correct
 
-Use the Codex main-agent skill to invoke the host `create_thread` tool. Require
-an explicit Codex bootstrap marker and verify the linked worktree through Git
-before creating task metadata. Keep every non-Codex platform on the explicit
-Trellis-managed path.
+Use the single Trellis Phase 1.0 lifecycle on every platform. Verify Git targets,
+create the branch and worktree with `git worktree add`, then run the shared task
+bootstrap command inside it with the reviewed PR base.
