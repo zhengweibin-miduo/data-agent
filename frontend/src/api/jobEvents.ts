@@ -33,37 +33,56 @@ export function connectJobEvents(
   let closed = false;
   let authoritativeReadInFlight = false;
   let authoritativeReadQueued = false;
+  let authoritativeReadMustSucceed = false;
+  let authoritativeRetryTimer: number | null = null;
 
   const close = () => {
     closed = true;
     source?.close();
     source = null;
     if (pollTimer !== null) window.clearInterval(pollTimer);
+    if (authoritativeRetryTimer !== null) window.clearTimeout(authoritativeRetryTimer);
     pollTimer = null;
+    authoritativeRetryTimer = null;
   };
 
-  const poll = async () => {
+  const poll = async (mustSucceed = false) => {
     if (closed) return;
     if (authoritativeReadInFlight) {
       authoritativeReadQueued = true;
+      authoritativeReadMustSucceed ||= mustSucceed;
       return;
     }
     authoritativeReadInFlight = true;
     try {
       const job = await handlers.getAuthoritativeJob();
       if (closed) return;
+      if (mustSucceed && authoritativeRetryTimer !== null) {
+        window.clearTimeout(authoritativeRetryTimer);
+        authoritativeRetryTimer = null;
+      }
       handlers.onJob(job);
       if (TERMINAL_STATUSES.has(job.status)) {
         close();
         handlers.onConnection("任务已到达终态");
       }
     } catch (error) {
-      if (!closed) handlers.onError(error);
+      if (!closed) {
+        handlers.onError(error);
+        if (mustSucceed && authoritativeRetryTimer === null) {
+          authoritativeRetryTimer = window.setTimeout(() => {
+            authoritativeRetryTimer = null;
+            void poll(true);
+          }, 3000);
+        }
+      }
     } finally {
       authoritativeReadInFlight = false;
       if (authoritativeReadQueued && !closed) {
+        const queuedMustSucceed = authoritativeReadMustSucceed;
         authoritativeReadQueued = false;
-        void poll();
+        authoritativeReadMustSucceed = false;
+        void poll(queuedMustSucceed);
       }
     }
   };
@@ -104,7 +123,7 @@ export function connectJobEvents(
       const data = JSON.parse(event.data) as JobEventData;
       handlers.onEvent(data);
       if (data.status === "waiting_input") {
-        void poll();
+        void poll(true);
       }
       if (TERMINAL_STATUSES.has(data.status)) {
         close();

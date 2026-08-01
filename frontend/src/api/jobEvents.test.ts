@@ -98,4 +98,26 @@ describe("job event adapter", () => {
     await vi.waitFor(() => expect(onJob).toHaveBeenLastCalledWith(waitingJob));
     subscription.close();
   });
+
+  it("retries a failed waiting-input authoritative read until it succeeds", async () => {
+    vi.useFakeTimers();
+    const getAuthoritativeJob = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary GET failure"))
+      .mockResolvedValueOnce(waitingJob);
+    const onJob = vi.fn();
+    const subscription = connectJobEvents("/events", {
+      getAuthoritativeJob, onJob, onEvent: vi.fn(), onConnection: vi.fn(), onError: vi.fn(),
+    }, FakeEventSource as unknown as typeof EventSource);
+
+    FakeEventSource.latest.emit("waiting_input", {
+      job_id: "job-1", revision: 3, attempt: 1, status: "waiting_input", stage: "waiting_input",
+      emitted_at: "2026-08-01T00:00:00Z", questions: [], result: null, error: null,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(getAuthoritativeJob).toHaveBeenCalledTimes(2);
+    expect(onJob).toHaveBeenCalledWith(waitingJob);
+    subscription.close();
+    vi.useRealTimers();
+  });
 });

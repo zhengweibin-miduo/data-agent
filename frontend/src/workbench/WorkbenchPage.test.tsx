@@ -285,12 +285,17 @@ describe("workbench chat", () => {
   });
 
   it("preserves an answer edited while an AI draft is pending", async () => {
-    window.history.replaceState(null, "", "/workbench/job-1");
-    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
     let resolveChat!: (response: { message: { uid: string; content: string } }) => void;
     vi.mocked(sendChatTurn).mockImplementation(() => new Promise((resolve) => { resolveChat = resolve; }));
     render(<WorkbenchPage />);
 
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(connectJobEvents).toHaveBeenCalledOnce());
+    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob());
     const answer = await screen.findByLabelText("第二轮问题");
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE orders (id INT);" } });
     fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
@@ -303,11 +308,35 @@ describe("workbench chat", () => {
     expect(answer).toHaveValue("人工填写的业务依据");
   });
 
+  it("uses the submitted DDL snapshot when drafting clarification after edits", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
+    vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "草稿" } });
+    render(<WorkbenchPage />);
+    const submittedDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(connectJobEvents).toHaveBeenCalledOnce());
+    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob());
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE changed (id INT);" } });
+    fireEvent.click(await screen.findByRole("button", { name: "让 AI 起草" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+
+    await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
+    expect(vi.mocked(sendChatTurn).mock.calls[0]?.[1].ddl_context.ddl).toBe(submittedDDL);
+  });
+
   it("blocks clarification submission while an AI draft is pending", async () => {
-    window.history.replaceState(null, "", "/workbench/job-1");
-    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
     vi.mocked(sendChatTurn).mockImplementation(() => new Promise(() => undefined));
     render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(connectJobEvents).toHaveBeenCalledOnce());
+    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob());
     const answer = await screen.findByLabelText("第二轮问题");
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE orders (id INT);" } });
     fireEvent.change(answer, { target: { value: "人工业务依据" } });

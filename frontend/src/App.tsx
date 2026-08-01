@@ -11,6 +11,7 @@ function currentView(): View {
 
 export function App() {
   const [view, setView] = useState<View>(currentView);
+  const [routePath, setRoutePath] = useState(window.location.pathname);
   const [unsavedWorkbench, setUnsavedWorkbench] = useState(false);
   const [workbenchNavigationBlocked, setWorkbenchNavigationBlocked] = useState(false);
   const viewRef = useRef(view);
@@ -44,6 +45,7 @@ export function App() {
         return;
       }
       setView(next);
+      setRoutePath(window.location.pathname);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -69,8 +71,10 @@ export function App() {
       workbenchPathRef.current = window.location.pathname;
     }
     const path = next === "knowledge" ? "/knowledge" : workbenchPathRef.current;
+    if (path === window.location.pathname) return;
     window.history.pushState(null, "", path);
     setView(next);
+    setRoutePath(path);
   };
 
   const handleUnsavedWorkbenchChange = (unsaved: boolean) => {
@@ -93,7 +97,7 @@ export function App() {
           <a href="/knowledge" aria-current={view === "knowledge" ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate("knowledge"); }}>知识记忆</a>
         </nav>
       </header>
-      <main id="main-content" tabIndex={-1}>{view === "knowledge" ? <KnowledgePage /> : <WorkbenchPage onUnsavedChange={handleUnsavedWorkbenchChange} onNavigationBlockChange={setWorkbenchNavigationBlocked} />}</main>
+      <main id="main-content" tabIndex={-1}>{view === "knowledge" ? <KnowledgePage /> : <WorkbenchPage key={routePath} onUnsavedChange={handleUnsavedWorkbenchChange} onNavigationBlockChange={setWorkbenchNavigationBlocked} />}</main>
     </div>
   );
 }

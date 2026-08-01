@@ -140,4 +140,28 @@ describe("application shell", () => {
     expect(window.location.pathname).toBe("/workbench");
     expect(screen.getByRole("heading", { name: "把物理结构织成语义" })).toBeInTheDocument();
   });
+
+  it("remounts the workbench when history changes its task coordinate", async () => {
+    vi.mocked(getJob).mockResolvedValue({
+      job_id: "job-2", source: "warehouse-2", status: "running", revision: 1, attempt: 1,
+      question_round: 0, question_set_id: null, questions: null, result: null, error: null,
+    });
+    window.history.replaceState(null, "", "/workbench/job-1");
+    render(<App />);
+    await waitFor(() => expect(getJob).toHaveBeenCalledWith("job-1"));
+
+    window.history.replaceState(null, "", "/workbench/job-2");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    await waitFor(() => expect(getJob).toHaveBeenCalledWith("job-2"));
+  });
+
+  it("does not create history when the active workbench navigation already targets the URL", () => {
+    const pushState = vi.spyOn(window.history, "pushState");
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
+
+    expect(pushState).not.toHaveBeenCalled();
+  });
 });

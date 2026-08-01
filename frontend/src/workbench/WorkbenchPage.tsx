@@ -89,6 +89,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   const currentJobId = useRef<string | null>(restoredJob.current);
   const mounted = useRef(true);
   const submitController = useRef<AbortController | null>(null);
+  const submittedDDLContext = useRef<ChatAttempt["ddlContext"] | null>(null);
 
   const inputFingerprint = `${source}\n${ddl}`;
   const ddlBytes = new TextEncoder().encode(ddl).length;
@@ -225,6 +226,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       setStage("queued");
       setJob(pending);
       setSubmittedFingerprint(inputFingerprint);
+      submittedDDLContext.current = { source: source.trim(), dialect: "mysql", ddl };
       window.history.replaceState(null, "", `/workbench/${encodeURIComponent(accepted.job_id)}`);
       setConnection("任务已受理，正在连接事件流");
       watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
@@ -313,10 +315,15 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     event.preventDefault();
     const content = chatInput.trim();
     if (!content || !source.trim() || !ddl.trim() || busy !== null || failedChat) return;
+    const ddlContext = draftQuestion ? submittedDDLContext.current : null;
+    if (draftQuestion && !ddlContext) {
+      setError("当前任务缺少已提交的 DDL 上下文，无法起草澄清答案。");
+      return;
+    }
     void sendChatAttempt({
       turnUid: randomId(), content, draftQuestion,
       draftAnswerSnapshot: draftQuestion ? (answers[draftQuestion.question_id] ?? "") : null,
-      ddlContext: { source: source.trim(), dialect: "mysql", ddl },
+      ddlContext: ddlContext ?? { source: source.trim(), dialect: "mysql", ddl },
     }, true);
   };
 
