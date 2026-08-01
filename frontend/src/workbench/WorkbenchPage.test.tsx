@@ -393,6 +393,27 @@ describe("workbench chat", () => {
     await waitFor(() => expect(getJob).toHaveBeenCalledWith(submissionId));
   });
 
+  it("keeps a legacy submission non-replayable after a full document reload", async () => {
+    const submissionId = "11111111-1111-4111-8111-111111111111";
+    sessionStorage.setItem("schema-loom-pending-submission", JSON.stringify({
+      submissionId,
+      startedAt: 0,
+      replayable: false,
+    }));
+    window.history.replaceState(null, "", `/workbench/${submissionId}`);
+    vi.mocked(getJob).mockRejectedValue(new ApiError(404, {
+      error: { code: "job_not_found", retryable: false },
+    }));
+
+    render(<WorkbenchPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("旧版后端的任务受理结果未知");
+    expect(screen.getByLabelText("数据源")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "生成语义 →" })).toBeDisabled();
+    expect(sessionStorage.getItem("schema-loom-pending-submission")).not.toBeNull();
+    expect(getJob).toHaveBeenCalledOnce();
+  });
+
   it("accepts a task submission after StrictMode replays effects", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "strict-job", status: "pending", status_url: "/jobs/strict-job", events_url: null });

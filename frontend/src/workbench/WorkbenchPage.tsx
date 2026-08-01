@@ -48,6 +48,7 @@ let pendingSubmissionAttempt: SubmissionAttempt | null = null;
 interface PersistedSubmissionAttempt {
   submissionId: string;
   startedAt: number;
+  replayable: boolean;
 }
 
 function readPersistedSubmissionAttempt(): PersistedSubmissionAttempt | null {
@@ -56,7 +57,11 @@ function readPersistedSubmissionAttempt(): PersistedSubmissionAttempt | null {
   try {
     const parsed = JSON.parse(raw) as Partial<PersistedSubmissionAttempt>;
     return typeof parsed.submissionId === "string" && typeof parsed.startedAt === "number"
-      ? { submissionId: parsed.submissionId, startedAt: parsed.startedAt }
+      ? {
+        submissionId: parsed.submissionId,
+        startedAt: parsed.startedAt,
+        replayable: typeof parsed.replayable === "boolean" ? parsed.replayable : true,
+      }
       : null;
   } catch {
     sessionStorage.removeItem(PENDING_SUBMISSION_KEY);
@@ -64,8 +69,10 @@ function readPersistedSubmissionAttempt(): PersistedSubmissionAttempt | null {
   }
 }
 
-function persistSubmissionAttempt(submissionId: string): void {
-  sessionStorage.setItem(PENDING_SUBMISSION_KEY, JSON.stringify({ submissionId, startedAt: Date.now() }));
+function persistSubmissionAttempt(submissionId: string, replayable = true): void {
+  const previous = readPersistedSubmissionAttempt();
+  const startedAt = previous?.submissionId === submissionId ? previous.startedAt : Date.now();
+  sessionStorage.setItem(PENDING_SUBMISSION_KEY, JSON.stringify({ submissionId, startedAt, replayable }));
 }
 
 function clearPersistedSubmissionAttempt(submissionId: string): void {
@@ -229,6 +236,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
             const notFound = cause instanceof ApiError && cause.status === 404;
             if (notFound) {
               const persisted = persistedSubmission.current;
+              if (persisted?.submissionId === jobId && !persisted.replayable) {
+                setError("旧版后端的任务受理结果未知，不能安全重复提交；请由管理员查询任务状态或升级后端。");
+                return;
+              }
               if (persisted?.submissionId === jobId
                 && Date.now() - persisted.startedAt < ACCEPTANCE_RECONCILIATION_WINDOW_MS) {
                 await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelay));
@@ -329,6 +340,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       if (cause instanceof ApiError && cause.code === "legacy_submission_timeout"
         && pendingSubmissionAttempt?.submissionId === submissionId) {
         pendingSubmissionAttempt.replayable = false;
+        persistSubmissionAttempt(submissionId, false);
       }
       if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500
         && cause.status !== 408 && !cause.retryable
