@@ -31,6 +31,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   `request_timeout` error. Long-running chat turns use an explicit budget that
   covers the server's sequential readiness, repair, generation, and retry calls.
 - DDL submission carries a client-generated UUID that is also the server job ID.
+  Send that coordinate in the optional `Idempotency-Key` header while keeping
+  the JSON body compatible with backend versions that predate the coordinate;
+  such backends ignore the header and continue to accept the request.
   A timed-out acceptance request replays that coordinate, and the server returns
   the original job only when its source and DDL match the first submission.
   Keep that coordinate outside the individual request call until acceptance is
@@ -98,6 +101,7 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   recoverable contract errors.
   Validate memory history pagination and every event's identifiers, type,
   contents, actor, and timestamp before rendering record details.
+  Validate a memory detail before enabling correction or deletion controls.
 
 ### 7. Wrong vs Correct
 

@@ -143,6 +143,7 @@ async def _test_api() -> None:
                 headers={
                     "Origin": allowed_origin,
                     "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "Idempotency-Key",
                 },
             )
             check_equal("_test_api 检查点 2", allowed.status_code, 200)
@@ -150,6 +151,12 @@ async def _test_api() -> None:
                 "_test_api 检查点 3",
                 allowed.headers["access-control-allow-origin"],
                 allowed_origin,
+            )
+            check_condition(
+                "_test_api 检查点 3a",
+                "idempotency-key"
+                in allowed.headers["access-control-allow-headers"].lower(),
+                expected="CORS 允许任务幂等坐标头",
             )
             denied = await client.options(
                 "/api/v1/metadata/ddl-jobs",

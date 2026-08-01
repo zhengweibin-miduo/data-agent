@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJob, getMemoryHistory, previewDDL, searchMemories, submitDDL } from "./dataAgent";
+import { getJob, getMemory, getMemoryHistory, previewDDL, searchMemories, submitDDL } from "./dataAgent";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -48,10 +48,32 @@ describe("DDL job submission", () => {
 
     await expect(request).resolves.toMatchObject({ job_id: "11111111-1111-4111-8111-111111111111" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.map((call) => call[1]?.body)).toEqual([
-      expect.stringContaining("11111111-1111-4111-8111-111111111111"),
-      expect.stringContaining("11111111-1111-4111-8111-111111111111"),
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)))).toEqual([
+      { source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)" },
+      { source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)" },
     ]);
+    expect(fetchMock.mock.calls.map((call) => call[1]?.headers)).toEqual([
+      { "Content-Type": "application/json", "Idempotency-Key": "11111111-1111-4111-8111-111111111111" },
+      { "Content-Type": "application/json", "Idempotency-Key": "11111111-1111-4111-8111-111111111111" },
+    ]);
+  });
+
+  it("keeps the request body compatible with backends that forbid unknown fields", async () => {
+    const fetchMock = vi.fn().mockImplementation((_url: string, options: RequestInit) => {
+      const body = JSON.parse(String(options.body)) as Record<string, unknown>;
+      if ("submission_id" in body) {
+        return Promise.resolve(new Response(JSON.stringify({ detail: "extra_forbidden" }), { status: 422 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({
+        job_id: "legacy-job", status: "pending", status_url: "/api/v1/metadata/ddl-jobs/legacy-job", events_url: null,
+      }), { status: 202, headers: { "Content-Type": "application/json" } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(submitDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)",
+      submission_id: "11111111-1111-4111-8111-111111111111",
+    })).resolves.toMatchObject({ job_id: "legacy-job" });
   });
 });
 
@@ -205,5 +227,32 @@ describe("memory history", () => {
     })));
 
     await expect(getMemoryHistory("memory-1")).resolves.toEqual(validPage);
+  });
+});
+
+describe("memory detail", () => {
+  const validMemory = {
+    uid: "memory-1", source: "dw", category: "ddl.semantic", memory_key: "orders",
+    memory_text: "订单事实表", content: { table: "orders" }, record_version: 1, status: "active",
+  };
+
+  it.each([{}, { ...validMemory, uid: undefined }, { ...validMemory, content: null }, { ...validMemory, record_version: "1" }])(
+    "rejects invalid successful detail DTOs",
+    async (payload) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })));
+
+      await expect(getMemory("memory-1")).rejects.toMatchObject({
+        status: 502, code: "invalid_response", stage: "response", retryable: true,
+      });
+    },
+  );
+
+  it("accepts a complete memory detail DTO", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(validMemory), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    await expect(getMemory("memory-1")).resolves.toEqual(validMemory);
   });
 });

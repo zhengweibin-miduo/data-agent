@@ -199,7 +199,7 @@ def create_app() -> FastAPI:
         ],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "Idempotency-Key"],
     )
     # 步骤二：集中注册安全异常投影和业务路由，保持传输层入口只有一个组合根。
     app.add_middleware(RequestLoggingContextMiddleware)

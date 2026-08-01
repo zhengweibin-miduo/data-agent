@@ -169,9 +169,14 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
       && typeof candidate.status_url === "string" && candidate.status_url.length > 0
       && (candidate.events_url === null || typeof candidate.events_url === "string");
   };
+  const { submission_id: submissionId, ...legacyCompatibleInput } = input;
   const submit = () => apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
     method: "POST",
-    body: JSON.stringify(input),
+    // Keep the JSON body compatible with backend versions released before
+    // client-coordinated acceptance; newer backends read the coordinate from
+    // this optional header while older backends safely ignore it.
+    body: JSON.stringify(legacyCompatibleInput),
+    headers: { "Idempotency-Key": submissionId },
     signal,
     validateResponse: isJobAccepted,
   });
@@ -228,7 +233,9 @@ export const searchMemories = (source: string, query: string): Promise<MemorySea
   });
 
 export const getMemory = (uid: string): Promise<MemoryDetail> =>
-  apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}`);
+  apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}`, {
+    validateResponse: isMemoryDetail,
+  });
 
 export const getMemoryHistory = (uid: string): Promise<MemoryHistoryPage> =>
   apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}/history`, {

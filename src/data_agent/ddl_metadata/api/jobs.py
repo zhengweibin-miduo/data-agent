@@ -1,6 +1,6 @@
 """DDL 元数据任务 HTTP 路由。"""
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Header, Request, status
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
@@ -26,7 +26,15 @@ def _jobs(request: Request) -> DDLJobStore:
     response_model=DDLJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def submit_job(body: DDLJobRequest, request: Request) -> DDLJobAccepted:
+async def submit_job(
+    body: DDLJobRequest,
+    request: Request,
+    submission_id: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    ),
+) -> DDLJobAccepted:
     """持久受理任务并返回异步查询入口。
 
     ``202`` 表示任务状态、来源租约与 dispatch outbox 已原子写入 Redis，
@@ -34,6 +42,8 @@ async def submit_job(body: DDLJobRequest, request: Request) -> DDLJobAccepted:
     """
     # 步骤一：先由任务门面原子建立权威状态、来源租约与 dispatch outbox，
     # 只有持久受理成功后才继续构造 HTTP 202 响应。
+    if submission_id is not None:
+        body = body.model_copy(update={"submission_id": submission_id})
     record = await _jobs(request).submit(body)
     # 步骤二：记录不含原始 DDL 的安全受理坐标，供异步执行链路关联排查。
     logger.info("DDL 元数据任务已受理，worker 将异步执行并发布公开进度")
