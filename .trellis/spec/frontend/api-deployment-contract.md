@@ -90,6 +90,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   retryable `invalid_response` contract error before releasing recovery state.
   This includes authoritative `JobRecord` GET responses: an invalid shape must
   remain a failed read so `waiting_input` recovery keeps retrying.
+  Validate `DDLPreview` and its nested table, column, relationship, and count
+  fields before updating canvas state so an incompatible response cannot crash
+  the workbench.
 
 ### 7. Wrong vs Correct
 

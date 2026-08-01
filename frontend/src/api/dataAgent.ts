@@ -21,6 +21,52 @@ const isRecord = (payload: unknown): payload is Record<string, unknown> =>
 const isNullable = (payload: unknown, validate: (value: unknown) => boolean): boolean =>
   payload === null || validate(payload);
 
+const isStringArray = (payload: unknown): payload is string[] =>
+  Array.isArray(payload) && payload.every((item) => typeof item === "string");
+
+const isPhysicalColumn = (payload: unknown): boolean => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.id === "string"
+    && typeof payload.name === "string"
+    && typeof payload.data_type === "string"
+    && isNullable(payload.comment, (value) => typeof value === "string")
+    && typeof payload.nullable === "boolean"
+    && isNullable(
+      payload.structural_role,
+      (value) => value === "primary_key" || value === "foreign_key",
+    );
+};
+
+const isPhysicalTable = (payload: unknown): boolean => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.id === "string"
+    && isNullable(payload.schema_name, (value) => typeof value === "string")
+    && typeof payload.name === "string"
+    && typeof payload.qualified_name === "string"
+    && isNullable(payload.comment, (value) => typeof value === "string")
+    && Array.isArray(payload.columns) && payload.columns.every(isPhysicalColumn)
+    && isStringArray(payload.primary_key);
+};
+
+const isPreviewRelationship = (payload: unknown): boolean => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.source_table_id === "string"
+    && typeof payload.source_column_id === "string"
+    && typeof payload.target_table_id === "string"
+    && typeof payload.target_column_id === "string"
+    && typeof payload.target_table_name === "string"
+    && typeof payload.target_column_name === "string";
+};
+
+const isDDLPreview = (payload: unknown): payload is DDLPreview => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.source === "string"
+    && Array.isArray(payload.tables) && payload.tables.every(isPhysicalTable)
+    && Array.isArray(payload.relationships) && payload.relationships.every(isPreviewRelationship)
+    && Number.isInteger(payload.table_count) && Number(payload.table_count) >= 0
+    && Number.isInteger(payload.column_count) && Number(payload.column_count) >= 0;
+};
+
 const isMetricQuestion = (payload: unknown): boolean => {
   if (!isRecord(payload)) return false;
   return typeof payload.question_id === "string" && payload.question_id.length > 0
@@ -69,6 +115,7 @@ export const previewDDL = (input: DDLInput): Promise<DDLPreview> =>
   apiRequest("/api/v1/metadata/ddl-preview", {
     method: "POST",
     body: JSON.stringify(input),
+    validateResponse: isDDLPreview,
   });
 
 export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal): Promise<JobAccepted> {

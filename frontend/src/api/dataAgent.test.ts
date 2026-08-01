@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJob, submitDDL } from "./dataAgent";
+import { getJob, previewDDL, submitDDL } from "./dataAgent";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -52,6 +52,60 @@ describe("DDL job submission", () => {
       expect.stringContaining("11111111-1111-4111-8111-111111111111"),
       expect.stringContaining("11111111-1111-4111-8111-111111111111"),
     ]);
+  });
+});
+
+describe("DDL preview", () => {
+  const validPreview = {
+    source: "dw",
+    tables: [{
+      id: "table-1",
+      schema_name: null,
+      name: "orders",
+      qualified_name: "orders",
+      comment: null,
+      columns: [{
+        id: "column-1",
+        name: "id",
+        data_type: "INT",
+        comment: null,
+        nullable: false,
+        structural_role: "primary_key",
+      }],
+      primary_key: ["id"],
+    }],
+    relationships: [],
+    table_count: 1,
+    column_count: 1,
+  };
+
+  it.each([
+    {},
+    { ...validPreview, relationships: undefined },
+    { ...validPreview, table_count: "1" },
+    { ...validPreview, tables: [{ ...validPreview.tables[0], columns: "invalid" }] },
+  ])("rejects invalid successful preview DTOs", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(previewDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE orders(id INT PRIMARY KEY)",
+    })).rejects.toMatchObject({
+      status: 502, code: "invalid_response", stage: "response", retryable: true,
+    });
+  });
+
+  it("accepts a complete preview DTO", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(validPreview), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(previewDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE orders(id INT PRIMARY KEY)",
+    })).resolves.toEqual(validPreview);
   });
 });
 
