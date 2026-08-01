@@ -42,8 +42,10 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   A successful health response must contain `status: "ok"` and either omit the
   legacy capability map or provide a boolean idempotency capability; malformed
   successful responses are inconclusive and must block submission.
-  A timed-out acceptance request replays that coordinate, and the server returns
-  the original job only when its source and DDL match the first submission.
+  A timed-out acceptance request replays that coordinate only when the backend
+  advertised idempotency support, and the server returns the original job only
+  when its source and DDL match the first submission. A legacy submission must
+  remain uncertain after timeout rather than issuing a second non-idempotent POST.
   Keep that coordinate outside the individual request call until acceptance is
   confirmed, including across repeated timeouts and SPA workbench remounts.
   Do not replace an unconfirmed coordinate when editable input changes; recover

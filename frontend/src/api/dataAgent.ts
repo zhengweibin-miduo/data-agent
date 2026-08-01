@@ -232,6 +232,10 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
     return await submit();
   } catch (error) {
     if (!(error instanceof ApiError) || error.code !== "request_timeout" || signal?.aborted) throw error;
+    // A legacy backend creates its own job ID, so replaying a timed-out request
+    // cannot recover the original acceptance and may instead collide with its
+    // source lease. Only advertised idempotent submissions are safe to replay.
+    if (!idempotencySupported) throw error;
     return submit();
   }
 }

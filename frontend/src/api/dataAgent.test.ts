@@ -143,6 +143,32 @@ describe("DDL job submission", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
   });
+
+  it("does not replay a timed-out submission against a legacy backend", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockImplementationOnce((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = submitDDL({
+      source: "dw",
+      dialect: "mysql",
+      ddl: "CREATE TABLE t(id INT)",
+      submission_id: "11111111-1111-4111-8111-111111111111",
+    });
+    const rejection = expect(request).rejects.toMatchObject({ code: "request_timeout" });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
+  });
 });
 
 describe("conversation creation", () => {
