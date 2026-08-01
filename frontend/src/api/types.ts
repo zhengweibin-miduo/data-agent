@@ -30,6 +30,10 @@ export interface DDLInput {
   ddl: string;
 }
 
+export interface DDLSubmissionInput extends DDLInput {
+  submission_id: string;
+}
+
 export interface PhysicalColumn {
   id: string;
   name: string;

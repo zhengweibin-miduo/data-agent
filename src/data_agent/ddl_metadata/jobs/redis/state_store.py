@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import cast
 
 from redis.asyncio import Redis
@@ -33,7 +34,7 @@ class RedisJobStateStore:
         job_id: str,
         request: DDLJobRequest,
         now: datetime,
-    ) -> bool:
+    ) -> int:
         """原子写入来源租约、任务 Hash 和 dispatch outbox。"""
         # 步骤一：把来源租约、权威 Hash 与 dispatch outbox 交给同一 Lua 脚本提交，
         # 任一键无法建立时都不留下部分受理状态。
@@ -51,11 +52,14 @@ class RedisJobStateStore:
                 now.isoformat(),
                 app_config.llm.graph_version,
                 request.ddl,
+                sha256(
+                    f"{request.source}\0{request.dialect}\0{request.ddl}".encode()
+                ).hexdigest(),
                 str(now.timestamp()),
             )
         )
-        # 步骤二：把 Lua 数值结果收敛为是否成功建立完整受理边界。
-        return int(accepted) == 1
+        # 步骤二：保留新建、幂等重放和冲突结果，供应用门面准确投影。
+        return int(accepted)
 
     async def get(self, job_id: str) -> JobRecord:
         """读取公开安全任务投影。"""

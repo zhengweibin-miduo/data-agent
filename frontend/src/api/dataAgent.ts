@@ -1,9 +1,10 @@
-import { apiRequest, CHAT_REQUEST_TIMEOUT_MS } from "./client";
+import { ApiError, apiRequest, CHAT_REQUEST_TIMEOUT_MS } from "./client";
 import type {
   ChatTurnResponse,
   ConversationCreated,
   DDLInput,
   DDLPreview,
+  DDLSubmissionInput,
   JobAccepted,
   JobRecord,
   MemoryDetail,
@@ -18,12 +19,19 @@ export const previewDDL = (input: DDLInput): Promise<DDLPreview> =>
     body: JSON.stringify(input),
   });
 
-export const submitDDL = (input: DDLInput, signal?: AbortSignal): Promise<JobAccepted> =>
-  apiRequest("/api/v1/metadata/ddl-jobs", {
+export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal): Promise<JobAccepted> {
+  const submit = () => apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
     method: "POST",
     body: JSON.stringify(input),
     signal,
   });
+  try {
+    return await submit();
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== "request_timeout" || signal?.aborted) throw error;
+    return submit();
+  }
+}
 
 export const getJob = (jobId: string): Promise<JobRecord> =>
   apiRequest(`/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}`);

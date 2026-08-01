@@ -33,7 +33,11 @@ interface ChatAttempt {
   ddlContext: { source: string; dialect: "mysql"; ddl: string };
 }
 
-const randomId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const randomId = () => globalThis.crypto?.randomUUID?.()
+  ?? "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16);
+    return (token === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
 
 function restoredJobId(): string | null {
   const match = window.location.pathname.match(/^\/workbench\/([^/]+)$/);
@@ -193,7 +197,9 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     submitController.current?.abort();
     submitController.current = controller;
     try {
-      const accepted = await submitDDL({ source: source.trim(), dialect: "mysql", ddl }, controller.signal);
+      const accepted = await submitDDL({
+        source: source.trim(), dialect: "mysql", ddl, submission_id: randomId(),
+      }, controller.signal);
       if (!mounted.current || controller.signal.aborted || submitController.current !== controller) return;
       const pending: JobRecord = {
         job_id: accepted.job_id, source: source.trim(), status: "pending", revision: 0,
