@@ -31,6 +31,16 @@ describe("application shell", () => {
     expect(window.location.pathname).toBe("/knowledge");
   });
 
+  it("uses the workbench root when navigating from a directly loaded knowledge page", () => {
+    window.history.replaceState(null, "", "/knowledge");
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
+
+    expect(window.location.pathname).toBe("/workbench");
+    expect(screen.getByRole("heading", { name: "把物理结构织成语义" })).toBeInTheDocument();
+  });
+
   it("keeps the workbench open when the user cancels unsaved DDL navigation", () => {
     vi.mocked(window.confirm).mockReturnValue(false);
     render(<App />);

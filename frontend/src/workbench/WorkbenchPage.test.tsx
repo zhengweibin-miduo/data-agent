@@ -247,6 +247,42 @@ describe("workbench chat", () => {
     expect(screen.getByRole("button", { name: "发送 →" })).toBeEnabled();
   });
 
+  it("preserves an answer edited while an AI draft is pending", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    let resolveChat!: (response: { message: { uid: string; content: string } }) => void;
+    vi.mocked(sendChatTurn).mockImplementation(() => new Promise((resolve) => { resolveChat = resolve; }));
+    render(<WorkbenchPage />);
+
+    const answer = await screen.findByLabelText("第二轮问题");
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE orders (id INT);" } });
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+    await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
+    fireEvent.change(answer, { target: { value: "人工填写的业务依据" } });
+    resolveChat({ message: { uid: "assistant-draft", content: "晚到的 AI 草稿" } });
+
+    await screen.findByText("晚到的 AI 草稿");
+    expect(answer).toHaveValue("人工填写的业务依据");
+  });
+
+  it("keeps chat disabled while another request is busy", async () => {
+    let resolvePreview!: (preview: { source: string; tables: []; relationships: []; table_count: number; column_count: number }) => void;
+    vi.mocked(previewDDL).mockImplementation(() => new Promise((resolve) => { resolvePreview = resolve; }));
+    render(<WorkbenchPage />);
+    const chatInput = screen.getByLabelText("补充业务背景或询问当前 DDL");
+    fireEvent.change(chatInput, { target: { value: "解释订单表" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+
+    expect(chatInput).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送 →" })).toBeDisabled();
+    fireEvent.submit(chatInput.closest("form")!);
+    expect(sendChatTurn).not.toHaveBeenCalled();
+    resolvePreview({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    await waitFor(() => expect(chatInput).toBeEnabled());
+  });
+
   it("shows the server-aligned source and DDL submission constraints", () => {
     render(<WorkbenchPage />);
 

@@ -14,7 +14,9 @@ export function App() {
   const [unsavedWorkbench, setUnsavedWorkbench] = useState(false);
   const viewRef = useRef(view);
   const unsavedWorkbenchRef = useRef(unsavedWorkbench);
-  const workbenchPathRef = useRef(window.location.pathname);
+  const workbenchPathRef = useRef(
+    window.location.pathname.startsWith("/workbench") ? window.location.pathname : "/workbench",
+  );
 
   viewRef.current = view;
   unsavedWorkbenchRef.current = unsavedWorkbench;

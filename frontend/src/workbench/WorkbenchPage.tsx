@@ -29,6 +29,7 @@ interface ChatAttempt {
   turnUid: string;
   content: string;
   draftQuestion: MetricQuestion | null;
+  draftAnswerSnapshot: string | null;
   ddlContext: { source: string; dialect: "mysql"; ddl: string };
 }
 
@@ -264,7 +265,11 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
         });
       }
       setChatMessages((items) => [...items, { id: response.message.uid ?? randomId(), role: "assistant", content: response.message.content }]);
-      if (attempt.draftQuestion) setAnswers((items) => ({ ...items, [attempt.draftQuestion!.question_id]: response.message.content }));
+      if (attempt.draftQuestion) {
+        setAnswers((items) => items[attempt.draftQuestion!.question_id] === attempt.draftAnswerSnapshot
+          ? { ...items, [attempt.draftQuestion!.question_id]: response.message.content }
+          : items);
+      }
       setDraftQuestion(null);
     } catch (cause) {
       const deterministicClientError = cause instanceof ApiError
@@ -281,9 +286,10 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   const handleChat = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = chatInput.trim();
-    if (!content || !source.trim() || !ddl.trim() || failedChat) return;
+    if (!content || !source.trim() || !ddl.trim() || busy !== null || failedChat) return;
     void sendChatAttempt({
       turnUid: randomId(), content, draftQuestion,
+      draftAnswerSnapshot: draftQuestion ? (answers[draftQuestion.question_id] ?? "") : null,
       ddlContext: { source: source.trim(), dialect: "mysql", ddl },
     }, true);
   };
@@ -324,11 +330,11 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
         </div>
         <form className="chat-form" onSubmit={(event) => void handleChat(event)}>
           <label htmlFor="chat-input">补充业务背景或询问当前 DDL</label>
-          <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={restoringJob || !ddl.trim() || busy === "chat" || Boolean(failedChat)} />
-          <button className="primary-action" type="submit" disabled={restoringJob || !chatInput.trim() || busy === "chat" || Boolean(failedChat)}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
+          <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={restoringJob || !ddl.trim() || busy !== null || Boolean(failedChat)} />
+          <button className="primary-action" type="submit" disabled={restoringJob || !chatInput.trim() || busy !== null || Boolean(failedChat)}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
         </form>
         {failedChat && (
-          <button className="secondary-action chat-retry" type="button" disabled={busy === "chat"} onClick={() => void sendChatAttempt(failedChat, false)}>
+          <button className="secondary-action chat-retry" type="button" disabled={busy !== null} onClick={() => void sendChatAttempt(failedChat, false)}>
             重试上一轮 AI 回复
           </button>
         )}

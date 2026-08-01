@@ -31,3 +31,12 @@
 - Keep the failed chat retry gate only for uncertain or lease-bearing failures.
   Deterministic non-retryable client validation failures must return the inputs
   to an editable state so the user can correct the frozen DDL context.
+- Initialize the remembered workbench route only from `/workbench` paths; a
+  directly loaded non-workbench view must navigate to `/workbench`, not reuse
+  its own pathname as a workbench coordinate.
+- Do not let a late AI clarification draft overwrite an answer changed after
+  the request began. Apply the draft only while the target answer still matches
+  the request-time snapshot.
+- Workbench operations share one interaction gate. Every handler and control
+  must reject a new operation while another request owns that gate so one
+  request cannot release or replace another request's busy state.
