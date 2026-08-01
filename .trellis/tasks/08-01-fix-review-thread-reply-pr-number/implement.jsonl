@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"遵循结构化审查回复 CLI、幂等与必需自检契约"}
+{"file":".trellis/tasks/08-01-fix-review-thread-reply-pr-number/research/cli-contract.md","reason":"使用已核验的版本错配根因、PR 证据和四线程预期结果"}
