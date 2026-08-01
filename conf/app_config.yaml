@@ -63,8 +63,8 @@ api:
   host: 127.0.0.1
   port: 8000
   cors_origins:
-    - http://127.0.0.1:3000
-    - http://localhost:3000
+    - http://127.0.0.1:5173
+    - http://localhost:5173
   max_ddl_bytes: 262144
   max_tables: 50
   max_columns: 500

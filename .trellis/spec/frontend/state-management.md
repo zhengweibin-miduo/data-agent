@@ -3,8 +3,9 @@
 ## Ownership
 
 - The URL owns the active view, known `job_id`, memory query, and selected memory.
-- The module-level `state` object owns only the current page session: DDL text,
-  job projection, SSE/poll handles, chat retry coordinates, and selected memory.
+- React state owns only the current page session: DDL text, job projection,
+  chat retry coordinates, answers, and selected memory. Refs own SSE handles and
+  the active job identity.
 - `sessionStorage` keeps the current conversation UID. `localStorage` keeps the
   local user ID. Neither stores DDL, model credentials, or server authority.
 - Redis/MySQL and GET responses remain authoritative for jobs, conversations,
@@ -16,6 +17,8 @@
   the persisted active turn busy.
 - A `waiting_input` SSE event clears submit coordinates and triggers GET of the
   current `JobRecord` before rendering answer controls.
-- Close old EventSource, interval, and timeout handles before starting fallback
-  updates. Terminal jobs stop all update handles.
+- Keep native EventSource alive on network `error` so the browser can reconnect
+  with `Last-Event-ID`; perform one authoritative GET while waiting. Switch to
+  polling only when EventSource is unavailable, event payload parsing fails, or
+  the server emits `stream_error`. Terminal jobs stop every handle.
 - Keep unsaved-DDL navigation protection while the input view is active.

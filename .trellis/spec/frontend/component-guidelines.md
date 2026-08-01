@@ -2,8 +2,9 @@
 
 ## Current Scope
 
-There is no component framework. `index.html` owns stable page structure and
-`app.js` creates repeated task, chat, and memory records with native DOM APIs.
+React components live under `frontend/src`. `App.tsx` owns navigation;
+`WorkbenchPage` and `KnowledgePage` own feature orchestration; smaller components
+render lineage and public task state.
 
 ## Rules
 
@@ -17,4 +18,5 @@ There is no component framework. `index.html` owns stable page structure and
   the native confirmation dialog.
 - Structure labels such as `DDL`, `TRACE`, and `RECORD` describe real content;
   do not add decorative sequence numbers.
-- Build user-provided content with `textContent`, never `innerHTML`.
+- Render user-provided content as React text children; never use
+  `dangerouslySetInnerHTML` for API or user content.
