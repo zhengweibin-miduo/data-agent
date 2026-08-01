@@ -54,15 +54,16 @@ Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/w
 
 仅当任务明确涉及项目架构、源码根目录、模块职责、依赖方向、领域模型或跨端契约时应用本节。开始架构判断前必须先核验真实仓库结构、依赖、请求流和数据流；下列 Skill 按各自触发条件使用，并非每次全部执行。多个环节同时适用时按以下顺序，且不得以局部调用的名义跳过 Skill 自身规定的交付物或停止点：
 
-1. **完整蓝图**：仅当任务要求产出完整项目架构蓝图或同等范围的架构参考文档时，使用 `architecture-blueprint-generator`；按照其配置分析技术栈、结构、依赖、数据流和扩展方式，并生成对应的完整蓝图与所需图示。普通的局部架构取证直接基于仓库证据完成，不触发该 Skill。
+1. **完整蓝图**：仅当任务要求产出完整项目架构蓝图或同等范围的架构参考文档时，先使用 `codebase-onboarding` 的 Phase 1（Reconnaissance）与 Phase 2（Architecture Mapping）核验技术栈、结构、依赖、请求流和数据流，再使用 `codebase-design` 明确模块边界，并按需使用 `baoyu-diagram` 生成图示；不得执行 `codebase-onboarding` 的后续阶段或生成 onboarding artifacts。普通的局部架构取证直接基于仓库证据完成，不触发该组合。
 2. **领域建模**：所有相关任务先读取根目录 `CONTEXT.md` 作为统一语言；仅当任务需要澄清、改变或新增领域术语、模型或上下文关系时，使用 `domain-modeling`，在结论形成时按该 Skill 立即更新 `CONTEXT.md`，并只在满足其条件时记录 ADR。只消费既有术语不算使用该 Skill。DTO、ORM 模型、外部服务响应和生成的契约类型不得代替领域模型。
-3. **后端模式设计**：仅当设计新后端服务或模块、按 bounded context 实质重构单体、实施 DDD/Ports and Adapters，或排查跨层依赖环时，使用 `architecture-patterns`；产出清晰的层次、端口/适配器接口、依赖规则和测试边界，不宣称现有代码已经全面满足严格 DDD。
+3. **后端模式设计**：仅当设计新后端服务或模块、按 bounded context 实质重构单体、实施 DDD/Ports and Adapters，或排查跨层依赖环时，使用 `codebase-design` 评估 module、interface、seam、adapter、leverage 与 locality；产出清晰的层次、端口/适配器接口、依赖规则和测试边界，不宣称现有代码已经全面满足严格 DDD。
 4. **深模块评估**：`improve-codebase-architecture` 禁止自动触发；仅当用户明确要求执行该 Skill 或进行其定义的架构改进扫描时使用。调用后必须先读取 `CONTEXT.md` 与相关 ADR，并使用 `codebase-design` 的 module、interface、depth、seam、adapter、leverage、locality 词汇；随后按 Skill 生成仓库外的临时 HTML 候选报告并等待用户选择，再进入 grilling。它不是自动重构器。未请求该扫描时，不强制生成 HTML 报告，可在当前任务范围内直接给出有证据的架构判断。
 
 源码根目录按所有权隔离：
 
-- `frontend/` 是 React/Vite/TypeScript 前端应用源码、静态资源、构建/部署配置和前端测试的唯一长期所有者。
-- `src/data_agent/` 是 Python 后端源码、运行入口和后端业务能力的唯一长期所有者；不得在其中新增或恢复前端业务源码。迁移中的存量前端文件不构成继续混放的先例。
+- 当前框架无关前端迁移完成前，`src/data_agent/frontend/` 仍是前端源码与运行时静态资源的唯一所有者，并继续由 FastAPI 挂载和随 Python 包分发；在此期间前端修改必须遵守 `.trellis/spec/frontend/`，不得提前写入尚未接入运行时的根目录 `frontend/`。
+- 只有 React/Vite/TypeScript 前端迁移、FastAPI 静态资源挂载切换、构建部署与测试路径调整在同一变更中完成并验证后，根目录 `frontend/` 才成为前端应用源码、静态资源、构建/部署配置和前端测试的唯一长期所有者。
+- 除迁移完成前由上一条明确保留的 `src/data_agent/frontend/` 外，`src/data_agent/` 是 Python 后端源码、运行入口和后端业务能力的唯一长期所有者；迁移完成后不得在其中新增或恢复前端业务源码。
 - `contracts/` 为可选目录，仅在需要时承载技术中立的 OpenAPI、JSON Schema 等契约源或生成配置，不得承载前端或后端业务源码。
 - 前端不得直接导入 `src/data_agent/` 中的 Python 源码、ORM 模型或内部 DTO；后端不得依赖 `frontend/` 的组件、状态模型或构建产物表达业务行为。跨端交互只能通过 HTTP、SSE 等运行时协议及显式契约完成。
 - 每项跨端契约必须有唯一的权威来源、明确的所有者和单向生成规则；生成客户端或生成类型不得反向成为领域模型的权威来源。
