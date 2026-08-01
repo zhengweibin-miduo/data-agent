@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 56 | 2026-08-01 | 修复审查线程回复脚本的 PR 参数兼容 | `a41d805` | `fix/review-thread-reply-pr-number-20260801` |
 | 56 | 2026-08-01 | 恢复 Trellis 自主管理任务工作树 | `6906189` | `fix/restore-trellis-worktree-management-20260801` |
 | 56 | 2026-07-31 | 实现 Data Agent 语义数据画布与 AI 协作 | `2a849f8`, `82bd96b` | `feature/frontend-experience-20260731` |
 | 55 | 2026-08-01 | 完成值索引 V1 投影与有界读取 | `8dcbf69` | `feature/metadata-semantic-value-index-20260730` |

@@ -1,0 +1,29 @@
+{
+  "id": "fix-review-thread-reply-pr-number",
+  "name": "fix-review-thread-reply-pr-number",
+  "title": "修复审查线程回复脚本的 PR 参数兼容",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-01",
+  "completedAt": "2026-08-01",
+  "branch": "fix/review-thread-reply-pr-number-20260801",
+  "base_branch": "master",
+  "worktree_path": "C:\\Users\\zwb\\.codex\\worktrees\\a2ba\\data-agent",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "codex",
+    "task_creation_policy": "codex_host_managed"
+  }
+}

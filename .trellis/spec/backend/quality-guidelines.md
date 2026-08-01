@@ -270,6 +270,12 @@ remaining active unresolved thread even if it was delegated previously.
 - `pr-number` is required when the publisher runs from a checkout whose local
   branch is not the PR head; it makes `gh pr view` resolve the intended PR
   instead of inferring one from the current branch.
+- A delegation generated from the default branch can target an older PR head
+  whose local publisher predates the generated CLI. Before publishing, run the
+  publisher self-check in the actual execution checkout and confirm that it
+  accepts the delegated flags. For recovery, use a trusted checkout containing
+  the matching default-branch publisher with an explicit `pr-number`; do not
+  patch, merge, rebase, or bypass the stale PR-head publisher just to reply.
 - Fixed fields: `thread-id`, `outcome`, `reason`, `fix`, `commit-sha`,
   `test-command`, and `test-summary`.
 - No-change and blocked fields: `thread-id`, `outcome`, and `reason`.
@@ -314,6 +320,10 @@ remaining active unresolved thread even if it was delegated previously.
   reply failure, and remote-head mismatch.
 - The delegation script self-check proves its prompt requires the CLI for every
   thread outcome and forbids direct reply/resolve calls.
+- For a stale-PR recovery, record both the publisher checkout SHA and the target
+  PR head SHA. A later head change stops repeated publication attempts until the
+  new remote state is reviewed; already-resolved threads remain a read-only
+  `skipped_resolved` check.
 - Run both Node self-checks and `git diff --check`.
 
 ### 7. Wrong vs Correct

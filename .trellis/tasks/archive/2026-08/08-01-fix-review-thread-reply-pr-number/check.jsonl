@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核对 publisher/delegation 自检、reply-before-resolve 与 resolved-thread 幂等要求"}
+{"file":".trellis/tasks/08-01-fix-review-thread-reply-pr-number/research/cli-contract.md","reason":"复核调用方与 CLI 契约证据以及四个 thread 的验收边界"}
