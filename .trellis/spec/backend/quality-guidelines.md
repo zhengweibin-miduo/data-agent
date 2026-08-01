@@ -38,6 +38,16 @@
 - HTTP, model, graph, Redis, and persistence boundaries reuse contracts from
   `data_agent.models`; consumers do not cast shared JSON payloads
   independently.
+- Before adding or changing a test, identify the agreed public seam and the
+  observable behavior under test. Add cases only for requirements, regressions,
+  boundary or error behavior, and high-risk paths; do not mechanically test
+  every internal function, private method, or implementation branch.
+- Develop tests as vertical slices, one behavior at a time, using the
+  lowest-cost test layer that proves the behavior. Use an integration test only
+  when proving a contract across a real infrastructure boundary.
+- Mock only unavoidable external or system boundaries. Do not mock internal
+  collaborators or assert their call counts or ordering; reuse existing fakes,
+  factories, and fixtures before creating new test setup.
 - Unit graph/model tests use deterministic fakes and never require a live LLM.
   Integration tests clearly mark MySQL, Redis, and TEI requirements.
 - Repository integration data uses UUID-derived sources/stable IDs and scoped
@@ -50,11 +60,11 @@
   complete SQLGlot parse, AST projection, canonicalization, hashing, and model
   construction pipeline. Do not add a public synchronous alias or move only
   part of that pipeline off the event loop.
-- Test result checks use `tests.helpers.checks.check_equal()` or
-  `check_condition()` so every check emits a labeled `PASS` / `FAIL` record
-  with actual and expected values before `pytest.fail()` blocks a regression.
-  Use `fail_check()` when an expected exception or other required branch does
-  not occur. Do not add bare `assert` statements to `tests/`.
+- New and changed tests use native pytest assertions and helpers such as
+  `assert` and `pytest.raises()` by default. Use `tests.helpers.checks` only
+  when a requirement specifically needs uniform, observable `PASS` / `FAIL`
+  output. Existing tests that use `check_*` do not need migration solely to
+  satisfy this rule.
 - Keep pytest's default output capture for CI and routine runs. Use
   `uv run pytest -s ...` only when a developer needs to observe every check
   result live; visible output must complement, never replace, automatic
@@ -470,6 +480,13 @@ arguments), which is separate work.
 
 ## Review Checklist
 
+- For each new or changed test, identify the public seam and observable
+  behavior, confirm the case protects a requirement, regression, boundary or
+  error, or high-risk path, and justify the chosen test layer as the cheapest
+  one that proves that behavior.
+- Reject tests coupled to private methods, internal collaborator calls, or
+  internal call counts and ordering. Confirm unavoidable boundary mocks and new
+  setup do not duplicate an existing fake, factory, or fixture.
 - Trace configuration changes across `conf/app_config.yaml`,
   `src/data_agent/settings.py`, every consumer, and configuration validation.
 - Verify that a new infrastructure client follows the established lifecycle
@@ -523,6 +540,10 @@ arguments), which is separate work.
 - Tests that leak a client when an assertion or request fails.
 - Tests that call a real paid/model endpoint in CI.
 - Destructive integration cleanup against the shared MySQL or Redis volume.
+- Mechanical test coverage for every internal function, private method, branch,
+  or collaborator interaction without a required observable behavior.
+- Internal collaborator mocks, internal call-count or ordering assertions, and
+  integration tests where a lower-cost layer proves the same contract.
 - `asyncio.run()` wrappers or executable main guards in pytest modules.
 - Missing or placeholder public Docstrings.
 - Claims that a skipped or unavailable live-service check passed.

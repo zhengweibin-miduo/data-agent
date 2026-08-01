@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 57
-- **Last Active**: 2026-08-01
+- **Total Sessions**: 58
+- **Last Active**: 2026-08-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1920 | Active |
+| `journal-1.md` | ~1987 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 58 | 2026-08-02 | 安装测试指导并收紧测试规范 | `b93f1bb`, `ee2b46b` | `chore/evaluate-tdd-guidance-v2-20260802` |
 | 57 | 2026-08-01 | 制定项目架构与职责边界规则 | `3d00d22` | `docs/project-architecture-rules-20260801` |
 | 56 | 2026-08-01 | 完成 Data Agent 前后端分离重构 | `c7aeefc` | `refactor/separate-frontend-backend-20260801` |
 | 56 | 2026-08-01 | 修复审查线程回复脚本的 PR 参数兼容 | `a41d805` | `fix/review-thread-reply-pr-number-20260801` |

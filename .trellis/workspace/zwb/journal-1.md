@@ -1951,3 +1951,37 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 58: 安装测试指导并收紧测试规范
+
+**Date**: 2026-08-02
+**Task**: 安装测试指导并收紧测试规范
+**Branch**: `chore/evaluate-tdd-guidance-v2-20260802`
+
+### Summary
+
+项目级安装 tdd 与 verification-before-completion；在 AGENTS.md 和后端质量规范中约束公共 seam、行为测试、最低成本测试层级、内部 mock 与原生 pytest 断言，保留现有测试供后续单独重构。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b93f1bb` | (see git log) |
+| `ee2b46b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
