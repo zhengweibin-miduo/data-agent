@@ -54,7 +54,7 @@ Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/w
 
 仅当任务需要产出“完整项目知识地图”时，按以下顺序组合使用项目级 Skill；该组合与既有“技术分析方案文档组合技能”和“前端组合技能”协同，不替换或重复其规则：
 
-1. **代码库勘察**：先使用 `codebase-onboarding` Skill（`.agents/skills/codebase-onboarding/SKILL.md`），基于真实仓库证据梳理结构、入口、模块职责、请求流与数据流。
+1. **代码库勘察**：先使用 `codebase-onboarding` Skill（`.agents/skills/codebase-onboarding/SKILL.md`）的 Phase 1（Reconnaissance）与 Phase 2（Architecture Mapping），仅基于真实仓库证据梳理结构、入口、模块职责、请求流与数据流；不得执行后续阶段、生成 onboarding artifacts 或创建、修改 `CLAUDE.md`。
 2. **领域统一**：使用 `domain-modeling` Skill，统一项目领域术语与概念关系。
 3. **边界梳理**：使用 `codebase-design` Skill，明确模块职责、依赖方向与边界。
 4. **图示生成**：使用 `baoyu-diagram` Skill，生成专业 SVG 架构图、流程图或时序图。
