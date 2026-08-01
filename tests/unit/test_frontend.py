@@ -28,9 +28,12 @@ def test_static_host_examples_fallback_spa_deep_links() -> None:
     )
     check_condition(
         "Caddy SPA fallback",
-        "try_files {path} /index.html" in caddy,
+        "handle /api/* {\n        reverse_proxy 127.0.0.1:8000\n    }"
+        in caddy
+        and "handle {\n        try_files {path} /index.html\n        file_server\n    }"
+        in caddy,
         actual=caddy,
-        expected="未知 /workbench、/knowledge 和任务深链接回退到 /index.html",
+        expected="API 代理与 SPA fallback 位于互斥的 handle 路由中",
     )
 
 

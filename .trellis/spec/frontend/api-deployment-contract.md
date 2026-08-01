@@ -31,6 +31,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   `request_timeout` error. Long-running chat turns use an explicit larger budget.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
+- Static-host SPA fallback must be isolated from `/api/**`; Caddy configurations
+  use mutually exclusive `handle` blocks so `try_files` cannot rewrite API paths.
 
 ### 4. Validation & Error Matrix
 
