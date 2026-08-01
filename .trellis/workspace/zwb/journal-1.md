@@ -1885,3 +1885,36 @@ event_id 改用 latest_event_id 取作用域最大事件 id（原分页末项在
 ### Next Steps
 
 - None - task complete
+
+
+## Session 57: 制定项目架构与职责边界规则
+
+**Date**: 2026-08-01
+**Task**: 制定项目架构与职责边界规则
+**Branch**: `docs/project-architecture-rules-20260801`
+
+### Summary
+
+在 AGENTS.md 中新增项目架构组合规则，明确前后端源码根隔离、渐进式 DDD/Ports and Adapters、轻量 feature-first、领域建模触发条件与跨端契约职责。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3d00d22` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
