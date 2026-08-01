@@ -36,6 +36,8 @@
 - When a legacy backend times out during acceptance, keep the attempt explicitly
   non-replayable in session storage so neither automatic nor manual actions
   duplicate the POST, including after a full document reload.
+- Set that persistent non-replayable marker before dispatching a legacy POST;
+  cleanup and promise rejection handlers are not guaranteed on document teardown.
 - A deep-link restore clears sample input and locks DDL actions before starting
   its GET. Retry transient restore failures while keeping that lock; only an
   authoritative not-found response may release the coordinate. Ignore the whole

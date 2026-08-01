@@ -51,6 +51,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   including timeout, network failure, malformed success, or proxy/server error,
   rather than issuing a second non-idempotent POST. Only a deterministic,
   non-retryable 4xx may release the coordinate.
+  Persist a legacy submission as non-replayable immediately before dispatching
+  its POST, not only after its response fails, because document teardown may
+  prevent promise rejection handlers from updating the recovery marker.
   Keep that coordinate outside the individual request call until acceptance is
   confirmed, including across repeated timeouts and SPA workbench remounts.
   Do not replace an unconfirmed coordinate when editable input changes; recover

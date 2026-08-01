@@ -318,7 +318,11 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     try {
       const accepted = await submitDDL({
         source: source.trim(), dialect: "mysql", ddl, submission_id: submissionId,
-      }, controller.signal);
+      }, controller.signal, (idempotencySupported) => {
+        if (idempotencySupported || pendingSubmissionAttempt?.submissionId !== submissionId) return;
+        pendingSubmissionAttempt.replayable = false;
+        persistSubmissionAttempt(submissionId, false);
+      });
       if (!mounted.current || controller.signal.aborted || submitController.current !== controller) return;
       if (pendingSubmissionAttempt?.submissionId === submissionId) pendingSubmissionAttempt = null;
       clearPersistedSubmissionAttempt(submissionId);

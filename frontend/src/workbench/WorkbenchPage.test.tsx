@@ -415,6 +415,33 @@ describe("workbench chat", () => {
     expect(getJob).toHaveBeenCalledOnce();
   });
 
+  it("persists the legacy replay gate before the submission response settles", async () => {
+    let resolveSubmission!: (value: Awaited<ReturnType<typeof submitDDL>>) => void;
+    const submissionResponse = new Promise<Awaited<ReturnType<typeof submitDDL>>>((resolve) => {
+      resolveSubmission = resolve;
+    });
+    vi.mocked(previewDDL).mockResolvedValue({
+      source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0,
+    });
+    vi.mocked(submitDDL).mockImplementation(async (_input, _signal, onDispatch) => {
+      onDispatch?.(false);
+      return submissionResponse;
+    });
+    render(<WorkbenchPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    await waitFor(() => expect(JSON.parse(
+      sessionStorage.getItem("schema-loom-pending-submission") ?? "{}",
+    )).toMatchObject({ replayable: false }));
+    resolveSubmission({
+      job_id: "legacy-job", status: "pending", status_url: "/jobs/legacy-job", events_url: null,
+    });
+    await waitFor(() => expect(window.location.pathname).toBe("/workbench/legacy-job"));
+  });
+
   it("accepts a task submission after StrictMode replays effects", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "strict-job", status: "pending", status_url: "/jobs/strict-job", events_url: null });

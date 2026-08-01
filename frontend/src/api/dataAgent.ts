@@ -207,7 +207,11 @@ export const previewDDL = (input: DDLInput): Promise<DDLPreview> =>
     validateResponse: isDDLPreview,
   });
 
-export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal): Promise<JobAccepted> {
+export async function submitDDL(
+  input: DDLSubmissionInput,
+  signal?: AbortSignal,
+  onDispatch?: (idempotencySupported: boolean) => void,
+): Promise<JobAccepted> {
   const isJobAccepted = (payload: unknown): payload is JobAccepted => {
     if (!payload || typeof payload !== "object") return false;
     const candidate = payload as Record<string, unknown>;
@@ -218,16 +222,19 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
   };
   const { submission_id: submissionId, ...legacyCompatibleInput } = input;
   const idempotencySupported = await supportsSubmissionIdempotency();
-  const submit = () => apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
-    method: "POST",
-    // Keep the JSON body compatible with backend versions released before
-    // client-coordinated acceptance. Only a backend that advertises support
-    // receives the custom header, so legacy cross-origin CORS remains valid.
-    body: JSON.stringify(legacyCompatibleInput),
-    headers: idempotencySupported ? { "Idempotency-Key": submissionId } : undefined,
-    signal,
-    validateResponse: isJobAccepted,
-  });
+  const submit = () => {
+    onDispatch?.(idempotencySupported);
+    return apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
+      method: "POST",
+      // Keep the JSON body compatible with backend versions released before
+      // client-coordinated acceptance. Only a backend that advertises support
+      // receives the custom header, so legacy cross-origin CORS remains valid.
+      body: JSON.stringify(legacyCompatibleInput),
+      headers: idempotencySupported ? { "Idempotency-Key": submissionId } : undefined,
+      signal,
+      validateResponse: isJobAccepted,
+    });
+  };
   try {
     return await submit();
   } catch (error) {
