@@ -34,6 +34,7 @@ interface TraceDockProps {
   connection: string;
   error: string;
   answers: Record<string, string>;
+  interactionBusy: boolean;
   submittingAnswers: boolean;
   onAnswerChange: (questionId: string, answer: string) => void;
   onSubmitAnswers: (event: FormEvent<HTMLFormElement>) => void;
@@ -54,6 +55,7 @@ export function TraceDock({
   connection,
   error,
   answers,
+  interactionBusy,
   submittingAnswers,
   onAnswerChange,
   onSubmitAnswers,
@@ -99,13 +101,14 @@ export function TraceDock({
                   rows={3}
                   autoComplete="off"
                   value={answers[question.question_id] ?? ""}
+                  disabled={interactionBusy}
                   onChange={(event) => onAnswerChange(question.question_id, event.target.value)}
                 />
               </div>
-              <div className="question-actions"><button className="quiet-action" type="button" onClick={() => onDraftQuestion(question)}>让 AI 起草</button></div>
+              <div className="question-actions"><button className="quiet-action" type="button" disabled={interactionBusy} onClick={() => onDraftQuestion(question)}>让 AI 起草</button></div>
             </div>
           ))}
-          <button className="primary-action" type="submit" disabled={submittingAnswers}>
+          <button className="primary-action" type="submit" disabled={interactionBusy}>
             {submittingAnswers ? "正在提交…" : "提交回答并继续 →"}
           </button>
         </form>

@@ -48,9 +48,10 @@ function inferredStage(job: JobRecord): JobStage {
 
 interface WorkbenchPageProps {
   onUnsavedChange?: (unsaved: boolean) => void;
+  onNavigationBlockChange?: (blocked: boolean) => void;
 }
 
-export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
+export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: WorkbenchPageProps = {}) {
   const restoredJob = useRef(restoredJobId());
   const [source, setSource] = useState(restoredJob.current ? "" : "commerce_prod");
   const [ddl, setDDL] = useState(restoredJob.current ? "" : DEFAULT_DDL);
@@ -92,6 +93,11 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     onUnsavedChange?.(Boolean(ddl.trim()) && inputFingerprint !== submittedFingerprint);
     return () => onUnsavedChange?.(false);
   }, [ddl, inputFingerprint, onUnsavedChange, submittedFingerprint]);
+
+  useEffect(() => {
+    onNavigationBlockChange?.(busy === "chat");
+    return () => onNavigationBlockChange?.(false);
+  }, [busy, onNavigationBlockChange]);
 
   const recordStage = useCallback((next: JobStage, emittedAt = new Date().toISOString()) => {
     setStage(next);
@@ -212,7 +218,7 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
 
   const handleAnswers = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!job?.question_set_id) return;
+    if (busy !== null || !job?.question_set_id) return;
     const missingRequired = (job.questions ?? []).find(
       (question) => question.required && !answers[question.question_id]?.trim(),
     );
@@ -342,7 +348,7 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
 
       <TraceDock
         job={job} currentStage={stage} reachedStages={reachedStages} connection={connection} error={error}
-        answers={answers} submittingAnswers={busy === "answers"} onAnswerChange={(questionId, answer) => setAnswers((items) => ({ ...items, [questionId]: answer }))}
+        answers={answers} interactionBusy={busy !== null} submittingAnswers={busy === "answers"} onAnswerChange={(questionId, answer) => setAnswers((items) => ({ ...items, [questionId]: answer }))}
         onSubmitAnswers={(event) => void handleAnswers(event)} onDraftQuestion={askToDraft}
       />
     </div>

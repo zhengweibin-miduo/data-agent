@@ -266,6 +266,24 @@ describe("workbench chat", () => {
     expect(answer).toHaveValue("人工填写的业务依据");
   });
 
+  it("blocks clarification submission while an AI draft is pending", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    vi.mocked(sendChatTurn).mockImplementation(() => new Promise(() => undefined));
+    render(<WorkbenchPage />);
+    const answer = await screen.findByLabelText("第二轮问题");
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE orders (id INT);" } });
+    fireEvent.change(answer, { target: { value: "人工业务依据" } });
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+    await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
+
+    const submit = screen.getByRole("button", { name: "提交回答并继续 →" });
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest("form")!);
+    expect(submitAnswers).not.toHaveBeenCalled();
+  });
+
   it("keeps chat disabled while another request is busy", async () => {
     let resolvePreview!: (preview: { source: string; tables: []; relationships: []; table_count: number; column_count: number }) => void;
     vi.mocked(previewDDL).mockImplementation(() => new Promise((resolve) => { resolvePreview = resolve; }));

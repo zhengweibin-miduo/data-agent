@@ -2,11 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { getJob, previewDDL, submitDDL } from "./api/dataAgent";
+import { createConversation, getJob, previewDDL, sendChatTurn, submitDDL } from "./api/dataAgent";
 
 vi.mock("./api/dataAgent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/dataAgent")>();
-  return { ...actual, getJob: vi.fn(), previewDDL: vi.fn(), submitDDL: vi.fn() };
+  return { ...actual, createConversation: vi.fn(), getJob: vi.fn(), previewDDL: vi.fn(), sendChatTurn: vi.fn(), submitDDL: vi.fn() };
 });
 vi.mock("./api/jobEvents", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/jobEvents")>();
@@ -20,6 +20,9 @@ describe("application shell", () => {
     vi.mocked(previewDDL).mockReset();
     vi.mocked(submitDDL).mockReset();
     vi.mocked(getJob).mockReset();
+    vi.mocked(createConversation).mockReset().mockResolvedValue({ uid: "conversation-1" });
+    vi.mocked(sendChatTurn).mockReset();
+    vi.spyOn(window, "alert").mockImplementation(() => undefined);
   });
 
   it("renders the independent workbench and switches to knowledge memory", () => {
@@ -100,5 +103,41 @@ describe("application shell", () => {
     fireEvent.click(screen.getByRole("link", { name: "知识记忆" }));
     fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
     expect(window.location.pathname).toBe("/workbench/job-1");
+  });
+
+  it("remembers a clean task path when browser history leaves the workbench", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-popstate", status: "pending", status_url: "/jobs/job-popstate", events_url: null });
+    vi.mocked(getJob).mockResolvedValue({
+      job_id: "job-popstate", source: "commerce_prod", status: "running", revision: 1, attempt: 1,
+      question_round: 0, question_set_id: null, questions: null, result: null, error: null,
+    });
+    window.history.replaceState(null, "", "/knowledge");
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/workbench/job-popstate"));
+
+    window.history.replaceState(null, "", "/knowledge");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    fireEvent.click(screen.getByRole("link", { name: "结构工作台" }));
+
+    expect(window.location.pathname).toBe("/workbench/job-popstate");
+  });
+
+  it("keeps the workbench mounted while a chat turn is in flight", async () => {
+    vi.mocked(sendChatTurn).mockImplementation(() => new Promise(() => undefined));
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), { target: { value: "解释订单表" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+    await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole("link", { name: "知识记忆" }));
+
+    expect(window.alert).toHaveBeenCalledWith("AI 回复仍在生成，请等待完成或失败后再离开工作台。");
+    expect(window.location.pathname).toBe("/workbench");
+    expect(screen.getByRole("heading", { name: "把物理结构织成语义" })).toBeInTheDocument();
   });
 });
