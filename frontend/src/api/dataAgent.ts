@@ -13,6 +13,58 @@ import type {
   MemorySearchResponse,
 } from "./types";
 
+const JOB_STATUSES = new Set(["pending", "running", "waiting_input", "succeeded", "rejected", "failed"]);
+
+const isRecord = (payload: unknown): payload is Record<string, unknown> =>
+  Boolean(payload) && typeof payload === "object" && !Array.isArray(payload);
+
+const isNullable = (payload: unknown, validate: (value: unknown) => boolean): boolean =>
+  payload === null || validate(payload);
+
+const isMetricQuestion = (payload: unknown): boolean => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.question_id === "string" && payload.question_id.length > 0
+    && typeof payload.prompt === "string" && payload.prompt.length > 0
+    && typeof payload.fact_table_id === "string"
+    && Array.isArray(payload.column_ids) && payload.column_ids.every((item) => typeof item === "string")
+    && typeof payload.required === "boolean";
+};
+
+const isJobResult = (payload: unknown): boolean => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.ddl_hash === "string"
+    && typeof payload.table_count === "number"
+    && typeof payload.column_count === "number"
+    && typeof payload.metric_count === "number";
+};
+
+const isJobError = (payload: unknown): boolean => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.code === "string"
+    && typeof payload.stage === "string"
+    && typeof payload.retryable === "boolean"
+    && typeof payload.attempt === "number"
+    && isRecord(payload.details)
+    && Object.values(payload.details).every((value) => typeof value === "string");
+};
+
+const isJobRecord = (payload: unknown): payload is JobRecord => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.job_id === "string" && payload.job_id.length > 0
+    && typeof payload.source === "string" && payload.source.length > 0
+    && typeof payload.status === "string" && JOB_STATUSES.has(payload.status)
+    && Number.isInteger(payload.revision) && Number(payload.revision) >= 0
+    && Number.isInteger(payload.attempt) && Number(payload.attempt) >= 0
+    && Number.isInteger(payload.question_round) && Number(payload.question_round) >= 0
+    && isNullable(payload.question_set_id, (value) => typeof value === "string")
+    && isNullable(payload.questions, (value) => Array.isArray(value) && value.every(isMetricQuestion))
+    && isNullable(payload.result, isJobResult)
+    && isNullable(payload.error, isJobError)
+    && typeof payload.created_at === "string"
+    && typeof payload.updated_at === "string"
+    && isNullable(payload.expires_at, (value) => typeof value === "string");
+};
+
 export const previewDDL = (input: DDLInput): Promise<DDLPreview> =>
   apiRequest("/api/v1/metadata/ddl-preview", {
     method: "POST",
@@ -43,7 +95,9 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
 }
 
 export const getJob = (jobId: string): Promise<JobRecord> =>
-  apiRequest(`/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}`);
+  apiRequest(`/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}`, {
+    validateResponse: isJobRecord,
+  });
 
 export const submitAnswers = (
   jobId: string,

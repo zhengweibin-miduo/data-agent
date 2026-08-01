@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { getJob } from "./dataAgent";
 import { connectJobEvents } from "./jobEvents";
 import type { JobEventData, JobRecord } from "./types";
 
@@ -19,9 +20,14 @@ class FakeEventSource {
 const waitingJob: JobRecord = {
   job_id: "job-1", source: "commerce", status: "waiting_input", revision: 3, attempt: 1,
   question_round: 1, question_set_id: "set-1", questions: [], result: null, error: null,
+  created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:01Z", expires_at: null,
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("job event adapter", () => {
   it("fetches the authoritative JobRecord before enabling waiting-input controls", async () => {
@@ -119,5 +125,34 @@ describe("job event adapter", () => {
     expect(onJob).toHaveBeenCalledWith(waitingJob);
     subscription.close();
     vi.useRealTimers();
+  });
+
+  it("retries waiting-input reads after a structurally invalid 200 response", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("{}", {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(waitingJob), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })));
+    const onJob = vi.fn();
+    const subscription = connectJobEvents("/events", {
+      getAuthoritativeJob: () => getJob("job-1"),
+      onJob,
+      onEvent: vi.fn(),
+      onConnection: vi.fn(),
+      onError: vi.fn(),
+    }, FakeEventSource as unknown as typeof EventSource);
+
+    FakeEventSource.latest.emit("waiting_input", {
+      job_id: "job-1", revision: 3, attempt: 1, status: "waiting_input", stage: "waiting_input",
+      emitted_at: "2026-08-01T00:00:00Z", questions: [], result: null, error: null,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onJob).toHaveBeenCalledWith(waitingJob);
+    subscription.close();
   });
 });

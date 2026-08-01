@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { submitDDL } from "./dataAgent";
+import { getJob, submitDDL } from "./dataAgent";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -53,4 +53,20 @@ describe("DDL job submission", () => {
       expect.stringContaining("11111111-1111-4111-8111-111111111111"),
     ]);
   });
+});
+
+describe("authoritative job reads", () => {
+  it.each([{}, null, { job_id: "job-1" }, { job_id: "job-1", status: "waiting_input" }])(
+    "rejects invalid successful JobRecord DTOs",
+    async (payload) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })));
+
+      await expect(getJob("job-1")).rejects.toMatchObject({
+        status: 502, code: "invalid_response", stage: "response", retryable: true,
+      });
+    },
+  );
 });
