@@ -101,7 +101,10 @@ $env:VITE_API_BASE_URL = "/api"
 npm run build
 ```
 
-将 `frontend/dist/` 交给静态服务器，并把同域 `/api/` 反向代理到
+将 `frontend/dist/` 交给静态服务器，并为 `/workbench`、`/knowledge`、
+`/workbench/{job_id}` 等前端路由配置 SPA fallback（未知静态路径回退到
+`/index.html`）。仓库提供可直接调整的 `frontend/deploy/nginx.conf` 和
+`frontend/deploy/Caddyfile` 示例。把同域 `/api/` 反向代理到
 `http://127.0.0.1:8000/api/`。SSE 代理必须关闭缓冲和缓存，读取超时应长于后端
 心跳间隔，例如 Nginx location 中使用 `proxy_buffering off`、
 `proxy_cache off`、`proxy_read_timeout 3600s`。分域部署时，将

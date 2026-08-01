@@ -1,5 +1,7 @@
 """前后端分离后的 API-only 与旧入口兼容检查。"""
 
+from pathlib import Path
+
 from httpx import ASGITransport, AsyncClient
 
 from data_agent.application import create_app
@@ -9,6 +11,27 @@ from tests.helpers.checks import (
     check_exception,
     fail_check,
 )
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_static_host_examples_fallback_spa_deep_links() -> None:
+    """生产静态服务器配置必须让工作台与知识页深链接回退到入口。"""
+    nginx = (REPOSITORY_ROOT / "frontend/deploy/nginx.conf").read_text()
+    caddy = (REPOSITORY_ROOT / "frontend/deploy/Caddyfile").read_text()
+
+    check_condition(
+        "Nginx SPA fallback",
+        "try_files $uri $uri/ /index.html;" in nginx,
+        actual=nginx,
+        expected="未知 /workbench、/knowledge 和任务深链接回退到 /index.html",
+    )
+    check_condition(
+        "Caddy SPA fallback",
+        "try_files {path} /index.html" in caddy,
+        actual=caddy,
+        expected="未知 /workbench、/knowledge 和任务深链接回退到 /index.html",
+    )
 
 
 async def test_api_only_is_default_without_frontend_files(monkeypatch) -> None:

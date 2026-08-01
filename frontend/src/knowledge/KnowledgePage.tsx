@@ -15,6 +15,7 @@ export function KnowledgePage() {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reprocessNotice, setReprocessNotice] = useState("");
   const scoreFormatter = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 3 });
 
   const openMemory = async (uid: string) => {
@@ -50,7 +51,13 @@ export function KnowledgePage() {
     try { parsed = JSON.parse(content) as Record<string, unknown>; }
     catch { setError("结构化内容不是有效 JSON。"); return; }
     setBusy(true); setError("");
-    try { await updateMemory(selected.uid, parsed, selected.record_version); await openMemory(selected.uid); }
+    try {
+      const result = await updateMemory(selected.uid, parsed, selected.record_version);
+      setReprocessNotice(result.requires_reprocess
+        ? "修正已保存，但不会改写当前 Meta 快照。请返回结构工作台，重新载入并提交 DDL 以应用新知识。"
+        : "");
+      await openMemory(selected.uid);
+    }
     catch (cause) { setError(formatApiError(cause, "修正未保存，若版本已变化请重新打开详情")); setBusy(false); }
   };
 
@@ -76,6 +83,7 @@ export function KnowledgePage() {
         </form>
         {results?.degraded_targets.length ? <p className="warning">部分索引降级：{results.degraded_targets.join("、")}</p> : null}
         {error && <div className="error-summary" role="alert">{error}</div>}
+        {reprocessNotice && <div className="warning" role="status" aria-live="polite">{reprocessNotice}</div>}
       </aside>
 
       <section className="memory-results" aria-labelledby="result-title">

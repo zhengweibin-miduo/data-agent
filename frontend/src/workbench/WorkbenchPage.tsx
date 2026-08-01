@@ -66,6 +66,7 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   ]);
   const [draftQuestion, setDraftQuestion] = useState<MetricQuestion | null>(null);
   const [failedChat, setFailedChat] = useState<ChatAttempt | null>(null);
+  const [submittedFingerprint, setSubmittedFingerprint] = useState<string | null>(null);
   const subscription = useRef<JobEventSubscription | null>(null);
   const currentJobId = useRef<string | null>(null);
 
@@ -82,9 +83,9 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     : [];
 
   useEffect(() => {
-    onUnsavedChange?.(!job && Boolean(ddl.trim()));
+    onUnsavedChange?.(Boolean(ddl.trim()) && inputFingerprint !== submittedFingerprint);
     return () => onUnsavedChange?.(false);
-  }, [ddl, job, onUnsavedChange]);
+  }, [ddl, inputFingerprint, onUnsavedChange, submittedFingerprint]);
 
   const recordStage = useCallback((next: JobStage, emittedAt = new Date().toISOString()) => {
     setStage(next);
@@ -106,7 +107,9 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
       status: event.status,
       revision: event.revision,
       attempt: event.attempt,
-      questions: event.questions,
+      // waiting_input 事件没有 question_set_id；在权威 GET 完成前不得沿用旧坐标。
+      question_set_id: event.status === "waiting_input" ? null : previous.question_set_id,
+      questions: event.status === "waiting_input" ? null : event.questions,
       result: event.result,
       error: event.error,
     } : previous);
@@ -130,6 +133,11 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     currentJobId.current = jobId;
     setConnection("正在恢复任务状态");
     void getJob(jobId).then((record) => {
+      setSource(record.source);
+      setDDL("");
+      setPreview(null);
+      setPreviewFingerprint("");
+      setSubmittedFingerprint(`${record.source}\n`);
       acceptJob(record);
       if (!TERMINAL_STATUSES.has(record.status)) {
         watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
@@ -162,7 +170,11 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
         attempt: 0, question_round: 0, question_set_id: null, questions: null, result: null, error: null,
       };
       currentJobId.current = accepted.job_id;
-      setJob(pending); recordStage("queued");
+      const queuedAt = new Date().toISOString();
+      setReachedStages(new Map([["queued", queuedAt]]));
+      setStage("queued");
+      setJob(pending);
+      setSubmittedFingerprint(inputFingerprint);
       window.history.replaceState(null, "", `/workbench/${encodeURIComponent(accepted.job_id)}`);
       setConnection("任务已受理，正在连接事件流");
       watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
@@ -218,7 +230,7 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   const handleChat = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = chatInput.trim();
-    if (!content || !source.trim() || !ddl.trim()) return;
+    if (!content || !source.trim() || !ddl.trim() || failedChat) return;
     void sendChatAttempt({ turnUid: randomId(), content, draftQuestion }, true);
   };
 
@@ -258,8 +270,8 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
         </div>
         <form className="chat-form" onSubmit={(event) => void handleChat(event)}>
           <label htmlFor="chat-input">补充业务背景或询问当前 DDL</label>
-          <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={!ddl.trim() || busy === "chat"} />
-          <button className="primary-action" type="submit" disabled={!chatInput.trim() || busy === "chat"}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
+          <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={!ddl.trim() || busy === "chat" || Boolean(failedChat)} />
+          <button className="primary-action" type="submit" disabled={!chatInput.trim() || busy === "chat" || Boolean(failedChat)}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
         </form>
         {failedChat && (
           <button className="secondary-action chat-retry" type="button" disabled={busy === "chat"} onClick={() => void sendChatAttempt(failedChat, false)}>
