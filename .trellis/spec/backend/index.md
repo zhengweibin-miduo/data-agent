@@ -20,7 +20,7 @@ local Docker services that exist in this repository.
 | [Quality Guidelines](./quality-guidelines.md) | CI checks, test patterns, and review standards | Defined |
 | [Logging Guidelines](./logging-guidelines.md) | Loguru sinks, formats, context and safety | Defined |
 | [External Service Integrations](./external-service-integrations.md) | Executable contracts for local infrastructure clients | Defined |
-| [Trellis Task Worktree Ownership](./trellis-task-worktree.md) | Codex host-managed versus Trellis-managed task worktrees | Defined |
+| [Trellis Task Worktree Ownership](./trellis-task-worktree.md) | Platform-independent Trellis-managed task worktrees and legacy metadata compatibility | Defined |
 
 ## Scope Boundary
 
