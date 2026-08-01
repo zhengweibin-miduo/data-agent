@@ -49,3 +49,13 @@ Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/w
 3. **审查**：前端实现完成后，必须读取并使用 `web-design-guidelines` Skill：`.agents/skills/web-design-guidelines/SKILL.md`，审查可访问性、UX、性能和 Web 界面最佳实践。
 
 审查发现问题后必须完成修复，并再次使用 `web-design-guidelines` 复查，直至相关问题解决。
+
+## 完整项目知识地图组合技能
+
+仅当任务需要产出“完整项目知识地图”时，按以下顺序组合使用项目级 Skill；该组合与既有“技术分析方案文档组合技能”和“前端组合技能”协同，不替换或重复其规则：
+
+1. **代码库勘察**：先使用 `codebase-onboarding` Skill（`.agents/skills/codebase-onboarding/SKILL.md`），基于真实仓库证据梳理结构、入口、模块职责、请求流与数据流。
+2. **领域统一**：使用 `domain-modeling` Skill，统一项目领域术语与概念关系。
+3. **边界梳理**：使用 `codebase-design` Skill，明确模块职责、依赖方向与边界。
+4. **图示生成**：使用 `baoyu-diagram` Skill，生成专业 SVG 架构图、流程图或时序图。
+5. **知识网站呈现**：使用 `web-design-engineer` Skill，实现知识地图的网站视觉呈现（该技能是否已安装由项目现状决定，本规则不扩大安装范围）。
