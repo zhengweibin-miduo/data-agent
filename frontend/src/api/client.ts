@@ -8,6 +8,7 @@ export const CHAT_REQUEST_TIMEOUT_MS = 660_000;
 
 interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number;
+  validateResponse?: (payload: unknown) => boolean;
 }
 
 export class ApiError extends Error {
@@ -43,7 +44,12 @@ export async function apiRequest<T>(
   path: string,
   options: ApiRequestOptions = {},
 ): Promise<T> {
-  const { timeoutMs = API_REQUEST_TIMEOUT_MS, signal: callerSignal, ...requestOptions } = options;
+  const {
+    timeoutMs = API_REQUEST_TIMEOUT_MS,
+    signal: callerSignal,
+    validateResponse,
+    ...requestOptions
+  } = options;
   const controller = new AbortController();
   const abortFromCaller = () => controller.abort(callerSignal?.reason);
   if (callerSignal?.aborted) abortFromCaller();
@@ -78,6 +84,11 @@ export async function apiRequest<T>(
     }
     if (!response.ok) {
       throw new ApiError(response.status, payload as ApiErrorEnvelope);
+    }
+    if (validateResponse && !validateResponse(payload)) {
+      throw new ApiError(502, {
+        error: { code: "invalid_response", stage: "response", retryable: true },
+      });
     }
     return payload as T;
   } catch (error) {

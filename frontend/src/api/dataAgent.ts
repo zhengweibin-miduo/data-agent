@@ -20,10 +20,19 @@ export const previewDDL = (input: DDLInput): Promise<DDLPreview> =>
   });
 
 export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal): Promise<JobAccepted> {
+  const isJobAccepted = (payload: unknown): payload is JobAccepted => {
+    if (!payload || typeof payload !== "object") return false;
+    const candidate = payload as Record<string, unknown>;
+    return typeof candidate.job_id === "string" && candidate.job_id.length > 0
+      && candidate.status === "pending"
+      && typeof candidate.status_url === "string" && candidate.status_url.length > 0
+      && (candidate.events_url === null || typeof candidate.events_url === "string");
+  };
   const submit = () => apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
     method: "POST",
     body: JSON.stringify(input),
     signal,
+    validateResponse: isJobAccepted,
   });
   try {
     return await submit();

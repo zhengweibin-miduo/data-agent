@@ -82,6 +82,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   waiting-input read, native reconnect behavior, polling fallback, chat turn UID
   reuse, DDL limits, and application navigation.
 - Build: lint, strict typecheck, tests, and production Vite build.
+- Successful JSON is not a trusted DTO merely because it parses. Validate the
+  required fields at the endpoint boundary and project malformed shapes as the
+  retryable `invalid_response` contract error before releasing recovery state.
 
 ### 7. Wrong vs Correct
 

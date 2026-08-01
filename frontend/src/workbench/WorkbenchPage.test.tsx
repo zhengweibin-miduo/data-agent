@@ -204,6 +204,25 @@ describe("workbench chat", () => {
     expect(connectJobEvents).toHaveBeenCalledOnce();
   });
 
+  it("falls back to the URL task after a stale persisted coordinate returns 404", async () => {
+    const staleSubmissionId = "11111111-1111-4111-8111-111111111111";
+    sessionStorage.setItem("schema-loom-pending-submission", JSON.stringify({
+      submissionId: staleSubmissionId,
+      startedAt: 0,
+    }));
+    window.history.replaceState(null, "", "/workbench/url-job");
+    vi.mocked(getJob)
+      .mockRejectedValueOnce(new ApiError(404, { error: { code: "job_not_found", retryable: false } }))
+      .mockResolvedValueOnce(waitingJob({ job_id: "url-job" }));
+
+    render(<WorkbenchPage />);
+
+    expect(await screen.findByText("第二轮问题")).toBeInTheDocument();
+    expect(getJob).toHaveBeenNthCalledWith(1, staleSubmissionId);
+    expect(getJob).toHaveBeenNthCalledWith(2, "url-job");
+    expect(window.location.pathname).toBe("/workbench/url-job");
+  });
+
   it("keeps the submission coordinate after a malformed successful response", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockRejectedValue(new ApiError(502, {
@@ -519,6 +538,29 @@ describe("workbench chat", () => {
       source: "warehouse", dialect: "mysql", ddl: restoredDDL,
     });
     await waitFor(() => expect(answer).toHaveValue("恢复任务草稿"));
+  });
+
+  it("releases an invalid restored draft context before drafting again", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    vi.mocked(sendChatTurn)
+      .mockRejectedValueOnce(new ApiError(422, { error: { code: "invalid_ddl", retryable: false } }))
+      .mockResolvedValueOnce({ message: { uid: "assistant-draft", content: "修正后的草稿" } });
+    render(<WorkbenchPage />);
+
+    await screen.findByLabelText("第二轮问题");
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "INVALID DDL" } });
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+    await screen.findByText(/AI 请求校验失败/);
+
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE fixed (id INT);" } });
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+
+    expect(await screen.findAllByText("修正后的草稿")).toHaveLength(2);
+    expect(vi.mocked(sendChatTurn).mock.calls[1]?.[1].ddl_context.ddl)
+      .toBe("CREATE TABLE fixed (id INT);");
   });
 
   it("blocks clarification submission while an AI draft is pending", async () => {

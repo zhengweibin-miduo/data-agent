@@ -60,3 +60,9 @@
   POST and must not unlock the sample workbench or discard the job coordinate.
 - While a memory detail switch is loading, keep mutation controls disabled and
   identify the selected record in destructive confirmations.
+- When a persisted submission coordinate differs from the current task deep
+  link, reconcile it first but retain the deep link as the fallback after an
+  authoritative 404.
+- A deterministic validation failure for a restored task's AI clarification
+  draft releases both draft mode and its frozen reloaded DDL context so the
+  corrected editor state can be frozen by the next request.

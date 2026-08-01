@@ -47,4 +47,18 @@ describe("API client", () => {
       status: 502, code: "invalid_response", stage: "response", retryable: true,
     });
   });
+
+  it.each([{}, null, { job_id: 123 }])("rejects a successful JSON payload that fails DTO validation", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 202,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(apiRequest("/api/v1/metadata/ddl-jobs", {
+      validateResponse: (value) => Boolean(value && typeof value === "object"
+        && typeof (value as Record<string, unknown>).job_id === "string"),
+    })).rejects.toMatchObject({
+      status: 502, code: "invalid_response", stage: "response", retryable: true,
+    });
+  });
 });

@@ -8,6 +8,22 @@ afterEach(() => {
 });
 
 describe("DDL job submission", () => {
+  it.each([{}, null, { job_id: 123 }, { job_id: "job-1", status: "pending" }])(
+    "rejects invalid successful acceptance DTOs",
+    async (payload) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      })));
+
+      await expect(submitDDL({
+        source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)", submission_id: "job-1",
+      })).rejects.toMatchObject({
+        status: 502, code: "invalid_response", stage: "response", retryable: true,
+      });
+    },
+  );
+
   it("replays the same acceptance coordinate after a response timeout", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()

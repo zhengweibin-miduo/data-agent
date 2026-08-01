@@ -101,7 +101,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     pendingSubmissionAttempt?.submissionId ?? persistedSubmission.current?.submissionId ?? restoredJobId() ?? null,
   );
   const fallbackRestoredJob = useRef(
-    pendingSubmissionAttempt && restoredJobId() !== pendingSubmissionAttempt.submissionId
+    restoredJob.current && restoredJobId() !== restoredJob.current
       ? restoredJobId()
       : null,
   );
@@ -129,6 +129,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   const mounted = useRef(true);
   const submitController = useRef<AbortController | null>(null);
   const submittedDDLContext = useRef<ChatAttempt["ddlContext"] | null>(null);
+  const restoredDraftContext = useRef(false);
 
   const inputFingerprint = `${source}\n${ddl}`;
   const ddlBytes = new TextEncoder().encode(ddl).length;
@@ -400,6 +401,11 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         && cause.status >= 400 && cause.status < 500
         && cause.status !== 409 && !cause.retryable;
       setFailedChat(deterministicClientError ? null : attempt);
+      if (deterministicClientError && attempt.draftQuestion && restoredDraftContext.current) {
+        submittedDDLContext.current = null;
+        restoredDraftContext.current = false;
+        setDraftQuestion(null);
+      }
       setError(formatApiError(cause, deterministicClientError
         ? "AI 请求校验失败，请修正输入后重新发送"
         : "AI 回复生成失败，请重试上一轮"));
@@ -432,6 +438,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         return;
       }
       submittedDDLContext.current = { source: source.trim(), dialect: "mysql", ddl };
+      restoredDraftContext.current = true;
     }
     setDraftQuestion(question);
     setChatInput(`请根据当前 DDL 起草这个问题的回答：${question.prompt}`);
