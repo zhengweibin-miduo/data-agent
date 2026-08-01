@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createConversation, getJob, previewDDL, sendChatTurn, submitDDL } from "../api/dataAgent";
+import { ApiError } from "../api/client";
+import { createConversation, getJob, previewDDL, sendChatTurn, submitAnswers, submitDDL } from "../api/dataAgent";
 import { connectJobEvents } from "../api/jobEvents";
 import type { JobEventData, JobRecord } from "../api/types";
 import { WorkbenchPage } from "./WorkbenchPage";
@@ -35,6 +36,7 @@ describe("workbench chat", () => {
     vi.mocked(getJob).mockReset();
     vi.mocked(previewDDL).mockReset();
     vi.mocked(submitDDL).mockReset();
+    vi.mocked(submitAnswers).mockReset();
     vi.mocked(connectJobEvents).mockClear();
     window.history.replaceState(null, "", "/workbench");
   });
@@ -128,6 +130,53 @@ describe("workbench chat", () => {
     const secondAttempt = vi.mocked(sendChatTurn).mock.calls[1]?.[1];
     expect(secondAttempt?.turn_uid).toBe(firstAttempt?.turn_uid);
     await waitFor(() => expect(screen.getAllByText("解释订单表")).toHaveLength(1));
+  });
+
+  it("blocks whitespace-only required clarification answers and focuses the first missing field", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue(waitingJob({
+      questions: [
+        { question_id: "answered", prompt: "已填写", fact_table_id: "orders", column_ids: [], required: true },
+        { question_id: "missing", prompt: "仍需填写", fact_table_id: "orders", column_ids: [], required: true },
+      ],
+    }));
+    render(<WorkbenchPage />);
+    fireEvent.change(await screen.findByLabelText("已填写"), { target: { value: "有效依据" } });
+    fireEvent.change(screen.getByLabelText("仍需填写"), { target: { value: "   " } });
+    fireEvent.submit(screen.getByRole("button", { name: "提交回答并继续 →" }).closest("form")!);
+
+    expect(submitAnswers).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("仍需填写")).toHaveFocus();
+    expect(screen.getByRole("alert")).toHaveTextContent("请填写所有必答业务依据后再继续。");
+  });
+
+  it("reuses the original DDL snapshot when a failed chat turn is retried", async () => {
+    vi.mocked(sendChatTurn).mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "重试成功" } });
+    render(<WorkbenchPage />);
+    const originalDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
+    fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), { target: { value: "解释结构" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+    const retry = await screen.findByRole("button", { name: "重试上一轮 AI 回复" });
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE changed (id INT);" } });
+    fireEvent.click(retry);
+    await screen.findByText("重试成功");
+
+    expect(vi.mocked(sendChatTurn).mock.calls[1]?.[1].ddl_context.ddl).toBe(originalDDL);
+  });
+
+  it("recreates a missing conversation while preserving the turn UID", async () => {
+    sessionStorage.setItem("schema-loom-conversation", "stale-conversation");
+    vi.mocked(sendChatTurn).mockRejectedValueOnce(new ApiError(404, { error: { code: "conversation_not_found" } }))
+      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "已恢复" } });
+    render(<WorkbenchPage />);
+    fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), { target: { value: "解释结构" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+    await screen.findByText("已恢复");
+
+    expect(createConversation).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("schema-loom-conversation")).toBe("conversation-1");
+    expect(vi.mocked(sendChatTurn).mock.calls[1]?.[1].turn_uid).toBe(vi.mocked(sendChatTurn).mock.calls[0]?.[1].turn_uid);
   });
 
   it("shows the server-aligned source and DDL submission constraints", () => {

@@ -58,4 +58,22 @@ describe("job event adapter", () => {
     subscription.close();
     vi.useRealTimers();
   });
+
+  it("serializes polling reads and ignores a response that completes after close", async () => {
+    vi.useFakeTimers();
+    let resolveRead!: (job: JobRecord) => void;
+    const getAuthoritativeJob = vi.fn(() => new Promise<JobRecord>((resolve) => { resolveRead = resolve; }));
+    const onJob = vi.fn();
+    const subscription = connectJobEvents("/events", {
+      getAuthoritativeJob, onJob, onEvent: vi.fn(), onConnection: vi.fn(), onError: vi.fn(),
+    }, undefined);
+
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(getAuthoritativeJob).toHaveBeenCalledOnce();
+    subscription.close();
+    resolveRead({ ...waitingJob, status: "running", question_set_id: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onJob).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
 });

@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
-import { formatApiError } from "../api/client";
+import { ApiError, formatApiError } from "../api/client";
 import {
   createConversation,
   getJob,
@@ -29,6 +29,7 @@ interface ChatAttempt {
   turnUid: string;
   content: string;
   draftQuestion: MetricQuestion | null;
+  ddlContext: { source: string; dialect: "mysql"; ddl: string };
 }
 
 const randomId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -185,6 +186,14 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   const handleAnswers = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!job?.question_set_id) return;
+    const missingRequired = (job.questions ?? []).find(
+      (question) => question.required && !answers[question.question_id]?.trim(),
+    );
+    if (missingRequired) {
+      setError("请填写所有必答业务依据后再继续。");
+      document.getElementById(`answer-${missingRequired.question_id}`)?.focus();
+      return;
+    }
     setBusy("answers"); setError("");
     try {
       const updated = await submitAnswers(job.job_id, {
@@ -210,13 +219,24 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
       const userId = localStorage.getItem("schema-loom-user") ?? `local-${randomId()}`;
       localStorage.setItem("schema-loom-user", userId);
       let conversationUid = sessionStorage.getItem("schema-loom-conversation");
-      if (!conversationUid) {
+      let response;
+      try {
+        if (!conversationUid) {
+          conversationUid = (await createConversation(userId)).uid;
+          sessionStorage.setItem("schema-loom-conversation", conversationUid);
+        }
+        response = await sendChatTurn(conversationUid, {
+          user_id: userId, turn_uid: attempt.turnUid, content: attempt.content, ddl_context: attempt.ddlContext,
+        });
+      } catch (cause) {
+        if (!(cause instanceof ApiError) || cause.status !== 404) throw cause;
+        sessionStorage.removeItem("schema-loom-conversation");
         conversationUid = (await createConversation(userId)).uid;
         sessionStorage.setItem("schema-loom-conversation", conversationUid);
+        response = await sendChatTurn(conversationUid, {
+          user_id: userId, turn_uid: attempt.turnUid, content: attempt.content, ddl_context: attempt.ddlContext,
+        });
       }
-      const response = await sendChatTurn(conversationUid, {
-        user_id: userId, turn_uid: attempt.turnUid, content: attempt.content, ddl_context: { source: source.trim(), dialect: "mysql", ddl },
-      });
       setChatMessages((items) => [...items, { id: response.message.uid ?? randomId(), role: "assistant", content: response.message.content }]);
       if (attempt.draftQuestion) setAnswers((items) => ({ ...items, [attempt.draftQuestion!.question_id]: response.message.content }));
       setDraftQuestion(null);
@@ -231,7 +251,10 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     event.preventDefault();
     const content = chatInput.trim();
     if (!content || !source.trim() || !ddl.trim() || failedChat) return;
-    void sendChatAttempt({ turnUid: randomId(), content, draftQuestion }, true);
+    void sendChatAttempt({
+      turnUid: randomId(), content, draftQuestion,
+      ddlContext: { source: source.trim(), dialect: "mysql", ddl },
+    }, true);
   };
 
   const askToDraft = (question: MetricQuestion) => {

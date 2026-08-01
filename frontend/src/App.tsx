@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { KnowledgePage } from "./knowledge/KnowledgePage";
 import { WorkbenchPage } from "./workbench/WorkbenchPage";
@@ -12,9 +12,27 @@ function currentView(): View {
 export function App() {
   const [view, setView] = useState<View>(currentView);
   const [unsavedWorkbench, setUnsavedWorkbench] = useState(false);
+  const viewRef = useRef(view);
+  const unsavedWorkbenchRef = useRef(unsavedWorkbench);
+  const workbenchPathRef = useRef(window.location.pathname);
+
+  viewRef.current = view;
+  unsavedWorkbenchRef.current = unsavedWorkbench;
 
   useEffect(() => {
-    const onPopState = () => setView(currentView());
+    const onPopState = () => {
+      const next = currentView();
+      if (
+        next !== viewRef.current
+        && viewRef.current === "workbench"
+        && unsavedWorkbenchRef.current
+        && !window.confirm("当前 DDL 尚未提交，确定离开工作台？")
+      ) {
+        window.history.pushState(null, "", workbenchPathRef.current);
+        return;
+      }
+      setView(next);
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -38,7 +56,13 @@ export function App() {
     ) return;
     const path = next === "knowledge" ? "/knowledge" : "/workbench";
     window.history.pushState(null, "", path);
+    if (next === "workbench") workbenchPathRef.current = path;
     setView(next);
+  };
+
+  const handleUnsavedWorkbenchChange = (unsaved: boolean) => {
+    if (unsaved) workbenchPathRef.current = window.location.pathname;
+    setUnsavedWorkbench(unsaved);
   };
 
   return (
@@ -54,7 +78,7 @@ export function App() {
           <a href="/knowledge" aria-current={view === "knowledge" ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate("knowledge"); }}>知识记忆</a>
         </nav>
       </header>
-      <main id="main-content" tabIndex={-1}>{view === "knowledge" ? <KnowledgePage /> : <WorkbenchPage onUnsavedChange={setUnsavedWorkbench} />}</main>
+      <main id="main-content" tabIndex={-1}>{view === "knowledge" ? <KnowledgePage /> : <WorkbenchPage onUnsavedChange={handleUnsavedWorkbenchChange} />}</main>
     </div>
   );
 }

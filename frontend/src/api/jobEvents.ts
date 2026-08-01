@@ -31,6 +31,7 @@ export function connectJobEvents(
   let source: EventSource | null = null;
   let pollTimer: number | null = null;
   let closed = false;
+  let authoritativeReadInFlight = false;
 
   const close = () => {
     closed = true;
@@ -41,15 +42,20 @@ export function connectJobEvents(
   };
 
   const poll = async () => {
+    if (closed || authoritativeReadInFlight) return;
+    authoritativeReadInFlight = true;
     try {
       const job = await handlers.getAuthoritativeJob();
+      if (closed) return;
       handlers.onJob(job);
       if (TERMINAL_STATUSES.has(job.status)) {
         close();
         handlers.onConnection("任务已到达终态");
       }
     } catch (error) {
-      handlers.onError(error);
+      if (!closed) handlers.onError(error);
+    } finally {
+      authoritativeReadInFlight = false;
     }
   };
 
@@ -89,7 +95,7 @@ export function connectJobEvents(
       const data = JSON.parse(event.data) as JobEventData;
       handlers.onEvent(data);
       if (data.status === "waiting_input") {
-        void handlers.getAuthoritativeJob().then(handlers.onJob).catch(handlers.onError);
+        void poll();
       }
       if (TERMINAL_STATUSES.has(data.status)) {
         close();
