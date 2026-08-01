@@ -61,9 +61,9 @@ Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/w
 
 源码根目录按所有权隔离：
 
-- 当前框架无关前端迁移完成前，`src/data_agent/frontend/` 仍是前端源码与运行时静态资源的唯一所有者，并继续由 FastAPI 挂载和随 Python 包分发；在此期间前端修改必须遵守 `.trellis/spec/frontend/`，不得提前写入尚未接入运行时的根目录 `frontend/`。
-- 只有 React/Vite/TypeScript 前端迁移、FastAPI 静态资源挂载切换、构建部署与测试路径调整在同一变更中完成并验证后，根目录 `frontend/` 才成为前端应用源码、静态资源、构建/部署配置和前端测试的唯一长期所有者。
-- 除迁移完成前由上一条明确保留的 `src/data_agent/frontend/` 外，`src/data_agent/` 是 Python 后端源码、运行入口和后端业务能力的唯一长期所有者；迁移完成后不得在其中新增或恢复前端业务源码。
+- 根目录 `frontend/` 是前端应用源码、静态资源、构建/部署配置和前端测试的唯一所有者；前端修改必须遵守 `.trellis/spec/frontend/`。
+- `src/data_agent/frontend/` 仅保留只读的迁移期兼容资源，可由 FastAPI 通过显式兼容开关挂载并随 Python 包分发；不得在其中新增或恢复前端业务源码。
+- 除上一条明确保留的只读兼容资源外，`src/data_agent/` 是 Python 后端源码、运行入口和后端业务能力的唯一所有者。
 - `contracts/` 为可选目录，仅在需要时承载技术中立的 OpenAPI、JSON Schema 等契约源或生成配置，不得承载前端或后端业务源码。
 - 前端不得直接导入 `src/data_agent/` 中的 Python 源码、ORM 模型或内部 DTO；后端不得依赖 `frontend/` 的组件、状态模型或构建产物表达业务行为。跨端交互只能通过 HTTP、SSE 等运行时协议及显式契约完成。
 - 每项跨端契约必须有唯一的权威来源、明确的所有者和单向生成规则；生成客户端或生成类型不得反向成为领域模型的权威来源。
