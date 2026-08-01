@@ -210,9 +210,12 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
 
     @app.get("/api/v1/health", tags=["health"])
-    async def health() -> dict[str, str]:
+    async def health() -> dict[str, object]:
         """返回不触发外部依赖访问的 API 进程存活状态。"""
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "capabilities": {"ddl_submission_idempotency": True},
+        }
 
     # 步骤三：兼容开关默认关闭；启用时才读取并挂载旧 Python 包内前端目录。
     if _legacy_frontend_enabled():

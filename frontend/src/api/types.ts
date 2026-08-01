@@ -148,6 +148,7 @@ export interface ConversationCreated {
 
 export interface ChatTurnResponse {
   message: MessageRecord;
+  readiness: "proceed" | "data_preparing" | "intent_unresolved";
 }
 
 export interface MemoryDetail {

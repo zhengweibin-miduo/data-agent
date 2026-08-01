@@ -109,6 +109,28 @@ const isMemoryHistoryPage = (payload: unknown): payload is MemoryHistoryPage => 
     && typeof payload.has_more === "boolean";
 };
 
+const isChatTurnResponse = (payload: unknown): payload is ChatTurnResponse => {
+  if (!isRecord(payload) || !isRecord(payload.message)) return false;
+  return typeof payload.message.uid === "string" && payload.message.uid.length > 0
+    && typeof payload.message.content === "string"
+    && (payload.readiness === "proceed"
+      || payload.readiness === "data_preparing"
+      || payload.readiness === "intent_unresolved");
+};
+
+const supportsSubmissionIdempotency = async (): Promise<boolean> => {
+  try {
+    const health = await apiRequest<unknown>("/api/v1/health");
+    return isRecord(health)
+      && isRecord(health.capabilities)
+      && health.capabilities.ddl_submission_idempotency === true;
+  } catch {
+    // A legacy or temporarily unavailable capability endpoint must not make the
+    // strict legacy submission contract unusable.
+    return false;
+  }
+};
+
 const isMetricQuestion = (payload: unknown): boolean => {
   if (!isRecord(payload)) return false;
   return typeof payload.question_id === "string" && payload.question_id.length > 0
@@ -170,13 +192,14 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
       && (candidate.events_url === null || typeof candidate.events_url === "string");
   };
   const { submission_id: submissionId, ...legacyCompatibleInput } = input;
+  const idempotencySupported = await supportsSubmissionIdempotency();
   const submit = () => apiRequest<JobAccepted>("/api/v1/metadata/ddl-jobs", {
     method: "POST",
     // Keep the JSON body compatible with backend versions released before
-    // client-coordinated acceptance; newer backends read the coordinate from
-    // this optional header while older backends safely ignore it.
+    // client-coordinated acceptance. Only a backend that advertises support
+    // receives the custom header, so legacy cross-origin CORS remains valid.
     body: JSON.stringify(legacyCompatibleInput),
-    headers: { "Idempotency-Key": submissionId },
+    headers: idempotencySupported ? { "Idempotency-Key": submissionId } : undefined,
     signal,
     validateResponse: isJobAccepted,
   });
@@ -225,6 +248,7 @@ export const sendChatTurn = (
     method: "POST",
     body: JSON.stringify(payload),
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    validateResponse: isChatTurnResponse,
   });
 
 export const searchMemories = (source: string, query: string): Promise<MemorySearchResponse> =>

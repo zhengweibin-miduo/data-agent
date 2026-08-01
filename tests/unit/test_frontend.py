@@ -60,7 +60,11 @@ async def test_api_only_is_default_without_frontend_files(monkeypatch) -> None:
         actual=list(openapi.json()["paths"]),
         expected="包含 DDL jobs 路由",
     )
-    check_equal("健康检查响应", health.json(), {"status": "ok"})
+    check_equal(
+        "健康检查响应",
+        health.json(),
+        {"status": "ok", "capabilities": {"ddl_submission_idempotency": True}},
+    )
 
 
 async def test_legacy_frontend_requires_explicit_switch(monkeypatch) -> None:

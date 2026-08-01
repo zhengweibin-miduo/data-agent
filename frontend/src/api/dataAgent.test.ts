@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJob, getMemory, getMemoryHistory, previewDDL, searchMemories, submitDDL } from "./dataAgent";
+import { getJob, getMemory, getMemoryHistory, previewDDL, searchMemories, sendChatTurn, submitDDL } from "./dataAgent";
+
+const capabilityResponse = () => new Response(JSON.stringify({
+  status: "ok", capabilities: { ddl_submission_idempotency: true },
+}), { status: 200, headers: { "Content-Type": "application/json" } });
 
 afterEach(() => {
   vi.useRealTimers();
@@ -11,10 +15,12 @@ describe("DDL job submission", () => {
   it.each([{}, null, { job_id: 123 }, { job_id: "job-1", status: "pending" }])(
     "rejects invalid successful acceptance DTOs",
     async (payload) => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
-        status: 202,
-        headers: { "Content-Type": "application/json" },
-      })));
+      vi.stubGlobal("fetch", vi.fn()
+        .mockResolvedValueOnce(capabilityResponse())
+        .mockResolvedValueOnce(new Response(JSON.stringify(payload), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        })));
 
       await expect(submitDDL({
         source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)", submission_id: "job-1",
@@ -27,6 +33,7 @@ describe("DDL job submission", () => {
   it("replays the same acceptance coordinate after a response timeout", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(capabilityResponse())
       .mockImplementationOnce((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
         options.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
       }))
@@ -47,19 +54,22 @@ describe("DDL job submission", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(request).resolves.toMatchObject({ job_id: "11111111-1111-4111-8111-111111111111" });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)))).toEqual([
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.slice(1).map((call) => JSON.parse(String(call[1]?.body)))).toEqual([
       { source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)" },
       { source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)" },
     ]);
-    expect(fetchMock.mock.calls.map((call) => call[1]?.headers)).toEqual([
+    expect(fetchMock.mock.calls.slice(1).map((call) => call[1]?.headers)).toEqual([
       { "Content-Type": "application/json", "Idempotency-Key": "11111111-1111-4111-8111-111111111111" },
       { "Content-Type": "application/json", "Idempotency-Key": "11111111-1111-4111-8111-111111111111" },
     ]);
   });
 
   it("keeps the request body compatible with backends that forbid unknown fields", async () => {
-    const fetchMock = vi.fn().mockImplementation((_url: string, options: RequestInit) => {
+    const fetchMock = vi.fn().mockImplementation((url: string, options: RequestInit) => {
+      if (url.endsWith("/api/v1/health")) {
+        return Promise.resolve(new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+      }
       const body = JSON.parse(String(options.body)) as Record<string, unknown>;
       if ("submission_id" in body) {
         return Promise.resolve(new Response(JSON.stringify({ detail: "extra_forbidden" }), { status: 422 }));
@@ -74,6 +84,37 @@ describe("DDL job submission", () => {
       source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)",
       submission_id: "11111111-1111-4111-8111-111111111111",
     })).resolves.toMatchObject({ job_id: "legacy-job" });
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
+  });
+});
+
+describe("chat turn", () => {
+  it.each([
+    {},
+    { message: {} },
+    { message: { uid: "assistant-1", content: "回复" } },
+    { message: { uid: 1, content: "回复" }, readiness: "proceed" },
+  ])("rejects invalid successful chat DTOs", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(sendChatTurn("conversation-1", {
+      user_id: "user-1", turn_uid: "turn-1", content: "问题",
+      ddl_context: { source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)" },
+    })).rejects.toMatchObject({ status: 502, code: "invalid_response", retryable: true });
+  });
+
+  it("accepts a complete chat DTO", async () => {
+    const payload = { message: { uid: "assistant-1", content: "回复" }, readiness: "proceed" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(sendChatTurn("conversation-1", {
+      user_id: "user-1", turn_uid: "turn-1", content: "问题",
+      ddl_context: { source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)" },
+    })).resolves.toEqual(payload);
   });
 });
 

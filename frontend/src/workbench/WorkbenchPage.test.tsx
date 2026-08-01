@@ -397,7 +397,7 @@ describe("workbench chat", () => {
   it("reuses the failed turn UID without duplicating the user message", async () => {
     vi.mocked(sendChatTurn)
       .mockRejectedValueOnce(new Error("temporary failure"))
-      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "重试成功" } });
+      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "重试成功" }, readiness: "proceed" });
     render(<WorkbenchPage />);
 
     fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), {
@@ -435,7 +435,7 @@ describe("workbench chat", () => {
 
   it("reuses the original DDL snapshot when a failed chat turn is retried", async () => {
     vi.mocked(sendChatTurn).mockRejectedValueOnce(new Error("temporary failure"))
-      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "重试成功" } });
+      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "重试成功" }, readiness: "proceed" });
     render(<WorkbenchPage />);
     const originalDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
     fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), { target: { value: "解释结构" } });
@@ -451,7 +451,7 @@ describe("workbench chat", () => {
   it("recreates a missing conversation while preserving the turn UID", async () => {
     sessionStorage.setItem("schema-loom-conversation", "stale-conversation");
     vi.mocked(sendChatTurn).mockRejectedValueOnce(new ApiError(404, { error: { code: "conversation_not_found" } }))
-      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "已恢复" } });
+      .mockResolvedValueOnce({ message: { uid: "assistant-1", content: "已恢复" }, readiness: "proceed" });
     render(<WorkbenchPage />);
     fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), { target: { value: "解释结构" } });
     fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
@@ -481,7 +481,7 @@ describe("workbench chat", () => {
   it("preserves an answer edited while an AI draft is pending", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
-    let resolveChat!: (response: { message: { uid: string; content: string } }) => void;
+    let resolveChat!: (response: { message: { uid: string; content: string }; readiness: "proceed" }) => void;
     vi.mocked(sendChatTurn).mockImplementation(() => new Promise((resolve) => { resolveChat = resolve; }));
     render(<WorkbenchPage />);
 
@@ -496,7 +496,7 @@ describe("workbench chat", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
     await waitFor(() => expect(sendChatTurn).toHaveBeenCalledOnce());
     fireEvent.change(answer, { target: { value: "人工填写的业务依据" } });
-    resolveChat({ message: { uid: "assistant-draft", content: "晚到的 AI 草稿" } });
+    resolveChat({ message: { uid: "assistant-draft", content: "晚到的 AI 草稿" }, readiness: "proceed" });
 
     await screen.findByText("晚到的 AI 草稿");
     expect(answer).toHaveValue("人工填写的业务依据");
@@ -505,7 +505,7 @@ describe("workbench chat", () => {
   it("uses the submitted DDL snapshot when drafting clarification after edits", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
-    vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "草稿" } });
+    vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "草稿" }, readiness: "proceed" });
     render(<WorkbenchPage />);
     const submittedDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
     fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
@@ -524,7 +524,7 @@ describe("workbench chat", () => {
   it("freezes reloaded DDL for clarification drafts on a restored task", async () => {
     window.history.replaceState(null, "", "/workbench/job-1");
     vi.mocked(getJob).mockResolvedValue(waitingJob());
-    vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "恢复任务草稿" } });
+    vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "恢复任务草稿" }, readiness: "proceed" });
     render(<WorkbenchPage />);
 
     const answer = await screen.findByLabelText("第二轮问题");
@@ -545,7 +545,7 @@ describe("workbench chat", () => {
     vi.mocked(getJob).mockResolvedValue(waitingJob());
     vi.mocked(sendChatTurn)
       .mockRejectedValueOnce(new ApiError(422, { error: { code: "invalid_ddl", retryable: false } }))
-      .mockResolvedValueOnce({ message: { uid: "assistant-draft", content: "修正后的草稿" } });
+      .mockResolvedValueOnce({ message: { uid: "assistant-draft", content: "修正后的草稿" }, readiness: "proceed" });
     render(<WorkbenchPage />);
 
     await screen.findByLabelText("第二轮问题");

@@ -11,7 +11,7 @@ base resolution, static hosting, or the legacy embedded frontend changes.
 
 - Frontend environment: `VITE_API_BASE_URL=<empty|/api|absolute-origin>`.
 - Backend migration environment: `ENABLE_LEGACY_FRONTEND=<boolean>`, default false.
-- Liveness: `GET /api/v1/health -> {"status":"ok"}`.
+- Liveness: `GET /api/v1/health` returns `status: "ok"` and a capability map.
 - Business routes remain under `/api/v1/**`; DDL events remain
   `GET /api/v1/metadata/ddl-jobs/{job_id}/events`.
 
@@ -32,8 +32,10 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   covers the server's sequential readiness, repair, generation, and retry calls.
 - DDL submission carries a client-generated UUID that is also the server job ID.
   Send that coordinate in the optional `Idempotency-Key` header while keeping
-  the JSON body compatible with backend versions that predate the coordinate;
-  such backends ignore the header and continue to accept the request.
+  the JSON body compatible with backend versions that predate the coordinate.
+  First read the simple health endpoint's capability map and omit the custom
+  header unless the backend advertises support, because a legacy cross-origin
+  deployment does not allow that header in its CORS preflight policy.
   A timed-out acceptance request replays that coordinate, and the server returns
   the original job only when its source and DDL match the first submission.
   Keep that coordinate outside the individual request call until acceptance is
@@ -102,6 +104,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   Validate memory history pagination and every event's identifiers, type,
   contents, actor, and timestamp before rendering record details.
   Validate a memory detail before enabling correction or deletion controls.
+  Validate chat messages and readiness decisions before clearing a turn retry
+  coordinate or applying a clarification draft.
 
 ### 7. Wrong vs Correct
 
