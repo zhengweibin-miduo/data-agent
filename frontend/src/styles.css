@@ -39,7 +39,7 @@ a { color: var(--cyan); }
 .app-header nav a { min-height: 44px; border-bottom: 2px solid transparent; color: var(--muted); padding: 0 16px; display: flex; align-items: center; text-decoration: none; }
 .app-header nav a:hover, .app-header nav a[aria-current="page"] { color: var(--ice); border-color: var(--cyan); background: #102036; }
 
-.workbench-page { height: calc(100vh - 54px); display: grid; grid-template-columns: 304px minmax(440px, 1fr) 360px; grid-template-rows: minmax(440px, 1fr) minmax(180px, auto); overflow: hidden; }
+.workbench-page { height: calc(100vh - 54px); display: grid; grid-template-columns: 304px minmax(440px, 1fr) 360px; grid-template-rows: minmax(0, 1fr) minmax(180px, 42vh); overflow: hidden; }
 .ddl-panel, .chat-panel, .knowledge-search, .memory-results, .memory-detail { padding: 20px; background: #0d1b2e; }
 .ddl-panel { border-right: 1px solid var(--line); overflow: auto; }
 .chat-panel { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }

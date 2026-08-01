@@ -17,6 +17,7 @@ export function App() {
   const viewRef = useRef(view);
   const unsavedWorkbenchRef = useRef(unsavedWorkbench);
   const workbenchNavigationBlockedRef = useRef(workbenchNavigationBlocked);
+  const routePathRef = useRef(routePath);
   const workbenchPathRef = useRef(
     window.location.pathname.startsWith("/workbench") ? window.location.pathname : "/workbench",
   );
@@ -24,6 +25,7 @@ export function App() {
   viewRef.current = view;
   unsavedWorkbenchRef.current = unsavedWorkbench;
   workbenchNavigationBlockedRef.current = workbenchNavigationBlocked;
+  routePathRef.current = routePath;
 
   const canLeaveWorkbench = useCallback(() => {
     if (workbenchNavigationBlockedRef.current) {
@@ -36,11 +38,9 @@ export function App() {
   useEffect(() => {
     const onPopState = () => {
       const next = currentView();
-      if (
-        next !== viewRef.current
-        && viewRef.current === "workbench"
-        && !canLeaveWorkbench()
-      ) {
+      const leavesCurrentWorkbench = viewRef.current === "workbench"
+        && window.location.pathname !== routePathRef.current;
+      if (leavesCurrentWorkbench && !canLeaveWorkbench()) {
         window.history.pushState(null, "", workbenchPathRef.current);
         return;
       }

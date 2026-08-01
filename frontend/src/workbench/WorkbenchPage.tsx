@@ -65,7 +65,12 @@ interface WorkbenchPageProps {
 }
 
 export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: WorkbenchPageProps = {}) {
-  const restoredJob = useRef(restoredJobId() ?? pendingSubmissionAttempt?.submissionId ?? null);
+  const restoredJob = useRef(pendingSubmissionAttempt?.submissionId ?? restoredJobId() ?? null);
+  const fallbackRestoredJob = useRef(
+    pendingSubmissionAttempt && restoredJobId() !== pendingSubmissionAttempt.submissionId
+      ? restoredJobId()
+      : null,
+  );
   const [source, setSource] = useState(restoredJob.current ? "" : "commerce_prod");
   const [ddl, setDDL] = useState(restoredJob.current ? "" : DEFAULT_DDL);
   const [restoringJob, setRestoringJob] = useState(Boolean(restoredJob.current));
@@ -154,40 +159,51 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   }, [acceptEvent, acceptJob]);
 
   useEffect(() => {
-    const jobId = restoredJob.current;
-    if (!jobId) return;
+    const initialJobId = restoredJob.current;
+    if (!initialJobId) return;
     let cancelled = false;
     setConnection("正在恢复任务状态");
-    void getJob(jobId).then((record) => {
-      if (cancelled || currentJobId.current !== jobId) return;
-      if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
-      if (window.location.pathname === "/workbench") {
-        window.history.replaceState(null, "", `/workbench/${encodeURIComponent(jobId)}`);
+    void (async () => {
+      const candidates = [initialJobId, fallbackRestoredJob.current]
+        .filter((jobId): jobId is string => Boolean(jobId));
+      for (const jobId of candidates) {
+        currentJobId.current = jobId;
+        try {
+          const record = await getJob(jobId);
+          if (cancelled || currentJobId.current !== jobId) return;
+          if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+          const jobPath = `/workbench/${encodeURIComponent(jobId)}`;
+          if (window.location.pathname !== jobPath) window.history.replaceState(null, "", jobPath);
+          setSource(record.source);
+          setDDL("");
+          setPreview(null);
+          setPreviewFingerprint("");
+          setSubmittedFingerprint(`${record.source}\n`);
+          setRestoringJob(false);
+          acceptJob(record);
+          if (!TERMINAL_STATUSES.has(record.status)) {
+            watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
+          }
+          return;
+        } catch (cause) {
+          if (cancelled || currentJobId.current !== jobId) return;
+          const pendingNotFound = cause instanceof ApiError && cause.status === 404
+            && pendingSubmissionAttempt?.submissionId === jobId;
+          if (pendingNotFound) {
+            pendingSubmissionAttempt = null;
+            continue;
+          }
+          setError(formatApiError(cause, "无法恢复这个任务"));
+          break;
+        }
       }
-      setSource(record.source);
-      setDDL("");
-      setPreview(null);
-      setPreviewFingerprint("");
-      setSubmittedFingerprint(`${record.source}\n`);
+      currentJobId.current = null;
+      restoredJob.current = null;
+      setSource("commerce_prod");
+      setDDL(DEFAULT_DDL);
+      setSubmittedFingerprint(null);
       setRestoringJob(false);
-      acceptJob(record);
-      if (!TERMINAL_STATUSES.has(record.status)) {
-        watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
-      }
-    }).catch((cause) => {
-      if (cancelled || currentJobId.current !== jobId) return;
-      if (cause instanceof ApiError && cause.status === 404
-        && pendingSubmissionAttempt?.submissionId === jobId) {
-        pendingSubmissionAttempt = null;
-        currentJobId.current = null;
-        restoredJob.current = null;
-        setSource("commerce_prod");
-        setDDL(DEFAULT_DDL);
-        setSubmittedFingerprint(null);
-      }
-      setRestoringJob(false);
-      setError(formatApiError(cause, "无法恢复这个任务"));
-    });
+    })();
     return () => { cancelled = true; subscription.current?.close(); };
   }, [acceptJob, watchJob]);
 
@@ -213,6 +229,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   };
 
   const handleSubmit = async () => {
+    if (job && !TERMINAL_STATUSES.has(job.status)) {
+      setError("当前任务仍在处理或等待澄清，请完成后再提交新任务。");
+      return;
+    }
     if (!inputValid) { setError("请先修正数据源命名或 DDL 字节限制。"); return; }
     if (!preview || previewStale) { setError("请先预览当前 source 和 DDL，再生成语义。"); return; }
     if (pendingSubmissionAttempt && pendingSubmissionAttempt.fingerprint !== inputFingerprint) {
@@ -378,7 +398,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         </div>
         <div className="ddl-actions">
           <button type="button" className="secondary-action" disabled={restoringJob || busy !== null || !inputValid} onClick={() => void handlePreview()}>{busy === "preview" ? "正在解析…" : "预览结构"}</button>
-          <button type="button" className="primary-action" disabled={restoringJob || busy !== null || !inputValid || !preview || previewStale} onClick={() => void handleSubmit()}>{busy === "submit" ? "正在受理…" : "生成语义 →"}</button>
+          <button type="button" className="primary-action" disabled={restoringJob || busy !== null || Boolean(job && !TERMINAL_STATUSES.has(job.status)) || !inputValid || !preview || previewStale} onClick={() => void handleSubmit()}>{busy === "submit" ? "正在受理…" : "生成语义 →"}</button>
         </div>
         <div className={`preview-state ${previewStale ? "stale" : ""}`} aria-live="polite">
           {previewStale ? "DDL 已变化，请重新预览" : preview ? `${preview.table_count} 表 · ${preview.column_count} 列 · PREVIEW READY` : "尚未建立结构预览"}

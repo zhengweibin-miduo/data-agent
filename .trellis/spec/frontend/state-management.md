@@ -24,10 +24,15 @@
   polling only when EventSource is unavailable, event payload parsing fails, or
   the server emits `stream_error`. Terminal jobs stop every handle.
 - Keep unsaved-DDL navigation protection while the input view is active.
+- Treat a change between two `/workbench` pathnames as leaving the current
+  workbench session; history navigation must apply the same unsaved-input and
+  chat-coordinate guards before remounting for another task.
 - Preserve the latest `/workbench/{job_id}` URL when navigating to another SPA
   view so returning to the workbench restores the active task and subscription.
 - Abort an in-flight task submission when its workbench unmounts, and reject its
   late continuation before changing browser history or opening an event stream.
+- Do not replace a non-terminal task with another submission unless the UI first
+  preserves a discoverable recovery coordinate for the active task.
 - A deep-link restore clears sample input and locks DDL actions before starting
   its GET. Ignore the whole continuation when it no longer owns the active job.
 - Keep the failed chat retry gate only for uncertain or lease-bearing failures.

@@ -174,6 +174,50 @@ describe("workbench chat", () => {
     expect(connectJobEvents).toHaveBeenCalledOnce();
   });
 
+  it("reconciles a pending submission before the job in the current deep link", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "new_source", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockRejectedValue(new ApiError(408, { error: { code: "request_timeout", retryable: true } }));
+    window.history.replaceState(null, "", "/workbench/old-job");
+    vi.mocked(getJob).mockResolvedValueOnce({
+      job_id: "old-job", source: "old_source", status: "succeeded", revision: 2, attempt: 1,
+      question_round: 0, question_set_id: null, questions: null, result: null, error: null,
+    });
+    const first = render(<WorkbenchPage />);
+    await waitFor(() => expect(screen.getByLabelText("MySQL DDL")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "new_source" } });
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE new_orders (id BIGINT);" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await screen.findByText(/任务提交失败/);
+    const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
+    first.unmount();
+
+    vi.mocked(getJob).mockReset().mockResolvedValue(waitingJob({ job_id: submissionId, source: "new_source" }));
+    render(<WorkbenchPage />);
+
+    await waitFor(() => expect(getJob).toHaveBeenCalledWith(submissionId));
+    expect(getJob).not.toHaveBeenCalledWith("old-job");
+    expect(window.location.pathname).toBe(`/workbench/${submissionId}`);
+  });
+
+  it("does not replace an active task with a new submission", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue({
+      job_id: "job-1", source: "warehouse", status: "running", revision: 1, attempt: 1,
+      question_round: 0, question_set_id: null, questions: null, result: null, error: null,
+    });
+    render(<WorkbenchPage />);
+
+    await waitFor(() => expect(screen.getByLabelText("MySQL DDL")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "other_source" } });
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE other_orders (id BIGINT);" } });
+
+    expect(screen.getByRole("button", { name: "生成语义 →" })).toBeDisabled();
+    expect(submitDDL).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/workbench/job-1");
+  });
+
   it("releases an unaccepted coordinate after a deterministic source conflict", async () => {
     vi.mocked(previewDDL).mockImplementation(async ({ source }) => ({
       source, tables: [], relationships: [], table_count: 0, column_count: 0,
@@ -240,7 +284,7 @@ describe("workbench chat", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/workbench/strict-job"));
     expect(await screen.findByText("任务已受理")).toBeInTheDocument();
     expect(connectJobEvents).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "生成语义 →" })).toBeDisabled();
   });
 
   it("marks edits after a successful submission as unsaved", async () => {

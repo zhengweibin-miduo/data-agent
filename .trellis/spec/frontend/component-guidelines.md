@@ -20,3 +20,6 @@ render lineage and public task state.
   do not add decorative sequence numbers.
 - Render user-provided content as React text children; never use
   `dangerouslySetInnerHTML` for API or user content.
+- In fixed-height desktop layouts, clarification content owns an internally
+  scrollable bounded row so every question and the submit action remain
+  keyboard-reachable on short laptop viewports.

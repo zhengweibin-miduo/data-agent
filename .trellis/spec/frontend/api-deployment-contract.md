@@ -40,6 +40,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   On workbench remount, reconcile a retained coordinate with the job GET before
   showing sample input. Release it only after an authoritative 404 or another
   deterministic pre-acceptance rejection such as `source_busy`.
+  A retained unconfirmed coordinate takes precedence over a task ID left in the
+  URL; only its authoritative 404 may fall back to restoring that older task.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
 - Unauthenticated example proxies bind to `127.0.0.1` by default. Non-loopback

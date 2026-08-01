@@ -156,6 +156,25 @@ describe("application shell", () => {
     await waitFor(() => expect(getJob).toHaveBeenCalledWith("job-2"));
   });
 
+  it("blocks same-view task history navigation when the workbench has unsaved DDL", async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    vi.mocked(getJob).mockResolvedValue({
+      job_id: "job-1", source: "warehouse", status: "succeeded", revision: 2, attempt: 1,
+      question_round: 0, question_set_id: null, questions: null, result: null, error: null,
+    });
+    window.history.replaceState(null, "", "/workbench/job-1");
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("MySQL DDL")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE edited (id INT);" } });
+
+    window.history.replaceState(null, "", "/workbench/job-2");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    expect(window.confirm).toHaveBeenCalledWith("当前 DDL 尚未提交，确定离开工作台？");
+    expect(window.location.pathname).toBe("/workbench/job-1");
+    expect(getJob).toHaveBeenCalledTimes(1);
+  });
+
   it("does not create history when the active workbench navigation already targets the URL", () => {
     const pushState = vi.spyOn(window.history, "pushState");
     render(<App />);
