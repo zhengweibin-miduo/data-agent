@@ -57,16 +57,11 @@ Use a parent task when a request has multiple independently verifiable deliverab
 
 Use child tasks for deliverables that can move through planning, implementation, check, and archive independently. If one child depends on another, write that dependency in the child `prd.md` / `implement.md`; do not rely on tree position to imply ordering.
 
-Create each new child through the platform-specific Phase 1.0 route first.
-The Codex main session delegates a project worktree to `create_thread`; every
-non-Codex platform creates the Trellis-managed branch/worktree. Only then run
-the matching bootstrap command inside the supplied checkout:
+Create each new child through the shared Phase 1.0 route first. Every platform
+creates a Trellis-managed branch/worktree, then runs the bootstrap command
+inside that checkout:
 
 ```bash
-# Codex child bootstrap
-python ./.trellis/scripts/task.py create "<child title>" --slug <child-slug> --parent <parent-dir> --platform codex --base-branch <pr-base>
-
-# Non-Codex bootstrap
 python ./.trellis/scripts/task.py create "<child title>" --slug <child-slug> --parent <parent-dir> --base-branch <pr-base>
 ```
 
@@ -114,9 +109,8 @@ Rules:
 ## Common Commands
 
 ```bash
-# Run create only after the platform-specific Phase 1.0 route supplies a worktree.
+# Run create only after Phase 1.0 supplies a Trellis-managed worktree.
 python ./.trellis/scripts/task.py create "<title>" --slug <slug> --base-branch <pr-base>
-python ./.trellis/scripts/task.py create "<title>" --slug <slug> --platform codex --base-branch <pr-base>
 python ./.trellis/scripts/task.py start <task>
 python ./.trellis/scripts/task.py current --source
 python ./.trellis/scripts/task.py add-context <task> implement <file> <reason>
@@ -131,8 +125,8 @@ When modifying the task system, the AI should prefer script commands to maintain
 
 | Need | Edit location |
 | --- | --- |
-| Change the default task template or metadata | `.trellis/scripts/common/task_store.py`, `.trellis/scripts/common/worktree.py`, and task creation instructions. |
-| Change Codex task-worktree delegation | `.agents/skills/trellis-create-task/SKILL.md` and Codex-scoped Phase 1.0 workflow text. |
+| Change the default task template or metadata | `.trellis/scripts/common/task_store.py` and task creation instructions. |
+| Change task-worktree creation | `.trellis/workflow.md` Phase 1.0 and `.trellis/scripts/common/task_store.py`. |
 | Change status semantics | `.trellis/workflow.md`, workflow-state hook logic, and task usage conventions. |
 | Add task lifecycle actions | `hooks.after_*` in `.trellis/config.yaml`. |
 | Change context rules | Planning artifact guidance in `.trellis/workflow.md` and related platform agent/hook instructions. |

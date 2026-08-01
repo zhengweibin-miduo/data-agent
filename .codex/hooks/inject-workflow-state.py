@@ -358,7 +358,7 @@ def main() -> int:
     config = _read_trellis_config(root)
     task = get_active_task(root, data)
     if task is None:
-        # No active task — emit the host-routed Phase 1.0 breadcrumb before
+        # No active task — emit the shared Phase 1.0 breadcrumb before
         # brainstorming or any task metadata bootstrap.
         no_task_key = resolve_breadcrumb_key("no_task", platform, config)
         breadcrumb = build_breadcrumb(
