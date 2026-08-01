@@ -3,23 +3,31 @@
 ## Current Layout
 
 ```text
-src/data_agent/frontend/
-├── __init__.py
-├── index.html
-├── styles.css
-└── app.js
+frontend/
+├── src/
+│   ├── api/          # typed HTTP and SSE adapters
+│   ├── knowledge/    # authoritative-memory workspace
+│   ├── workbench/    # DDL canvas, trace, chat, clarification
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── styles.css
+├── package.json
+├── package-lock.json
+└── vite.config.ts
+
+src/data_agent/frontend/  # migration-only legacy assets
 tests/unit/test_frontend.py
 ```
 
-FastAPI mounts the directory at `/assets` and serves `index.html` for `/`,
-`/workbench`, `/workbench/{job_id}`, and `/knowledge`. The files are package
-data inside the Python distribution; there is no separate frontend build.
+Vite owns development and production builds. FastAPI exposes only API/OpenAPI/
+health routes by default. The legacy directory is mounted only when
+`ENABLE_LEGACY_FRONTEND=true`.
 
 ## Rules
 
-- Keep the application in this directory while it remains framework-free.
-- Add a file only when it owns a distinct runtime asset; do not create empty
-  component, hook, page, or utility trees.
-- Route ownership stays in `data_agent.application`; API calls stay relative so
-  the local browser uses the same origin.
-- Never commit generated caches such as `__pycache__`.
+- Put transport code in `frontend/src/api`, page-specific code in its feature
+  directory, and application navigation in `App.tsx`.
+- Components do not concatenate deployment origins; all URLs go through
+  `resolveApiUrl` / `apiRequest` or the SSE adapter.
+- Never commit `node_modules`, `dist`, coverage, or `*.tsbuildinfo`.
+- Do not import files from `src/data_agent/frontend/` into the Vite application.

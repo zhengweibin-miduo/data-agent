@@ -10,7 +10,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from data_agent.application import create_app
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.errors import DataAgentError
-from data_agent.models.jobs import JobRecord, JobStatus
+from data_agent.models.jobs import DDLJobRequest, JobRecord, JobStatus
 from tests.helpers.checks import check_condition, check_equal
 
 
@@ -68,9 +68,11 @@ class _UnavailableJobs:
 class _SubmitJobs:
     """模拟持久受理任务。"""
 
-    async def submit(self, body: object) -> JobRecord:
+    submitted: DDLJobRequest | None = None
+
+    async def submit(self, body: DDLJobRequest) -> JobRecord:
         """返回公开 Pending 记录。"""
-        del body
+        self.submitted = body
         return _terminal_record().model_copy(
             update={"status": JobStatus.PENDING}
         )
@@ -163,6 +165,28 @@ async def test_submit_response_discovers_event_stream_url() -> None:
         "可发现事件 URL",
         payload["events_url"],
         "/api/v1/metadata/ddl-jobs/job-1/events",
+    )
+
+
+async def test_submit_accepts_idempotency_coordinate_header() -> None:
+    """新后端从可选头读取坐标，同时保持旧 JSON 请求体兼容。"""
+    jobs = _SubmitJobs()
+    app = create_app()
+    app.state.jobs = cast(DDLJobStore, jobs)
+    transport = ASGITransport(app=app)
+    submission_id = "11111111-1111-4111-8111-111111111111"
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/metadata/ddl-jobs",
+            headers={"Idempotency-Key": submission_id},
+            json={"source": "source-1", "ddl": "CREATE TABLE orders(id BIGINT)"},
+        )
+
+    check_equal("幂等头受理状态", response.status_code, 202)
+    check_equal(
+        "幂等头投影到任务请求",
+        jobs.submitted.submission_id if jobs.submitted else None,
+        submission_id,
     )
 
 

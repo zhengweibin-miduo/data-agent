@@ -7,6 +7,13 @@ class JobScripts:
     """集中提供无运行时状态的原子 Lua 脚本。"""
 
     SUBMIT: ClassVar[str] = """
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  if redis.call('HGET', KEYS[1], 'job_id') == ARGV[1]
+     and redis.call('HGET', KEYS[1], 'submission_hash') == ARGV[7] then
+    return 2
+  end
+  return -1
+end
 if redis.call('SET', KEYS[3], ARGV[1], 'EX', ARGV[2], 'NX') == false then
   return 0
 end
@@ -14,8 +21,9 @@ redis.call('HSET', KEYS[1],
   'job_id', ARGV[1], 'source', ARGV[3], 'status', 'pending',
   'revision', '0', 'attempt', '0', 'question_round', '0',
   'created_at', ARGV[4], 'updated_at', ARGV[4],
-  'graph_version', ARGV[5], 'ddl', ARGV[6], 'dialect', 'mysql')
-redis.call('ZADD', KEYS[2], ARGV[7], ARGV[1] .. ':0')
+  'graph_version', ARGV[5], 'ddl', ARGV[6], 'dialect', 'mysql',
+  'submission_hash', ARGV[7])
+redis.call('ZADD', KEYS[2], ARGV[8], ARGV[1] .. ':0')
 local submit_time = redis.call('TIME')
 redis.call('ZADD', KEYS[4], submit_time[1], ARGV[1])
 return 1

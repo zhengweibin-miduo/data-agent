@@ -111,6 +111,11 @@ def test_default_app_config_loads_expected_values() -> None:
         "127.0.0.1",
     )
     check_equal(
+        "test_default_app_config_loads_expected_values 远端 CORS 默认关闭",
+        app_config.api.allow_remote_cors_origins,
+        False,
+    )
+    check_equal(
         "test_default_app_config_loads_expected_values 对话消息上限",
         app_config.conversation.max_message_chars,
         32768,
@@ -135,6 +140,23 @@ def test_default_app_config_loads_expected_values() -> None:
         "test_default_app_config_loads_expected_values 事件上限",
         app_config.redis.event_stream_max_events,
         256,
+    )
+
+
+def test_remote_cors_origins_require_explicit_opt_in() -> None:
+    """非回环 Origin 必须显式启用，启用后仍使用精确允许列表。"""
+    payload = app_config.api.model_dump(mode="json")
+    payload["cors_origins"] = ["https://frontend.example.com"]
+
+    with pytest.raises(ValidationError):
+        type(app_config.api).model_validate(payload)
+
+    payload["allow_remote_cors_origins"] = True
+    settings = type(app_config.api).model_validate(payload)
+    check_equal(
+        "test_remote_cors_origins_require_explicit_opt_in 远端 Origin",
+        str(settings.cors_origins[0]).rstrip("/"),
+        "https://frontend.example.com",
     )
 
 

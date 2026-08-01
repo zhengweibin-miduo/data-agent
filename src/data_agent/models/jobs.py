@@ -127,6 +127,11 @@ class DDLJobRequest(ContractModel):
     )
     dialect: Literal["mysql"] = Field(default="mysql", description="DDL 方言。")
     ddl: str = Field(min_length=1, description="DDL 文本。")
+    submission_id: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        description="客户端生成的幂等受理坐标。",
+    )
 
 
 class DDLJobAccepted(ContractModel):

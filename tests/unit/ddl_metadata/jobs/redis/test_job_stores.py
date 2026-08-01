@@ -395,3 +395,17 @@ def test_terminal_cleanup_preserves_answer_idempotency_fingerprint() -> None:
             actual=terminal[:160],
             expected="终态 HDEL 不含 question_set_id",
         )
+
+
+def test_submit_script_replays_only_matching_client_coordinate() -> None:
+    """任务受理重放必须校验客户端坐标对应的原始输入。"""
+    check_condition(
+        "相同 job、source 与 DDL 返回幂等重放",
+        "return 2" in JobScripts.SUBMIT
+        and "HGET', KEYS[1], 'submission_hash'" in JobScripts.SUBMIT,
+    )
+    check_condition(
+        "坐标冲突不会覆盖既有任务",
+        "return -1" in JobScripts.SUBMIT
+        and JobScripts.SUBMIT.index("EXISTS") < JobScripts.SUBMIT.index("HSET"),
+    )
