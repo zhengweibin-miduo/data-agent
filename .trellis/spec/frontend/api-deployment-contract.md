@@ -33,6 +33,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
 - DDL submission carries a client-generated UUID that is also the server job ID.
   A timed-out acceptance request replays that coordinate, and the server returns
   the original job only when its source and DDL match the first submission.
+  Keep that coordinate outside the individual request call until acceptance is
+  confirmed, including across repeated timeouts and SPA workbench remounts.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
 - Unauthenticated example proxies bind to `127.0.0.1` by default. Non-loopback

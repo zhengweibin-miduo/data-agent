@@ -15,6 +15,8 @@
 
 - A chat retry reuses the failed attempt's `turn_uid`; generating a new ID leaves
   the persisted active turn busy.
+- Keep navigation blocked while an uncertain or lease-bearing failed chat is
+  awaiting retry; otherwise unmounting loses the only reusable `turn_uid`.
 - A `waiting_input` SSE event clears submit coordinates and triggers GET of the
   current `JobRecord` before rendering answer controls.
 - Keep native EventSource alive on network `error` so the browser can reconnect

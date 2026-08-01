@@ -136,7 +136,7 @@ describe("application shell", () => {
 
     fireEvent.click(screen.getByRole("link", { name: "知识记忆" }));
 
-    expect(window.alert).toHaveBeenCalledWith("AI 回复仍在生成，请等待完成或失败后再离开工作台。");
+    expect(window.alert).toHaveBeenCalledWith("AI 回复仍在生成或等待重试，请完成当前轮次后再离开工作台。");
     expect(window.location.pathname).toBe("/workbench");
     expect(screen.getByRole("heading", { name: "把物理结构织成语义" })).toBeInTheDocument();
   });

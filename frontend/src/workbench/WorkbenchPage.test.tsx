@@ -55,6 +55,17 @@ describe("workbench chat", () => {
     expect(sendChatTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps navigation blocked while a lease-bearing failed chat awaits retry", async () => {
+    const onNavigationBlockChange = vi.fn();
+    vi.mocked(sendChatTurn).mockRejectedValueOnce(new Error("temporary failure"));
+    render(<WorkbenchPage onNavigationBlockChange={onNavigationBlockChange} />);
+    fireEvent.change(screen.getByLabelText("补充业务背景或询问当前 DDL"), { target: { value: "第一轮" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+
+    await screen.findByRole("button", { name: "重试上一轮 AI 回复" });
+    expect(onNavigationBlockChange).toHaveBeenLastCalledWith(true);
+  });
+
   it("clears stale clarification coordinates until the authoritative read succeeds", async () => {
     window.history.replaceState(null, "", "/workbench/job-1");
     vi.mocked(getJob).mockResolvedValueOnce(waitingJob({ question_set_id: "set-1" }));
@@ -133,6 +144,32 @@ describe("workbench chat", () => {
     await Promise.resolve();
     expect(window.location.pathname).toBe("/workbench");
     expect(connectJobEvents).not.toHaveBeenCalled();
+  });
+
+  it("reuses the acceptance coordinate after repeated timeouts and an SPA remount", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL)
+      .mockRejectedValueOnce(new ApiError(0, { error: { code: "request_timeout", retryable: true } }))
+      .mockRejectedValueOnce(new ApiError(0, { error: { code: "request_timeout", retryable: true } }))
+      .mockResolvedValueOnce({ job_id: "recovered-job", status: "pending", status_url: "/jobs/recovered-job", events_url: null });
+
+    const first = render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await screen.findByText(/任务提交失败/);
+    const firstCoordinate = vi.mocked(submitDDL).mock.calls[0]?.[0].submission_id;
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(submitDDL).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(submitDDL).mock.calls[1]?.[0].submission_id).toBe(firstCoordinate);
+    first.unmount();
+
+    render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/workbench/recovered-job"));
+    expect(vi.mocked(submitDDL).mock.calls[2]?.[0].submission_id).toBe(firstCoordinate);
   });
 
   it("accepts a task submission after StrictMode replays effects", async () => {

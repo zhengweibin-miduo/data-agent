@@ -33,6 +33,15 @@ interface ChatAttempt {
   ddlContext: { source: string; dialect: "mysql"; ddl: string };
 }
 
+interface SubmissionAttempt {
+  fingerprint: string;
+  submissionId: string;
+}
+
+// Keep the acceptance coordinate alive across SPA view unmounts. The DDL itself
+// remains component-owned and is never copied into browser storage.
+let pendingSubmissionAttempt: SubmissionAttempt | null = null;
+
 const randomId = () => globalThis.crypto?.randomUUID?.()
   ?? "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
     const value = Math.floor(Math.random() * 16);
@@ -99,9 +108,9 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
   }, [ddl, inputFingerprint, onUnsavedChange, submittedFingerprint]);
 
   useEffect(() => {
-    onNavigationBlockChange?.(busy === "chat");
+    onNavigationBlockChange?.(busy === "chat" || Boolean(failedChat));
     return () => onNavigationBlockChange?.(false);
-  }, [busy, onNavigationBlockChange]);
+  }, [busy, failedChat, onNavigationBlockChange]);
 
   const recordStage = useCallback((next: JobStage, emittedAt = new Date().toISOString()) => {
     setStage(next);
@@ -196,11 +205,16 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     const controller = new AbortController();
     submitController.current?.abort();
     submitController.current = controller;
+    const submissionId = pendingSubmissionAttempt?.fingerprint === inputFingerprint
+      ? pendingSubmissionAttempt.submissionId
+      : randomId();
+    pendingSubmissionAttempt = { fingerprint: inputFingerprint, submissionId };
     try {
       const accepted = await submitDDL({
-        source: source.trim(), dialect: "mysql", ddl, submission_id: randomId(),
+        source: source.trim(), dialect: "mysql", ddl, submission_id: submissionId,
       }, controller.signal);
       if (!mounted.current || controller.signal.aborted || submitController.current !== controller) return;
+      if (pendingSubmissionAttempt?.submissionId === submissionId) pendingSubmissionAttempt = null;
       const pending: JobRecord = {
         job_id: accepted.job_id, source: source.trim(), status: "pending", revision: 0,
         attempt: 0, question_round: 0, question_set_id: null, questions: null, result: null, error: null,

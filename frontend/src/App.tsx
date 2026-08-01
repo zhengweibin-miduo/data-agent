@@ -26,7 +26,7 @@ export function App() {
 
   const canLeaveWorkbench = useCallback(() => {
     if (workbenchNavigationBlockedRef.current) {
-      window.alert("AI 回复仍在生成，请等待完成或失败后再离开工作台。");
+      window.alert("AI 回复仍在生成或等待重试，请完成当前轮次后再离开工作台。");
       return false;
     }
     return !unsavedWorkbenchRef.current || window.confirm("当前 DDL 尚未提交，确定离开工作台？");
