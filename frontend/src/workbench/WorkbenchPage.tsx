@@ -65,7 +65,7 @@ interface WorkbenchPageProps {
 }
 
 export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: WorkbenchPageProps = {}) {
-  const restoredJob = useRef(restoredJobId());
+  const restoredJob = useRef(restoredJobId() ?? pendingSubmissionAttempt?.submissionId ?? null);
   const [source, setSource] = useState(restoredJob.current ? "" : "commerce_prod");
   const [ddl, setDDL] = useState(restoredJob.current ? "" : DEFAULT_DDL);
   const [restoringJob, setRestoringJob] = useState(Boolean(restoredJob.current));
@@ -160,6 +160,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     setConnection("正在恢复任务状态");
     void getJob(jobId).then((record) => {
       if (cancelled || currentJobId.current !== jobId) return;
+      if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+      if (window.location.pathname === "/workbench") {
+        window.history.replaceState(null, "", `/workbench/${encodeURIComponent(jobId)}`);
+      }
       setSource(record.source);
       setDDL("");
       setPreview(null);
@@ -172,6 +176,15 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       }
     }).catch((cause) => {
       if (cancelled || currentJobId.current !== jobId) return;
+      if (cause instanceof ApiError && cause.status === 404
+        && pendingSubmissionAttempt?.submissionId === jobId) {
+        pendingSubmissionAttempt = null;
+        currentJobId.current = null;
+        restoredJob.current = null;
+        setSource("commerce_prod");
+        setDDL(DEFAULT_DDL);
+        setSubmittedFingerprint(null);
+      }
       setRestoringJob(false);
       setError(formatApiError(cause, "无法恢复这个任务"));
     });
@@ -235,6 +248,11 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       setConnection("任务已受理，正在连接事件流");
       watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
     } catch (cause) {
+      if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500
+        && cause.status !== 408 && !cause.retryable
+        && pendingSubmissionAttempt?.submissionId === submissionId) {
+        pendingSubmissionAttempt = null;
+      }
       if (mounted.current && !controller.signal.aborted) setError(formatApiError(cause, "任务提交失败"));
     } finally {
       if (submitController.current === controller) submitController.current = null;

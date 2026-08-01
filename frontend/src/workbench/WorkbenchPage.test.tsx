@@ -144,32 +144,59 @@ describe("workbench chat", () => {
     await Promise.resolve();
     expect(window.location.pathname).toBe("/workbench");
     expect(connectJobEvents).not.toHaveBeenCalled();
+
+    vi.mocked(getJob).mockRejectedValue(new ApiError(404, { error: { code: "job_not_found", retryable: false } }));
+    const reconciled = render(<WorkbenchPage />);
+    await waitFor(() => expect(screen.getByLabelText("数据源")).toBeEnabled());
+    reconciled.unmount();
   });
 
-  it("reuses the acceptance coordinate after repeated timeouts and an SPA remount", async () => {
-    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
-    vi.mocked(submitDDL)
-      .mockRejectedValueOnce(new ApiError(0, { error: { code: "request_timeout", retryable: true } }))
-      .mockRejectedValueOnce(new ApiError(0, { error: { code: "request_timeout", retryable: true } }))
-      .mockResolvedValueOnce({ job_id: "recovered-job", status: "pending", status_url: "/jobs/recovered-job", events_url: null });
-
+  it("reconciles a custom accepted submission after repeated timeouts and an SPA remount", async () => {
+    const customDDL = "CREATE TABLE custom_orders (id BIGINT);";
+    vi.mocked(previewDDL).mockResolvedValue({ source: "custom_source", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockRejectedValue(new ApiError(408, { error: { code: "request_timeout", retryable: true } }));
     const first = render(<WorkbenchPage />);
+    fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "custom_source" } });
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: customDDL } });
     fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
     await screen.findByText(/任务提交失败/);
-    const firstCoordinate = vi.mocked(submitDDL).mock.calls[0]?.[0].submission_id;
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
-    await waitFor(() => expect(submitDDL).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(submitDDL).mock.calls[1]?.[0].submission_id).toBe(firstCoordinate);
+    const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
     first.unmount();
 
+    vi.mocked(getJob).mockResolvedValue(waitingJob({ job_id: submissionId, source: "custom_source" }));
+    render(<WorkbenchPage />);
+
+    expect(screen.getByLabelText("数据源")).toBeDisabled();
+    await waitFor(() => expect(window.location.pathname).toBe(`/workbench/${submissionId}`));
+    expect(await screen.findByText("第二轮问题")).toBeInTheDocument();
+    expect(connectJobEvents).toHaveBeenCalledOnce();
+  });
+
+  it("releases an unaccepted coordinate after a deterministic source conflict", async () => {
+    vi.mocked(previewDDL).mockImplementation(async ({ source }) => ({
+      source, tables: [], relationships: [], table_count: 0, column_count: 0,
+    }));
+    vi.mocked(submitDDL)
+      .mockRejectedValueOnce(new ApiError(409, { error: { code: "source_busy", retryable: false } }))
+      .mockResolvedValueOnce({ job_id: "new-job", status: "pending", status_url: "/jobs/new-job", events_url: null });
     render(<WorkbenchPage />);
     fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
-    await waitFor(() => expect(window.location.pathname).toBe("/workbench/recovered-job"));
-    expect(vi.mocked(submitDDL).mock.calls[2]?.[0].submission_id).toBe(firstCoordinate);
+    await screen.findByText(/source_busy/);
+
+    fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "available_source" } });
+    fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE available (id INT);" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/workbench/new-job"));
+    expect(submitDDL).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(submitDDL).mock.calls[1]![0].submission_id)
+      .not.toBe(vi.mocked(submitDDL).mock.calls[0]![0].submission_id);
   });
 
   it("preserves an unconfirmed acceptance coordinate when the DDL changes", async () => {

@@ -37,6 +37,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   confirmed, including across repeated timeouts and SPA workbench remounts.
   Do not replace an unconfirmed coordinate when editable input changes; recover
   the original acceptance result before allowing a different submission.
+  On workbench remount, reconcile a retained coordinate with the job GET before
+  showing sample input. Release it only after an authoritative 404 or another
+  deterministic pre-acceptance rejection such as `source_busy`.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
 - Unauthenticated example proxies bind to `127.0.0.1` by default. Non-loopback
