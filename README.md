@@ -6,6 +6,7 @@ Data Agent 是一个面向 MySQL DDL 的异步元数据生成项目。它使用�
 
 - Python 3.13
 - [uv](https://docs.astral.sh/uv/)
+- Node.js 20.19+ 与 npm（独立前端开发和构建）
 - Docker 与 Docker Compose
 - 一个支持结构化输出的 OpenAI 兼容模型端点
 
@@ -64,7 +65,9 @@ $env:DATA_AGENT_LLM_API_KEY = "your-api-key"
 uv run data-agent-api
 ```
 
-API 启动后访问 `http://127.0.0.1:8000/workbench` 使用 Schema Loom 前端。
+API 默认只提供 `/api/v1/**`、OpenAPI 与健康检查，不再托管前端页面。迁移期如需
+临时恢复旧入口，可显式设置 `ENABLE_LEGACY_FRONTEND=true`；生产环境应保持默认
+关闭。
 
 ```powershell
 uv run arq data_agent.ddl_metadata.worker.settings.WorkerSettings
@@ -73,6 +76,43 @@ uv run arq data_agent.ddl_metadata.worker.settings.WorkerSettings
 API 使用 `conf/app_config.yaml` 中的回环地址与端口。worker 保留 arq 官方
 discovery 路径，并在启动时检查 Redis checkpoint、MySQL、派生索引、TEI 与
 结构化模型能力。
+
+## 运行独立前端
+
+本地开发时，在第三个终端运行：
+
+```powershell
+cd frontend
+npm ci
+$env:VITE_API_BASE_URL = "http://127.0.0.1:8000"
+npm run dev
+```
+
+浏览器访问 `http://127.0.0.1:5173/workbench`。后端
+`conf/app_config.yaml` 默认允许 `127.0.0.1:5173` 与 `localhost:5173`；部署到其它
+Origin 时必须同步收紧 `api.cors_origins`。
+
+生产构建使用：
+
+```powershell
+cd frontend
+npm ci
+$env:VITE_API_BASE_URL = "/api"
+npm run build
+```
+
+将 `frontend/dist/` 交给静态服务器，并为 `/workbench`、`/knowledge`、
+`/workbench/{job_id}` 等前端路由配置 SPA fallback（未知静态路径回退到
+`/index.html`）。仓库提供可直接调整的 `frontend/deploy/nginx.conf` 和
+`frontend/deploy/Caddyfile` 示例。把同域 `/api/` 反向代理到
+`http://127.0.0.1:8000/api/`。SSE 代理必须关闭缓冲和缓存，读取超时应长于后端
+心跳间隔，例如 Nginx location 中使用 `proxy_buffering off`、
+`proxy_cache off`、`proxy_read_timeout 3600s`。分域部署时，将
+`VITE_API_BASE_URL` 设置为完整 API Origin，并在后端将 `api.cors_origins` 精确配置为
+实际前端 Origin，同时显式设置 `api.allow_remote_cors_origins: true`。该开关只放宽
+CORS 配置校验，不会改变 API 的回环监听地址；对外发布仍应由带认证和访问控制的代理承担。
+示例代理默认只监听 `127.0.0.1:80`，与无认证的本地单用户边界保持一致；如需
+向局域网或公网开放，必须先增加认证，并通过防火墙或其它网络访问控制限制来源。
 
 ## 验证
 
@@ -86,6 +126,13 @@ uv run python -m compileall -q src tests
 uv run python -m data_agent.settings
 uv run pytest -m "not integration"
 docker compose -f docs/docker/docker-compose.yml config
+cd frontend
+npm ci
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+cd ..
 git diff --check
 ```
 

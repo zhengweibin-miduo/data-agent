@@ -77,6 +77,14 @@ async def _test_api() -> None:
             actual="未抛出预期异常",
             expected="CORS 配置必须拒绝非本机 Origin",
         )
+    remote_api_config = dict(invalid_api_config)
+    remote_api_config["allow_remote_cors_origins"] = True
+    remote_api = APISettings.model_validate(remote_api_config)
+    check_equal(
+        "_test_api 检查点 2",
+        str(remote_api.cors_origins[0]).rstrip("/"),
+        "https://frontend.example.com",
+    )
     invalid_lease_config = app_config.model_dump(mode="json")
     invalid_lease_config["memory"]["source_lease_seconds"] = 1
     try:
@@ -137,18 +145,26 @@ async def _test_api() -> None:
             transport=transport,
             base_url="http://test",
         ) as client:
+            allowed_origin = str(app_config.api.cors_origins[0]).rstrip("/")
             allowed = await client.options(
                 "/api/v1/metadata/ddl-jobs",
                 headers={
-                    "Origin": "http://127.0.0.1:3000",
+                    "Origin": allowed_origin,
                     "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "Idempotency-Key",
                 },
             )
             check_equal("_test_api 检查点 2", allowed.status_code, 200)
             check_equal(
                 "_test_api 检查点 3",
                 allowed.headers["access-control-allow-origin"],
-                "http://127.0.0.1:3000",
+                allowed_origin,
+            )
+            check_condition(
+                "_test_api 检查点 3a",
+                "idempotency-key"
+                in allowed.headers["access-control-allow-headers"].lower(),
+                expected="CORS 允许任务幂等坐标头",
             )
             denied = await client.options(
                 "/api/v1/metadata/ddl-jobs",

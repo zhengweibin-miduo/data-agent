@@ -2,24 +2,25 @@
 
 ## Required Checks
 
-The frontend deliberately has no package manager or build command. Run:
+Run from `frontend/`:
 
 ```powershell
-node --check src/data_agent/frontend/app.js
-node src/data_agent/frontend/app.js --self-check
-uv run pytest tests/unit/test_frontend.py
-uv build --wheel
+npm ci
+npm run lint
+npm run typecheck
+npm run test
+npm run build
 ```
 
-Inspect the wheel and confirm it contains `data_agent/frontend/index.html`,
-`styles.css`, and `app.js`. The repository-wide Ruff, Pyright, compileall, and
-non-integration pytest gates remain required because FastAPI owns static serving
-and chat orchestration.
+From the repository root also run `uv run pytest tests/unit/test_frontend.py`,
+Ruff, Pyright, and non-integration pytest. CI must run the npm gates in an
+independent job using `frontend/package-lock.json`.
 
 ## Review Checklist
 
-- Test DDL byte counting, authoritative waiting-input refresh, stable chat retry
-  IDs, safe server-only LLM access, and static route serving.
+- Test DDL byte counting, authoritative waiting-input refresh, native SSE
+  reconnect semantics, polling fallback, stable chat retry IDs, safe server-only
+  LLM access, API-only startup, CORS, and the legacy switch.
 - Check 360px, 768px, and desktop layouts; keyboard-only operation; visible
   focus; 200% zoom; and `prefers-reduced-motion`.
 - Review API errors by stable `code`, `stage`, and `retryable` fields. Do not

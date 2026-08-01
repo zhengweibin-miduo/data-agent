@@ -1,13 +1,12 @@
 """FastAPI 应用组合与共享资源生命周期。"""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from loguru import logger
 from redis.exceptions import RedisError
 
@@ -38,7 +37,7 @@ from data_agent.logging import (
 from data_agent.memory.application.service import MemoryService
 from data_agent.settings import app_config
 
-_FRONTEND_DIR = Path(__file__).with_name("frontend")
+_LEGACY_FRONTEND_ENV = "ENABLE_LEGACY_FRONTEND"
 
 
 async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
@@ -144,8 +143,53 @@ async def _handle_redis_error(
     )
 
 
+def _legacy_frontend_enabled() -> bool:
+    """读取显式旧前端兼容开关，默认保持 API-only。"""
+    # 步骤一：只接受清晰布尔值，避免拼写错误意外恢复已弃用的生产入口。
+    raw_value = os.environ.get(_LEGACY_FRONTEND_ENV, "false").strip().casefold()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{_LEGACY_FRONTEND_ENV} 只能使用 true/false、1/0、yes/no 或 on/off"
+    )
+
+
+def _mount_legacy_frontend(app: FastAPI) -> None:
+    """仅在迁移期开关启用时挂载已弃用的内嵌前端。"""
+    # 步骤一：延迟导入静态服务依赖，保证 API-only 启动不读取前端源码目录。
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    frontend_dir = Path(__file__).with_name("frontend")
+    if not frontend_dir.is_dir():
+        raise RuntimeError("旧前端目录不存在，无法启用 ENABLE_LEGACY_FRONTEND")
+    # 步骤二：记录迁移提示并恢复旧路径，供独立前端切换窗口内紧急回滚。
+    logger.warning(
+        "旧内嵌前端兼容入口已启用；该入口将在独立前端迁移完成后删除，"
+        "生产环境请保持 ENABLE_LEGACY_FRONTEND=false"
+    )
+    app.mount(
+        "/assets",
+        StaticFiles(directory=frontend_dir),
+        name="legacy-frontend-assets",
+    )
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/workbench", include_in_schema=False)
+    @app.get("/workbench/{job_id}", include_in_schema=False)
+    @app.get("/knowledge", include_in_schema=False)
+    async def legacy_frontend(job_id: str | None = None) -> FileResponse:
+        """返回迁移期保留的旧 Schema Loom 单页入口。"""
+        del job_id
+        return FileResponse(frontend_dir / "index.html")
+
+
 def create_app() -> FastAPI:
-    """创建仅面向本机浏览器的应用。"""
+    """创建默认 API-only、仅面向本机浏览器的应用。"""
     # 步骤一：创建带生命周期的应用，并按已校验配置装配本机浏览器 CORS 边界。
     app = FastAPI(title="Data Agent DDL Metadata API", lifespan=_observed_lifespan)
     app.add_middleware(
@@ -155,7 +199,7 @@ def create_app() -> FastAPI:
         ],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "Idempotency-Key"],
     )
     # 步骤二：集中注册安全异常投影和业务路由，保持传输层入口只有一个组合根。
     app.add_middleware(RequestLoggingContextMiddleware)
@@ -164,20 +208,17 @@ def create_app() -> FastAPI:
     app.include_router(ddl_metadata_router)
     app.include_router(conversation_router)
     app.include_router(chat_router)
-    app.mount(
-        "/assets",
-        StaticFiles(directory=_FRONTEND_DIR),
-        name="frontend-assets",
-    )
 
-    @app.get("/", include_in_schema=False)
-    @app.get("/workbench", include_in_schema=False)
-    @app.get("/workbench/{job_id}", include_in_schema=False)
-    @app.get("/knowledge", include_in_schema=False)
-    async def frontend(job_id: str | None = None) -> FileResponse:
-        """返回本地 Schema Loom 单页工作台。"""
-        del job_id
-        return FileResponse(_FRONTEND_DIR / "index.html")
+    @app.get("/api/v1/health", tags=["health"])
+    async def health() -> dict[str, object]:
+        """返回不触发外部依赖访问的 API 进程存活状态。"""
+        return {
+            "status": "ok",
+            "capabilities": {"ddl_submission_idempotency": True},
+        }
 
-    # 步骤三：返回完成静态装配的应用；外部资源仍由启动阶段的 lifespan 初始化。
+    # 步骤三：兼容开关默认关闭；启用时才读取并挂载旧 Python 包内前端目录。
+    if _legacy_frontend_enabled():
+        _mount_legacy_frontend(app)
+    # 步骤四：返回完成 API 装配的应用；外部资源仍由启动阶段的 lifespan 初始化。
     return app

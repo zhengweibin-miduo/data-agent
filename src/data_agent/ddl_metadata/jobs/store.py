@@ -119,17 +119,26 @@ class DDLJobStore:
             )
         # 步骤二：生成不透明任务标识，并由原子脚本同时建立权威 Hash、来源租约
         # 与 dispatch outbox；脚本还保证同一逻辑来源只能有一个活动任务。
-        job_id = str(uuid4())
+        job_id = request.submission_id or str(uuid4())
         accepted = await self._state.submit(job_id, request, datetime.now(UTC))
-        if not accepted:
+        if accepted == 0:
             raise DataAgentError(
                 "source_busy",
                 "submit",
                 "该逻辑数据源已有活动任务",
                 http_status=409,
             )
+        if accepted < 0:
+            raise DataAgentError(
+                "submission_conflict",
+                "submit",
+                "幂等受理坐标已用于不同请求",
+                http_status=409,
+            )
         # 步骤三：从权威 Hash 回读公开投影，确保返回值不携带原始 DDL 或内部字段。
         record = await self.get(job_id)
+        if accepted == 2:
+            return record
         # 步骤四：权威状态成立后再尽力发布排队通知，发布失败不撤销受理结果。
         await self._publish_safely(
             record,

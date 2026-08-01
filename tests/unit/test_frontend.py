@@ -1,85 +1,142 @@
-"""Schema Loom 静态前端入口检查。"""
+"""前后端分离后的 API-only 与旧入口兼容检查。"""
+
+from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
 from data_agent.application import create_app
-from tests.helpers.checks import check_condition, check_equal
+from tests.helpers.checks import (
+    check_condition,
+    check_equal,
+    check_exception,
+    fail_check,
+)
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-async def test_frontend_routes_and_assets_are_served_without_lifespan() -> None:
-    """工作台、知识页和静态资源由同一个本地 FastAPI 应用提供。"""
+def test_static_host_examples_fallback_spa_deep_links() -> None:
+    """生产静态服务器配置必须让工作台与知识页深链接回退到入口。"""
+    nginx = (REPOSITORY_ROOT / "frontend/deploy/nginx.conf").read_text()
+    caddy = (REPOSITORY_ROOT / "frontend/deploy/Caddyfile").read_text()
+
+    check_condition(
+        "Nginx SPA fallback",
+        "listen 127.0.0.1:80;" in nginx
+        and "try_files $uri $uri/ /index.html;" in nginx,
+        actual=nginx,
+        expected="仅监听回环地址，且前端深链接回退到 /index.html",
+    )
+    check_condition(
+        "Caddy SPA fallback",
+        caddy.startswith("http://127.0.0.1:80 {")
+        and "handle /api/* {\n        reverse_proxy 127.0.0.1:8000\n    }"
+        in caddy
+        and "handle {\n        try_files {path} /index.html\n        file_server\n    }"
+        in caddy,
+        actual=caddy,
+        expected="仅监听回环地址，且 API 代理与 SPA fallback 位于互斥路由中",
+    )
+
+
+async def test_api_only_is_default_without_frontend_files(monkeypatch) -> None:
+    """默认应用只提供 API、OpenAPI 与健康检查。"""
+    monkeypatch.delenv("ENABLE_LEGACY_FRONTEND", raising=False)
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        root = await client.get("/")
+        workbench = await client.get("/workbench")
+        asset = await client.get("/assets/app.js")
+        openapi = await client.get("/openapi.json")
+        health = await client.get("/api/v1/health")
+
+    check_equal("API-only 根路径状态", root.status_code, 404)
+    check_equal("API-only 工作台路径状态", workbench.status_code, 404)
+    check_equal("API-only 静态资源路径状态", asset.status_code, 404)
+    check_equal("OpenAPI 状态", openapi.status_code, 200)
+    check_condition(
+        "OpenAPI 保留版本化业务契约",
+        "/api/v1/metadata/ddl-jobs" in openapi.json()["paths"],
+        actual=list(openapi.json()["paths"]),
+        expected="包含 DDL jobs 路由",
+    )
+    check_equal(
+        "健康检查响应",
+        health.json(),
+        {"status": "ok", "capabilities": {"ddl_submission_idempotency": True}},
+    )
+
+
+async def test_legacy_frontend_requires_explicit_switch(monkeypatch) -> None:
+    """显式兼容开关可在迁移窗口内恢复旧入口。"""
+    monkeypatch.setenv("ENABLE_LEGACY_FRONTEND", "true")
     transport = ASGITransport(app=create_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         workbench = await client.get("/workbench")
-        restored = await client.get("/workbench/job-1")
-        knowledge = await client.get("/knowledge")
         script = await client.get("/assets/app.js")
-        styles = await client.get("/assets/styles.css")
 
-    for name, response in {
-        "工作台": workbench,
-        "任务恢复": restored,
-        "知识记忆": knowledge,
-        "脚本": script,
-        "样式": styles,
-    }.items():
-        check_equal(f"{name} HTTP 状态", response.status_code, 200)
+    check_equal("兼容工作台状态", workbench.status_code, 200)
+    check_equal("兼容静态脚本状态", script.status_code, 200)
     check_condition(
-        "工作台包含 Schema Trace",
+        "兼容入口保留迁移提示内容",
         "Schema Trace" in workbench.text,
         actual=workbench.text[:200],
-        expected="Schema Trace",
+        expected="旧 Schema Loom 页面",
     )
-    check_condition(
-        "浏览器只调用服务端聊天端点",
-        "/chat-turns" in script.text and "DATA_AGENT_LLM_API_KEY" not in script.text,
-        actual="chat-turns" if "/chat-turns" in script.text else "missing",
-        expected="服务端 chat-turns 且无模型密钥",
+
+
+async def test_cors_allows_vite_origin_and_rejects_unknown_origin(
+    monkeypatch,
+) -> None:
+    """跨源开发只允许配置中的 Vite 本机 Origin。"""
+    monkeypatch.delenv("ENABLE_LEGACY_FRONTEND", raising=False)
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        allowed = await client.options(
+            "/api/v1/health",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        rejected = await client.options(
+            "/api/v1/health",
+            headers={
+                "Origin": "http://127.0.0.1:4173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    check_equal("允许 Origin 预检状态", allowed.status_code, 200)
+    check_equal(
+        "允许 Origin 响应头",
+        allowed.headers.get("access-control-allow-origin"),
+        "http://127.0.0.1:5173",
     )
-    check_condition(
-        "SSE 等待澄清先回读权威任务",
-        'data.status === "waiting_input"' in script.text
-        and "renderJob(await refreshJob()" in script.text
-        and "question_set_id: data.status" in script.text,
-        actual="waiting_input 权威回读标记",
-        expected="GET JobRecord 后再呈现可提交问题",
+    check_equal("拒绝未知 Origin 预检状态", rejected.status_code, 400)
+    check_equal(
+        "拒绝响应不授予 Origin",
+        rejected.headers.get("access-control-allow-origin"),
+        None,
     )
-    check_condition(
-        "聊天失败重试复用原轮次",
-        "state.failedChat = attempt" in script.text
-        and "sendChat(state.failedChat, false)" in script.text,
-        actual="聊天重试轮次标记",
-        expected="复用失败请求的 turn_uid",
-    )
-    check_condition(
-        "画布调用只读 preview 契约",
-        "/api/v1/metadata/ddl-preview" in script.text
-        and 'id="schema-nodes"' in workbench.text
-        and 'id="relationship-layer"' in workbench.text,
-        actual="preview 与 lineage DOM 标记",
-        expected="真实 parser preview 驱动画布",
-    )
-    check_condition(
-        "工作台无宣传 hero 并保持三栏结构",
-        "view-heading" not in workbench.text
-        and "workbench-grid" in workbench.text
-        and "LIVE LINEAGE" in workbench.text,
-        actual="Semantic Night Canvas 外壳",
-        expected="无 hero 的紧凑三栏画布",
-    )
-    check_condition(
-        "样式包含六个 Semantic Night token",
-        all(
-            token in styles.text
-            for token in (
-                "--canvas-ink",
-                "--node-slate",
-                "--data-cyan",
-                "--semantic-violet",
-                "--metric-amber",
-                "--ice-text",
-            )
-        ),
-        actual="CSS token 集",
-        expected="六个具名 token",
-    )
+
+
+def test_legacy_frontend_switch_rejects_ambiguous_value(monkeypatch) -> None:
+    """无效兼容开关应在应用启动前明确失败。"""
+    monkeypatch.setenv("ENABLE_LEGACY_FRONTEND", "sometimes")
+    try:
+        create_app()
+    except ValueError as error:
+        check_exception("无效兼容开关", error, ValueError)
+        check_condition(
+            "无效开关错误指向配置名",
+            "ENABLE_LEGACY_FRONTEND" in str(error),
+            actual=str(error),
+            expected="包含 ENABLE_LEGACY_FRONTEND",
+        )
+    else:
+        fail_check(
+            "无效兼容开关",
+            actual="应用被创建",
+            expected="创建前抛出 ValueError",
+        )
