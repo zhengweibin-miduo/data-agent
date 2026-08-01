@@ -22,3 +22,8 @@
   polling only when EventSource is unavailable, event payload parsing fails, or
   the server emits `stream_error`. Terminal jobs stop every handle.
 - Keep unsaved-DDL navigation protection while the input view is active.
+- A deep-link restore clears sample input and locks DDL actions before starting
+  its GET. Ignore the whole continuation when it no longer owns the active job.
+- Keep the failed chat retry gate only for uncertain or lease-bearing failures.
+  Deterministic non-retryable client validation failures must return the inputs
+  to an editable state so the user can correct the frozen DDL context.

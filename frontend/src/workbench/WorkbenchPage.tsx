@@ -50,8 +50,10 @@ interface WorkbenchPageProps {
 }
 
 export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
-  const [source, setSource] = useState("commerce_prod");
-  const [ddl, setDDL] = useState(DEFAULT_DDL);
+  const restoredJob = useRef(restoredJobId());
+  const [source, setSource] = useState(restoredJob.current ? "" : "commerce_prod");
+  const [ddl, setDDL] = useState(restoredJob.current ? "" : DEFAULT_DDL);
+  const [restoringJob, setRestoringJob] = useState(Boolean(restoredJob.current));
   const [preview, setPreview] = useState<DDLPreview | null>(null);
   const [previewFingerprint, setPreviewFingerprint] = useState("");
   const [job, setJob] = useState<JobRecord | null>(null);
@@ -69,7 +71,7 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   const [failedChat, setFailedChat] = useState<ChatAttempt | null>(null);
   const [submittedFingerprint, setSubmittedFingerprint] = useState<string | null>(null);
   const subscription = useRef<JobEventSubscription | null>(null);
-  const currentJobId = useRef<string | null>(null);
+  const currentJobId = useRef<string | null>(restoredJob.current);
 
   const inputFingerprint = `${source}\n${ddl}`;
   const ddlBytes = new TextEncoder().encode(ddl).length;
@@ -129,22 +131,28 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   }, [acceptEvent, acceptJob]);
 
   useEffect(() => {
-    const jobId = restoredJobId();
+    const jobId = restoredJob.current;
     if (!jobId) return;
-    currentJobId.current = jobId;
+    let cancelled = false;
     setConnection("正在恢复任务状态");
     void getJob(jobId).then((record) => {
+      if (cancelled || currentJobId.current !== jobId) return;
       setSource(record.source);
       setDDL("");
       setPreview(null);
       setPreviewFingerprint("");
       setSubmittedFingerprint(`${record.source}\n`);
+      setRestoringJob(false);
       acceptJob(record);
       if (!TERMINAL_STATUSES.has(record.status)) {
         watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
       }
-    }).catch((cause) => setError(formatApiError(cause, "无法恢复这个任务")));
-    return () => subscription.current?.close();
+    }).catch((cause) => {
+      if (cancelled || currentJobId.current !== jobId) return;
+      setRestoringJob(false);
+      setError(formatApiError(cause, "无法恢复这个任务"));
+    });
+    return () => { cancelled = true; subscription.current?.close(); };
   }, [acceptJob, watchJob]);
 
   useEffect(() => () => subscription.current?.close(), []);
@@ -241,8 +249,13 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
       if (attempt.draftQuestion) setAnswers((items) => ({ ...items, [attempt.draftQuestion!.question_id]: response.message.content }));
       setDraftQuestion(null);
     } catch (cause) {
-      setFailedChat(attempt);
-      setError(formatApiError(cause, "AI 回复生成失败，请重试上一轮"));
+      const deterministicClientError = cause instanceof ApiError
+        && cause.status >= 400 && cause.status < 500
+        && cause.status !== 409 && !cause.retryable;
+      setFailedChat(deterministicClientError ? null : attempt);
+      setError(formatApiError(cause, deterministicClientError
+        ? "AI 请求校验失败，请修正输入后重新发送"
+        : "AI 回复生成失败，请重试上一轮"));
     }
     finally { setBusy(null); }
   };
@@ -267,17 +280,17 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
       <aside className="ddl-panel" aria-labelledby="ddl-title">
         <div className="panel-kicker">DDL / SCHEMA</div><h1 id="ddl-title">把物理结构织成语义</h1>
         <label htmlFor="source">数据源</label>
-        <input id="source" name="source" value={source} onChange={(event) => setSource(event.target.value)} maxLength={MAX_SOURCE_CHARS} pattern="[\\w.-]+" autoComplete="off" spellCheck={false} aria-describedby="source-help" required />
+        <input id="source" name="source" value={source} onChange={(event) => setSource(event.target.value)} maxLength={MAX_SOURCE_CHARS} pattern="[\\w.-]+" autoComplete="off" spellCheck={false} aria-describedby="source-help" disabled={restoringJob} required />
         <p id="source-help" className="field-note">1–128 字符：字母、数字、下划线、点或连字符。</p>
         <label htmlFor="ddl">MySQL DDL</label>
-        <textarea id="ddl" name="ddl" className="ddl-editor" value={ddl} onChange={(event) => setDDL(event.target.value)} autoComplete="off" spellCheck={false} aria-describedby="ddl-help" required />
+        <textarea id="ddl" name="ddl" className="ddl-editor" value={ddl} onChange={(event) => setDDL(event.target.value)} autoComplete="off" spellCheck={false} aria-describedby="ddl-help" disabled={restoringJob} required />
         <div id="ddl-help" className={`editor-footer ${ddlBytes > MAX_DDL_BYTES ? "over-limit" : ""}`}>
           <span>{new Intl.NumberFormat("en-US").format(ddlBytes)} / 262,144 bytes</span>
           <span>50 tables · 500 columns</span>
         </div>
         <div className="ddl-actions">
-          <button type="button" className="secondary-action" disabled={busy !== null || !inputValid} onClick={() => void handlePreview()}>{busy === "preview" ? "正在解析…" : "预览结构"}</button>
-          <button type="button" className="primary-action" disabled={busy !== null || !inputValid || !preview || previewStale} onClick={() => void handleSubmit()}>{busy === "submit" ? "正在受理…" : "生成语义 →"}</button>
+          <button type="button" className="secondary-action" disabled={restoringJob || busy !== null || !inputValid} onClick={() => void handlePreview()}>{busy === "preview" ? "正在解析…" : "预览结构"}</button>
+          <button type="button" className="primary-action" disabled={restoringJob || busy !== null || !inputValid || !preview || previewStale} onClick={() => void handleSubmit()}>{busy === "submit" ? "正在受理…" : "生成语义 →"}</button>
         </div>
         <div className={`preview-state ${previewStale ? "stale" : ""}`} aria-live="polite">
           {previewStale ? "DDL 已变化，请重新预览" : preview ? `${preview.table_count} 表 · ${preview.column_count} 列 · PREVIEW READY` : "尚未建立结构预览"}
@@ -293,8 +306,8 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
         </div>
         <form className="chat-form" onSubmit={(event) => void handleChat(event)}>
           <label htmlFor="chat-input">补充业务背景或询问当前 DDL</label>
-          <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={!ddl.trim() || busy === "chat" || Boolean(failedChat)} />
-          <button className="primary-action" type="submit" disabled={!chatInput.trim() || busy === "chat" || Boolean(failedChat)}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
+          <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={restoringJob || !ddl.trim() || busy === "chat" || Boolean(failedChat)} />
+          <button className="primary-action" type="submit" disabled={restoringJob || !chatInput.trim() || busy === "chat" || Boolean(failedChat)}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
         </form>
         {failedChat && (
           <button className="secondary-action chat-retry" type="button" disabled={busy === "chat"} onClick={() => void sendChatAttempt(failedChat, false)}>

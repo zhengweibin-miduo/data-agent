@@ -81,6 +81,23 @@ describe("workbench chat", () => {
     expect(screen.getByLabelText("补充业务背景或询问当前 DDL")).toBeDisabled();
   });
 
+  it("clears and locks sample inputs while a deep-link restore is pending", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    let resolveRestore!: (job: JobRecord) => void;
+    vi.mocked(getJob).mockImplementation(() => new Promise((resolve) => { resolveRestore = resolve; }));
+    render(<WorkbenchPage />);
+
+    expect(screen.getByLabelText("数据源")).toHaveValue("");
+    expect(screen.getByLabelText("数据源")).toBeDisabled();
+    expect(screen.getByLabelText("MySQL DDL")).toHaveValue("");
+    expect(screen.getByLabelText("MySQL DDL")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "预览结构" })).toBeDisabled();
+    expect(screen.getByLabelText("补充业务背景或询问当前 DDL")).toBeDisabled();
+
+    resolveRestore(waitingJob());
+    await waitFor(() => expect(screen.getByLabelText("数据源")).toBeEnabled());
+  });
+
   it("restarts the stage trace when a second task is submitted", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL)
@@ -177,6 +194,22 @@ describe("workbench chat", () => {
     expect(createConversation).toHaveBeenCalledOnce();
     expect(sessionStorage.getItem("schema-loom-conversation")).toBe("conversation-1");
     expect(vi.mocked(sendChatTurn).mock.calls[1]?.[1].turn_uid).toBe(vi.mocked(sendChatTurn).mock.calls[0]?.[1].turn_uid);
+  });
+
+  it("releases the chat retry gate after a deterministic validation failure", async () => {
+    vi.mocked(sendChatTurn).mockRejectedValueOnce(new ApiError(422, {
+      error: { code: "invalid_ddl", stage: "request", retryable: false },
+    }));
+    render(<WorkbenchPage />);
+    const input = screen.getByLabelText("补充业务背景或询问当前 DDL");
+    fireEvent.change(input, { target: { value: "解释无效结构" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
+
+    await screen.findByText(/AI 请求校验失败，请修正输入后重新发送/);
+    expect(screen.queryByRole("button", { name: "重试上一轮 AI 回复" })).not.toBeInTheDocument();
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "修正后重新发送" } });
+    expect(screen.getByRole("button", { name: "发送 →" })).toBeEnabled();
   });
 
   it("shows the server-aligned source and DDL submission constraints", () => {

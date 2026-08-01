@@ -1,6 +1,12 @@
 import type { ApiErrorEnvelope } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/$/, "");
+export const API_REQUEST_TIMEOUT_MS = 30_000;
+export const CHAT_REQUEST_TIMEOUT_MS = 120_000;
+
+interface ApiRequestOptions extends RequestInit {
+  timeoutMs?: number;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -33,21 +39,46 @@ export function resolveApiUrl(path: string, base = API_BASE): string {
 
 export async function apiRequest<T>(
   path: string,
-  options: RequestInit = {},
+  options: ApiRequestOptions = {},
 ): Promise<T> {
-  const response = await fetch(resolveApiUrl(path), {
-    ...options,
-    headers: options.body
-      ? { "Content-Type": "application/json", ...options.headers }
-      : options.headers,
-  });
-  const payload = response.status === 204
-    ? null
-    : await response.json().catch(() => ({} as ApiErrorEnvelope));
-  if (!response.ok) {
-    throw new ApiError(response.status, payload as ApiErrorEnvelope);
+  const { timeoutMs = API_REQUEST_TIMEOUT_MS, signal: callerSignal, ...requestOptions } = options;
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) abortFromCaller();
+  else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(resolveApiUrl(path), {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: requestOptions.body
+        ? { "Content-Type": "application/json", ...requestOptions.headers }
+        : requestOptions.headers,
+    });
+    const payload = response.status === 204
+      ? null
+      : await response.json().catch((error: unknown) => {
+        if (timedOut) throw error;
+        return {} as ApiErrorEnvelope;
+      });
+    if (!response.ok) {
+      throw new ApiError(response.status, payload as ApiErrorEnvelope);
+    }
+    return payload as T;
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(408, { error: { code: "request_timeout", stage: "request", retryable: true } });
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
   }
-  return payload as T;
 }
 
 export function formatApiError(error: unknown, fallback: string): string {

@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { apiRequest, CHAT_REQUEST_TIMEOUT_MS } from "./client";
 import type {
   ChatTurnResponse,
   ConversationCreated,
@@ -58,6 +58,7 @@ export const sendChatTurn = (
   apiRequest(`/api/v1/conversations/${encodeURIComponent(conversationUid)}/chat-turns`, {
     method: "POST",
     body: JSON.stringify(payload),
+    timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
   });
 
 export const searchMemories = (source: string, query: string): Promise<MemorySearchResponse> =>

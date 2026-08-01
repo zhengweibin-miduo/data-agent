@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, resolveApiUrl } from "./client";
+import { ApiError, apiRequest, resolveApiUrl } from "./client";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("API client", () => {
   it("resolves relative and explicit API bases without duplicating /api", () => {
@@ -12,5 +17,19 @@ describe("API client", () => {
   it("projects stable API error fields", () => {
     const error = new ApiError(409, { error: { code: "revision_conflict", stage: "waiting_input", retryable: true, details: { expected: 4 } } });
     expect(error).toMatchObject({ status: 409, code: "revision_conflict", stage: "waiting_input", retryable: true, details: { expected: 4 } });
+  });
+
+  it("aborts a request at the configured deadline with a stable timeout error", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    })));
+
+    const request = apiRequest("/api/v1/health", { timeoutMs: 25 });
+    const expectation = expect(request).rejects.toMatchObject({
+      status: 408, code: "request_timeout", stage: "request", retryable: true,
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await expectation;
   });
 });

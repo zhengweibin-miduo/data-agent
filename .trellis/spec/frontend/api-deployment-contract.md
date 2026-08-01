@@ -24,6 +24,11 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   `X-Accel-Buffering: no`.
 - Native EventSource network failures keep the source open for browser reconnect
   and `Last-Event-ID`; the client reads authoritative `JobRecord` while waiting.
+- An authoritative read requested while another read is in flight is queued, not
+  dropped, so a reconnecting `waiting_input` event cannot lose its follow-up GET.
+- The shared HTTP client applies a bounded default deadline, composes a caller's
+  abort signal, and projects deadline expiry as the stable retryable
+  `request_timeout` error. Long-running chat turns use an explicit larger budget.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
 

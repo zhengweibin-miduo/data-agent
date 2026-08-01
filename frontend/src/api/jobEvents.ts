@@ -32,6 +32,7 @@ export function connectJobEvents(
   let pollTimer: number | null = null;
   let closed = false;
   let authoritativeReadInFlight = false;
+  let authoritativeReadQueued = false;
 
   const close = () => {
     closed = true;
@@ -42,7 +43,11 @@ export function connectJobEvents(
   };
 
   const poll = async () => {
-    if (closed || authoritativeReadInFlight) return;
+    if (closed) return;
+    if (authoritativeReadInFlight) {
+      authoritativeReadQueued = true;
+      return;
+    }
     authoritativeReadInFlight = true;
     try {
       const job = await handlers.getAuthoritativeJob();
@@ -56,6 +61,10 @@ export function connectJobEvents(
       if (!closed) handlers.onError(error);
     } finally {
       authoritativeReadInFlight = false;
+      if (authoritativeReadQueued && !closed) {
+        authoritativeReadQueued = false;
+        void poll();
+      }
     }
   };
 

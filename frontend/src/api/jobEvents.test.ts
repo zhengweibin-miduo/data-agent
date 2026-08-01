@@ -76,4 +76,26 @@ describe("job event adapter", () => {
     expect(onJob).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it("queues a waiting-input authoritative read behind an interrupted-stream read", async () => {
+    let resolveFirst!: (job: JobRecord) => void;
+    const getAuthoritativeJob = vi.fn()
+      .mockImplementationOnce(() => new Promise<JobRecord>((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce(waitingJob);
+    const onJob = vi.fn();
+    const subscription = connectJobEvents("/events", {
+      getAuthoritativeJob, onJob, onEvent: vi.fn(), onConnection: vi.fn(), onError: vi.fn(),
+    }, FakeEventSource as unknown as typeof EventSource);
+
+    FakeEventSource.latest.onerror?.(new Event("error"));
+    FakeEventSource.latest.emit("waiting_input", {
+      job_id: "job-1", revision: 3, attempt: 1, status: "waiting_input", stage: "waiting_input",
+      emitted_at: "2026-08-01T00:00:00Z", questions: [], result: null, error: null,
+    });
+    resolveFirst({ ...waitingJob, status: "running", question_set_id: null });
+
+    await vi.waitFor(() => expect(getAuthoritativeJob).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(onJob).toHaveBeenLastCalledWith(waitingJob));
+    subscription.close();
+  });
 });
