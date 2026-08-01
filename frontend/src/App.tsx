@@ -54,9 +54,11 @@ export function App() {
       && unsavedWorkbench
       && !window.confirm("当前 DDL 尚未提交，确定离开工作台？")
     ) return;
-    const path = next === "knowledge" ? "/knowledge" : "/workbench";
+    if (view === "workbench" && window.location.pathname.startsWith("/workbench")) {
+      workbenchPathRef.current = window.location.pathname;
+    }
+    const path = next === "knowledge" ? "/knowledge" : workbenchPathRef.current;
     window.history.pushState(null, "", path);
-    if (next === "workbench") workbenchPathRef.current = path;
     setView(next);
   };
 

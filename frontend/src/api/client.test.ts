@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, apiRequest, resolveApiUrl } from "./client";
+import { ApiError, apiRequest, CHAT_REQUEST_TIMEOUT_MS, resolveApiUrl } from "./client";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -8,6 +8,10 @@ afterEach(() => {
 });
 
 describe("API client", () => {
+  it("covers the server's full sequential chat model budget", () => {
+    expect(CHAT_REQUEST_TIMEOUT_MS).toBe(660_000);
+  });
+
   it("resolves relative and explicit API bases without duplicating /api", () => {
     expect(resolveApiUrl("/api/v1/metadata/ddl-preview", "")).toBe("/api/v1/metadata/ddl-preview");
     expect(resolveApiUrl("/api/v1/metadata/ddl-preview", "https://api.example.test")).toBe("https://api.example.test/api/v1/metadata/ddl-preview");

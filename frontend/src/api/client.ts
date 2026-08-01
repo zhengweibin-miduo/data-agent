@@ -2,7 +2,9 @@ import type { ApiErrorEnvelope } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 export const API_REQUEST_TIMEOUT_MS = 30_000;
-export const CHAT_REQUEST_TIMEOUT_MS = 120_000;
+// A chat turn can perform two readiness calls plus one answer call, and every
+// model call can consume the configured initial attempt and two retries.
+export const CHAT_REQUEST_TIMEOUT_MS = 660_000;
 
 interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number;

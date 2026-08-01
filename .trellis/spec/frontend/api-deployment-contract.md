@@ -28,7 +28,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   dropped, so a reconnecting `waiting_input` event cannot lose its follow-up GET.
 - The shared HTTP client applies a bounded default deadline, composes a caller's
   abort signal, and projects deadline expiry as the stable retryable
-  `request_timeout` error. Long-running chat turns use an explicit larger budget.
+  `request_timeout` error. Long-running chat turns use an explicit budget that
+  covers the server's sequential readiness, repair, generation, and retry calls.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
 - Static-host SPA fallback must be isolated from `/api/**`; Caddy configurations

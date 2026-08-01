@@ -115,6 +115,25 @@ describe("workbench chat", () => {
     await waitFor(() => expect(screen.queryByText("语义元数据已生成")).not.toBeInTheDocument());
   });
 
+  it("discards a late task submission after the workbench unmounts", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    let resolveSubmit!: (job: { job_id: string; status: "pending"; status_url: string; events_url: null }) => void;
+    vi.mocked(submitDDL).mockImplementation((_input, signal) => new Promise((resolve) => {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      resolveSubmit = resolve;
+    }));
+    const rendered = render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    rendered.unmount();
+
+    resolveSubmit({ job_id: "late-job", status: "pending", status_url: "/jobs/late-job", events_url: null });
+    await Promise.resolve();
+    expect(window.location.pathname).toBe("/workbench");
+    expect(connectJobEvents).not.toHaveBeenCalled();
+  });
+
   it("marks edits after a successful submission as unsaved", async () => {
     const onUnsavedChange = vi.fn();
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });

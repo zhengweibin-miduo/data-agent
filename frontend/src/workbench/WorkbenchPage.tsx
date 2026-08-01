@@ -72,6 +72,8 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
   const [submittedFingerprint, setSubmittedFingerprint] = useState<string | null>(null);
   const subscription = useRef<JobEventSubscription | null>(null);
   const currentJobId = useRef<string | null>(restoredJob.current);
+  const mounted = useRef(true);
+  const submitController = useRef<AbortController | null>(null);
 
   const inputFingerprint = `${source}\n${ddl}`;
   const ddlBytes = new TextEncoder().encode(ddl).length;
@@ -155,7 +157,11 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     return () => { cancelled = true; subscription.current?.close(); };
   }, [acceptJob, watchJob]);
 
-  useEffect(() => () => subscription.current?.close(), []);
+  useEffect(() => () => {
+    mounted.current = false;
+    submitController.current?.abort();
+    subscription.current?.close();
+  }, []);
 
   const handlePreview = async () => {
     if (!sourceValid) { setError("数据源需为 1–128 字符，仅可使用字母、数字、下划线、点或连字符。"); return; }
@@ -172,8 +178,12 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     if (!inputValid) { setError("请先修正数据源命名或 DDL 字节限制。"); return; }
     if (!preview || previewStale) { setError("请先预览当前 source 和 DDL，再生成语义。"); return; }
     setBusy("submit"); setError(""); setAnswers({});
+    const controller = new AbortController();
+    submitController.current?.abort();
+    submitController.current = controller;
     try {
-      const accepted = await submitDDL({ source: source.trim(), dialect: "mysql", ddl });
+      const accepted = await submitDDL({ source: source.trim(), dialect: "mysql", ddl }, controller.signal);
+      if (!mounted.current || controller.signal.aborted || submitController.current !== controller) return;
       const pending: JobRecord = {
         job_id: accepted.job_id, source: source.trim(), status: "pending", revision: 0,
         attempt: 0, question_round: 0, question_set_id: null, questions: null, result: null, error: null,
@@ -187,8 +197,12 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
       window.history.replaceState(null, "", `/workbench/${encodeURIComponent(accepted.job_id)}`);
       setConnection("任务已受理，正在连接事件流");
       watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
-    } catch (cause) { setError(formatApiError(cause, "任务提交失败")); }
-    finally { setBusy(null); }
+    } catch (cause) {
+      if (mounted.current && !controller.signal.aborted) setError(formatApiError(cause, "任务提交失败"));
+    } finally {
+      if (submitController.current === controller) submitController.current = null;
+      if (mounted.current) setBusy(null);
+    }
   };
 
   const handleAnswers = async (event: FormEvent<HTMLFormElement>) => {

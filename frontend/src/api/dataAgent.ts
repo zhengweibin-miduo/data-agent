@@ -18,10 +18,11 @@ export const previewDDL = (input: DDLInput): Promise<DDLPreview> =>
     body: JSON.stringify(input),
   });
 
-export const submitDDL = (input: DDLInput): Promise<JobAccepted> =>
+export const submitDDL = (input: DDLInput, signal?: AbortSignal): Promise<JobAccepted> =>
   apiRequest("/api/v1/metadata/ddl-jobs", {
     method: "POST",
     body: JSON.stringify(input),
+    signal,
   });
 
 export const getJob = (jobId: string): Promise<JobRecord> =>
