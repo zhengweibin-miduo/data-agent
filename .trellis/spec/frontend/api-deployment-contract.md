@@ -93,6 +93,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   Validate `DDLPreview` and its nested table, column, relationship, and count
   fields before updating canvas state so an incompatible response cannot crash
   the workbench.
+  Validate memory search items, nested memory details, ranking scores, signals,
+  and degraded targets before rendering results so incompatible responses remain
+  recoverable contract errors.
 
 ### 7. Wrong vs Correct
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJob, previewDDL, submitDDL } from "./dataAgent";
+import { getJob, previewDDL, searchMemories, submitDDL } from "./dataAgent";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -123,4 +123,47 @@ describe("authoritative job reads", () => {
       });
     },
   );
+});
+
+describe("memory search", () => {
+  const validMemory = {
+    uid: "memory-1",
+    source: "dw",
+    category: "ddl.semantic",
+    memory_key: "orders",
+    memory_text: "订单事实表",
+    content: { table: "orders" },
+    record_version: 1,
+    status: "active",
+  };
+
+  it.each([
+    {},
+    { items: [], degraded_targets: "elasticsearch" },
+    { items: [{ memory: validMemory, score: "1", signals: [] }], degraded_targets: [] },
+    { items: [{ memory: { ...validMemory, content: null }, score: 1, signals: [] }], degraded_targets: [] },
+    { items: [{ memory: validMemory, score: 1, signals: [42] }], degraded_targets: [] },
+  ])("rejects invalid successful search DTOs", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(searchMemories("dw", "订单")).rejects.toMatchObject({
+      status: 502, code: "invalid_response", stage: "response", retryable: true,
+    });
+  });
+
+  it("accepts a complete memory search DTO", async () => {
+    const payload = {
+      items: [{ memory: validMemory, score: 1.25, signals: ["exact"] }],
+      degraded_targets: ["qdrant"],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(searchMemories("dw", "订单")).resolves.toEqual(payload);
+  });
 });

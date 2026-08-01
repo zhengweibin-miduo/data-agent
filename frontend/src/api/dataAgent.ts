@@ -67,6 +67,28 @@ const isDDLPreview = (payload: unknown): payload is DDLPreview => {
     && Number.isInteger(payload.column_count) && Number(payload.column_count) >= 0;
 };
 
+const isMemoryDetail = (payload: unknown): payload is MemoryDetail => {
+  if (!isRecord(payload)) return false;
+  return typeof payload.uid === "string" && payload.uid.length > 0
+    && typeof payload.source === "string" && payload.source.length > 0
+    && typeof payload.category === "string" && payload.category.length > 0
+    && typeof payload.memory_key === "string" && payload.memory_key.length > 0
+    && typeof payload.memory_text === "string"
+    && isRecord(payload.content)
+    && Number.isInteger(payload.record_version) && Number(payload.record_version) >= 1
+    && typeof payload.status === "string" && payload.status.length > 0;
+};
+
+const isMemorySearchResponse = (payload: unknown): payload is MemorySearchResponse => {
+  if (!isRecord(payload)) return false;
+  return Array.isArray(payload.items) && payload.items.every((item) =>
+    isRecord(item)
+      && isMemoryDetail(item.memory)
+      && typeof item.score === "number" && Number.isFinite(item.score) && item.score >= 0
+      && isStringArray(item.signals))
+    && isStringArray(payload.degraded_targets);
+};
+
 const isMetricQuestion = (payload: unknown): boolean => {
   if (!isRecord(payload)) return false;
   return typeof payload.question_id === "string" && payload.question_id.length > 0
@@ -181,7 +203,9 @@ export const sendChatTurn = (
   });
 
 export const searchMemories = (source: string, query: string): Promise<MemorySearchResponse> =>
-  apiRequest(`/api/v1/metadata/memories/search?source=${encodeURIComponent(source)}&query=${encodeURIComponent(query)}`);
+  apiRequest(`/api/v1/metadata/memories/search?source=${encodeURIComponent(source)}&query=${encodeURIComponent(query)}`, {
+    validateResponse: isMemorySearchResponse,
+  });
 
 export const getMemory = (uid: string): Promise<MemoryDetail> =>
   apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}`);
