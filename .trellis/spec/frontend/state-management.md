@@ -34,7 +34,9 @@
 - Do not replace a non-terminal task with another submission unless the UI first
   preserves a discoverable recovery coordinate for the active task.
 - A deep-link restore clears sample input and locks DDL actions before starting
-  its GET. Ignore the whole continuation when it no longer owns the active job.
+  its GET. Retry transient restore failures while keeping that lock; only an
+  authoritative not-found response may release the coordinate. Ignore the whole
+  continuation when it no longer owns the active job.
 - Keep the failed chat retry gate only for uncertain or lease-bearing failures.
   Deterministic non-retryable client validation failures must return the inputs
   to an editable state so the user can correct the frozen DDL context.
@@ -50,3 +52,8 @@
 - Workbench operations share one interaction gate. Every handler and control
   must reject a new operation while another request owns that gate so one
   request cannot release or replace another request's busy state.
+- Write a client-generated submission ID to the workbench URL before sending
+  the acceptance request because that ID is also the server job ID and must
+  survive a full document reload before the response arrives.
+- While a memory detail switch is loading, keep mutation controls disabled and
+  identify the selected record in destructive confirmations.

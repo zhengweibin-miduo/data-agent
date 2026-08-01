@@ -168,33 +168,36 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         .filter((jobId): jobId is string => Boolean(jobId));
       for (const jobId of candidates) {
         currentJobId.current = jobId;
-        try {
-          const record = await getJob(jobId);
-          if (cancelled || currentJobId.current !== jobId) return;
-          if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
-          const jobPath = `/workbench/${encodeURIComponent(jobId)}`;
-          if (window.location.pathname !== jobPath) window.history.replaceState(null, "", jobPath);
-          setSource(record.source);
-          setDDL("");
-          setPreview(null);
-          setPreviewFingerprint("");
-          setSubmittedFingerprint(`${record.source}\n`);
-          setRestoringJob(false);
-          acceptJob(record);
-          if (!TERMINAL_STATUSES.has(record.status)) {
-            watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
+        let retryDelay = 1_000;
+        while (!cancelled && currentJobId.current === jobId) {
+          try {
+            const record = await getJob(jobId);
+            if (cancelled || currentJobId.current !== jobId) return;
+            if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+            const jobPath = `/workbench/${encodeURIComponent(jobId)}`;
+            if (window.location.pathname !== jobPath) window.history.replaceState(null, "", jobPath);
+            setSource(record.source);
+            setDDL("");
+            setPreview(null);
+            setPreviewFingerprint("");
+            setSubmittedFingerprint(`${record.source}\n`);
+            setRestoringJob(false);
+            acceptJob(record);
+            if (!TERMINAL_STATUSES.has(record.status)) {
+              watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
+            }
+            return;
+          } catch (cause) {
+            if (cancelled || currentJobId.current !== jobId) return;
+            const notFound = cause instanceof ApiError && cause.status === 404;
+            if (notFound) {
+              if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+              break;
+            }
+            setError(formatApiError(cause, "无法恢复这个任务，正在重试"));
+            await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelay));
+            retryDelay = Math.min(retryDelay * 2, 5_000);
           }
-          return;
-        } catch (cause) {
-          if (cancelled || currentJobId.current !== jobId) return;
-          const pendingNotFound = cause instanceof ApiError && cause.status === 404
-            && pendingSubmissionAttempt?.submissionId === jobId;
-          if (pendingNotFound) {
-            pendingSubmissionAttempt = null;
-            continue;
-          }
-          setError(formatApiError(cause, "无法恢复这个任务"));
-          break;
         }
       }
       currentJobId.current = null;
@@ -247,6 +250,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       ? pendingSubmissionAttempt.submissionId
       : randomId();
     pendingSubmissionAttempt = { fingerprint: inputFingerprint, submissionId };
+    const previousPath = window.location.pathname;
+    // The client-generated submission ID is also the server job ID. Persist it
+    // before POST so a full reload can reconcile an accepted-but-unanswered request.
+    window.history.replaceState(null, "", `/workbench/${encodeURIComponent(submissionId)}`);
     try {
       const accepted = await submitDDL({
         source: source.trim(), dialect: "mysql", ddl, submission_id: submissionId,
@@ -272,6 +279,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         && cause.status !== 408 && !cause.retryable
         && pendingSubmissionAttempt?.submissionId === submissionId) {
         pendingSubmissionAttempt = null;
+        window.history.replaceState(null, "", previousPath);
       }
       if (mounted.current && !controller.signal.aborted) setError(formatApiError(cause, "任务提交失败"));
     } finally {

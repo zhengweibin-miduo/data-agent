@@ -14,18 +14,19 @@ export function KnowledgePage() {
   const [content, setContent] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loadingMemoryUid, setLoadingMemoryUid] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [reprocessNotice, setReprocessNotice] = useState("");
   const scoreFormatter = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 3 });
 
   const openMemory = async (uid: string) => {
-    setBusy(true); setError("");
+    setBusy(true); setLoadingMemoryUid(uid); setError("");
     try {
       const [memory, historyPage] = await Promise.all([getMemory(uid), getMemoryHistory(uid)]);
       setSelected(memory); setHistory(historyPage); setContent(JSON.stringify(memory.content, null, 2)); setEditing(false);
       const url = new URL(window.location.href); url.searchParams.set("memory", uid); window.history.replaceState(null, "", url);
     } catch (cause) { setError(formatApiError(cause, "知识详情加载失败")); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setLoadingMemoryUid(null); }
   };
 
   useEffect(() => {
@@ -62,7 +63,7 @@ export function KnowledgePage() {
   };
 
   const remove = async () => {
-    if (!selected || !window.confirm("软删除这条权威知识？它将不再参与后续召回。")) return;
+    if (busy || !selected || !window.confirm(`软删除权威知识“${selected.memory_key}”（${selected.uid}）？它将不再参与后续召回。`)) return;
     setBusy(true); setError("");
     try {
       await deleteMemory(selected.uid, selected.record_version);
@@ -90,14 +91,14 @@ export function KnowledgePage() {
         <header><div className="panel-kicker">SEARCH RESULTS</div><h2 id="result-title">权威记录</h2></header>
         {!results && <p className="empty-state">输入 source 和业务关键词开始搜索。</p>}
         {results?.items.length === 0 && <p className="empty-state">没有找到匹配知识。尝试更具体的指标、表或字段名。</p>}
-        <ul>{results?.items.map((hit) => <li key={hit.memory.uid}><button type="button" aria-pressed={selected?.uid === hit.memory.uid} onClick={() => void openMemory(hit.memory.uid)}><span>{hit.memory.category} · v{hit.memory.record_version} · {scoreFormatter.format(hit.score)}</span><strong>{hit.memory.memory_text || hit.memory.memory_key}</strong><small>{hit.signals.join(" · ")}</small></button></li>)}</ul>
+        <ul>{results?.items.map((hit) => <li key={hit.memory.uid}><button type="button" aria-pressed={selected?.uid === hit.memory.uid} aria-busy={loadingMemoryUid === hit.memory.uid} disabled={busy} onClick={() => void openMemory(hit.memory.uid)}><span>{hit.memory.category} · v{hit.memory.record_version} · {scoreFormatter.format(hit.score)}</span><strong>{hit.memory.memory_text || hit.memory.memory_key}</strong><small>{hit.signals.join(" · ")}</small></button></li>)}</ul>
       </section>
 
       <section className="memory-detail" aria-labelledby="detail-title">
         <header><div className="panel-kicker">AUTHORITY / HISTORY</div><h2 id="detail-title">记录详情</h2></header>
         {!selected && <p className="empty-state">选择一条记录查看结构化内容和变更历史。</p>}
         {selected && <>
-          <div className="detail-heading"><div><h3>{selected.memory_key}</h3><p>{selected.category} · v{selected.record_version} · {selected.status}</p></div><div><button className="quiet-action" type="button" onClick={() => setEditing((value) => !value)}>{editing ? "取消修正" : "修正内容"}</button><button className="danger-action" type="button" onClick={() => void remove()}>软删除</button></div></div>
+          <div className="detail-heading"><div><h3>{selected.memory_key}</h3><p>{selected.category} · v{selected.record_version} · {selected.status}</p></div><div><button className="quiet-action" type="button" disabled={busy} onClick={() => setEditing((value) => !value)}>{editing ? "取消修正" : "修正内容"}</button><button className="danger-action" type="button" disabled={busy} onClick={() => void remove()}>软删除</button></div></div>
           <p>{selected.memory_text}</p>
           {editing ? <form onSubmit={(event) => void save(event)}><label htmlFor="memory-content">结构化内容（JSON）</label><textarea id="memory-content" name="memory_content" className="json-editor" rows={12} value={content} onChange={(event) => setContent(event.target.value)} autoComplete="off" spellCheck={false} /><button className="primary-action" type="submit" disabled={busy}>保存修正</button></form> : <pre>{JSON.stringify(selected.content, null, 2)}</pre>}
           <h3>版本历史</h3><ol className="history-list">{history?.items.map((item, index) => <li key={`${item.created_at}-${index}`}><strong>{item.event_type}</strong><span>{item.actor_type}</span><time>{new Date(item.created_at).toLocaleString("zh-CN", { hour12: false })}</time></li>)}</ol>

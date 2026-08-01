@@ -110,6 +110,20 @@ describe("workbench chat", () => {
     await waitFor(() => expect(screen.getByLabelText("数据源")).toBeEnabled());
   });
 
+  it("keeps a deep-link restore locked and retries after a transient GET failure", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob)
+      .mockRejectedValueOnce(new ApiError(503, { error: { code: "temporarily_unavailable", retryable: true } }))
+      .mockResolvedValueOnce(waitingJob());
+    render(<WorkbenchPage />);
+
+    await waitFor(() => expect(getJob).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("数据源")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "预览结构" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByText("第二轮问题")).toBeInTheDocument(), { timeout: 2_500 });
+    expect(connectJobEvents).toHaveBeenCalledOnce();
+  });
+
   it("restarts the stage trace when a second task is submitted", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL)
@@ -142,13 +156,30 @@ describe("workbench chat", () => {
 
     resolveSubmit({ job_id: "late-job", status: "pending", status_url: "/jobs/late-job", events_url: null });
     await Promise.resolve();
-    expect(window.location.pathname).toBe("/workbench");
+    expect(window.location.pathname).toMatch(/^\/workbench\/[0-9a-f-]+$/);
     expect(connectJobEvents).not.toHaveBeenCalled();
 
     vi.mocked(getJob).mockRejectedValue(new ApiError(404, { error: { code: "job_not_found", retryable: false } }));
     const reconciled = render(<WorkbenchPage />);
     await waitFor(() => expect(screen.getByLabelText("数据源")).toBeEnabled());
     reconciled.unmount();
+  });
+
+  it("writes the submission coordinate to the URL before acceptance returns", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    let rejectSubmit!: (cause: unknown) => void;
+    vi.mocked(submitDDL).mockImplementation(() => new Promise((_resolve, reject) => { rejectSubmit = reject; }));
+    render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    await waitFor(() => expect(submitDDL).toHaveBeenCalledOnce());
+    const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
+    expect(window.location.pathname).toBe(`/workbench/${submissionId}`);
+    rejectSubmit(new ApiError(409, { error: { code: "source_busy", retryable: false } }));
+    await screen.findByText(/任务提交失败/);
+    expect(window.location.pathname).toBe("/workbench");
   });
 
   it("reconciles a custom accepted submission after repeated timeouts and an SPA remount", async () => {
