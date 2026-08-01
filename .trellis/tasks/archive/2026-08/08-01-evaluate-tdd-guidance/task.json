@@ -1,0 +1,29 @@
+{
+  "id": "evaluate-tdd-guidance",
+  "name": "evaluate-tdd-guidance",
+  "title": "评估 Superpowers TDD 测试指导",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-01",
+  "completedAt": "2026-08-02",
+  "branch": "chore/evaluate-tdd-guidance-20260801",
+  "base_branch": "master",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-01-evaluate-tdd-guidance",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}
