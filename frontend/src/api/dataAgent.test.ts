@@ -101,6 +101,26 @@ describe("DDL job submission", () => {
     })).resolves.toMatchObject({ job_id: "legacy-job" });
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
   });
+
+  it("treats a missing health endpoint as a legacy backend", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        job_id: "legacy-job", status: "pending",
+        status_url: "/api/v1/metadata/ddl-jobs/legacy-job", events_url: null,
+      }), { status: 202, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(submitDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)",
+      submission_id: "11111111-1111-4111-8111-111111111111",
+    })).resolves.toMatchObject({ job_id: "legacy-job" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
+  });
 });
 
 describe("conversation creation", () => {

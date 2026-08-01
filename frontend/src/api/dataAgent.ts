@@ -134,10 +134,18 @@ const isMemoryDeleteResult = (payload: unknown): payload is MemoryMutationResult
   && payload.deleted === true;
 
 const supportsSubmissionIdempotency = async (): Promise<boolean> => {
-  const health = await apiRequest<unknown>("/api/v1/health");
-  return isRecord(health)
-    && isRecord(health.capabilities)
-    && health.capabilities.ddl_submission_idempotency === true;
+  try {
+    const health = await apiRequest<unknown>("/api/v1/health");
+    return isRecord(health)
+      && isRecord(health.capabilities)
+      && health.capabilities.ddl_submission_idempotency === true;
+  } catch (error) {
+    // The backend version immediately preceding the health endpoint returns a
+    // definitive 404 here. Other failures are inconclusive and must keep the
+    // idempotent submission blocked rather than silently dropping its coordinate.
+    if (error instanceof ApiError && error.status === 404) return false;
+    throw error;
+  }
 };
 
 const isMetricQuestion = (payload: unknown): boolean => {

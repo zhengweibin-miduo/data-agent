@@ -36,6 +36,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   First read the simple health endpoint's capability map and omit the custom
   header unless the backend advertises support, because a legacy cross-origin
   deployment does not allow that header in its CORS preflight policy.
+  A health endpoint 404 is the definitive legacy-backend signal; timeouts, 5xx,
+  and network failures are inconclusive and must block submission rather than
+  silently discard the recoverable coordinate.
   A timed-out acceptance request replays that coordinate, and the server returns
   the original job only when its source and DDL match the first submission.
   Keep that coordinate outside the individual request call until acceptance is
