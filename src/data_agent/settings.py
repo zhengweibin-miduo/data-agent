@@ -266,7 +266,11 @@ class APISettings(SettingsModel):
     host: Literal["127.0.0.1"] = Field(description="HTTP API 监听的本机回环地址。")
     port: int = Field(ge=1, le=65535, description="HTTP API 监听端口。")
     cors_origins: list[HttpUrl] = Field(
-        description="允许访问 HTTP API 的本机浏览器 Origin 列表。"
+        description="允许访问 HTTP API 的浏览器 Origin 精确列表。"
+    )
+    allow_remote_cors_origins: bool = Field(
+        default=False,
+        description="是否显式允许 cors_origins 包含非本机 Origin。",
     )
     max_ddl_bytes: int = Field(gt=0, description="单次请求允许提交的 DDL 最大字节数。")
     max_tables: int = Field(gt=0, description="单次 DDL 解析允许包含的最大表数量。")
@@ -277,13 +281,12 @@ class APISettings(SettingsModel):
         description="DDL 任务 SSE 空闲心跳和 Redis 阻塞读取的间隔秒数。",
     )
 
-    @field_validator("cors_origins")
-    @classmethod
-    def validate_local_origins(
-        cls,
-        origins: list[HttpUrl],
-    ) -> list[HttpUrl]:
-        """只允许本机浏览器 Origin。"""
+    @model_validator(mode="after")
+    def validate_cors_origins(self) -> "APISettings":
+        """默认限制本机 Origin，显式部署开关允许精确的远端 Origin。"""
+        if self.allow_remote_cors_origins:
+            return self
+        origins = self.cors_origins
         # 步骤一：逐个解析 Origin 主机，仅允许 localhost 或 IP 回环地址通过。
         for origin in origins:
             host = origin.host or ""
@@ -296,7 +299,7 @@ class APISettings(SettingsModel):
             if not is_loopback:
                 raise ValueError("api.cors_origins 只能配置本机 Origin")
         # 步骤二：返回保留原始顺序与类型的已校验 Origin 列表。
-        return origins
+        return self
 
 
 class RedisSettings(SettingsModel):

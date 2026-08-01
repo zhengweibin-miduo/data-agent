@@ -33,6 +33,8 @@
   late continuation before changing browser history or opening an event stream.
 - Do not replace a non-terminal task with another submission unless the UI first
   preserves a discoverable recovery coordinate for the active task.
+- When a legacy backend times out during acceptance, keep the attempt explicitly
+  non-replayable so neither automatic nor manual actions duplicate the POST.
 - A deep-link restore clears sample input and locks DDL actions before starting
   its GET. Retry transient restore failures while keeping that lock; only an
   authoritative not-found response may release the coordinate. Ignore the whole

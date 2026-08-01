@@ -162,7 +162,9 @@ describe("DDL job submission", () => {
       ddl: "CREATE TABLE t(id INT)",
       submission_id: "11111111-1111-4111-8111-111111111111",
     });
-    const rejection = expect(request).rejects.toMatchObject({ code: "request_timeout" });
+    const rejection = expect(request).rejects.toMatchObject({
+      code: "legacy_submission_timeout", stage: "acceptance", retryable: false,
+    });
     await vi.advanceTimersByTimeAsync(30_000);
 
     await rejection;

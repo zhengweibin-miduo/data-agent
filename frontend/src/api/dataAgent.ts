@@ -235,7 +235,15 @@ export async function submitDDL(input: DDLSubmissionInput, signal?: AbortSignal)
     // A legacy backend creates its own job ID, so replaying a timed-out request
     // cannot recover the original acceptance and may instead collide with its
     // source lease. Only advertised idempotent submissions are safe to replay.
-    if (!idempotencySupported) throw error;
+    if (!idempotencySupported) {
+      throw new ApiError(408, {
+        error: {
+          code: "legacy_submission_timeout",
+          stage: "acceptance",
+          retryable: false,
+        },
+      });
+    }
     return submit();
   }
 }
@@ -256,6 +264,7 @@ export const submitAnswers = (
   apiRequest(`/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/answers`, {
     method: "POST",
     body: JSON.stringify(payload),
+    validateResponse: isJobRecord,
   });
 
 export const createConversation = (userId: string): Promise<ConversationCreated> =>

@@ -20,6 +20,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
 - `resolveApiUrl` is the only deployment-origin join point. When base is `/api`,
   `/api/v1/...` must remain `/api/v1/...`, not `/api/api/v1/...`.
 - CORS allows only configured frontend origins; credentials remain disabled.
+  Non-loopback origins require the explicit remote-origin deployment switch,
+  while the API process itself remains bound to the loopback interface.
 - SSE response remains `text/event-stream`, `Cache-Control: no-cache`, and
   `X-Accel-Buffering: no`.
 - Native EventSource network failures keep the source open for browser reconnect
@@ -45,7 +47,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   A timed-out acceptance request replays that coordinate only when the backend
   advertised idempotency support, and the server returns the original job only
   when its source and DDL match the first submission. A legacy submission must
-  remain uncertain after timeout rather than issuing a second non-idempotent POST.
+  remain uncertain after timeout rather than issuing a second non-idempotent POST,
+  including a user-triggered retry from the workbench.
   Keep that coordinate outside the individual request call until acceptance is
   confirmed, including across repeated timeouts and SPA workbench remounts.
   Do not replace an unconfirmed coordinate when editable input changes; recover
@@ -118,6 +121,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   failed read: never downgrade to a non-idempotent submission after a transient
   health failure. Validate conversation creation and memory mutation responses
   before persisting identifiers or clearing reprocessing guidance.
+  Validate clarification-answer `JobRecord` responses before replacing the
+  authoritative question state or clearing locally entered answers.
 - Normalize every non-success payload from `unknown` into a stable `ApiError`;
   malformed envelopes (including JSON `null`) must fall back to `http_<status>`
   so deterministic client failures still release the correct interaction gate.

@@ -108,7 +108,9 @@ npm run build
 `http://127.0.0.1:8000/api/`。SSE 代理必须关闭缓冲和缓存，读取超时应长于后端
 心跳间隔，例如 Nginx location 中使用 `proxy_buffering off`、
 `proxy_cache off`、`proxy_read_timeout 3600s`。分域部署时，将
-`VITE_API_BASE_URL` 设置为完整 API Origin，并在后端只允许实际前端 Origin。
+`VITE_API_BASE_URL` 设置为完整 API Origin，并在后端将 `api.cors_origins` 精确配置为
+实际前端 Origin，同时显式设置 `api.allow_remote_cors_origins: true`。该开关只放宽
+CORS 配置校验，不会改变 API 的回环监听地址；对外发布仍应由带认证和访问控制的代理承担。
 示例代理默认只监听 `127.0.0.1:80`，与无认证的本地单用户边界保持一致；如需
 向局域网或公网开放，必须先增加认证，并通过防火墙或其它网络访问控制限制来源。
 

@@ -366,6 +366,33 @@ describe("workbench chat", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/workbench/recovered-job"));
   });
 
+  it("does not manually replay an uncertain legacy submission", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({
+      source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0,
+    });
+    vi.mocked(submitDDL).mockRejectedValue(new ApiError(408, {
+      error: { code: "legacy_submission_timeout", stage: "acceptance", retryable: false },
+    }));
+    const page = render(<WorkbenchPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await screen.findByText(/legacy_submission_timeout/);
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    expect(submitDDL).toHaveBeenCalledOnce();
+    expect(screen.getByRole("alert")).toHaveTextContent("旧版后端的任务受理结果未知");
+    const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id;
+    page.unmount();
+    vi.mocked(getJob).mockResolvedValue({
+      job_id: submissionId, source: "commerce_prod", status: "succeeded", revision: 1,
+      attempt: 1, question_round: 0, question_set_id: null, questions: null, result: null, error: null,
+    });
+    render(<WorkbenchPage />);
+    await waitFor(() => expect(getJob).toHaveBeenCalledWith(submissionId));
+  });
+
   it("accepts a task submission after StrictMode replays effects", async () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "strict-job", status: "pending", status_url: "/jobs/strict-job", events_url: null });
@@ -431,6 +458,22 @@ describe("workbench chat", () => {
     expect(submitAnswers).not.toHaveBeenCalled();
     expect(screen.getByLabelText("仍需填写")).toHaveFocus();
     expect(screen.getByRole("alert")).toHaveTextContent("请填写所有必答业务依据后再继续。");
+  });
+
+  it("keeps clarification answers when the acceptance response is invalid", async () => {
+    window.history.replaceState(null, "", "/workbench/job-1");
+    vi.mocked(getJob).mockResolvedValue(waitingJob());
+    vi.mocked(submitAnswers).mockRejectedValue(new ApiError(502, {
+      error: { code: "invalid_response", stage: "response", retryable: true },
+    }));
+    render(<WorkbenchPage />);
+    const answer = await screen.findByLabelText("第二轮问题");
+    fireEvent.change(answer, { target: { value: "人工业务依据" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交回答并继续 →" }));
+
+    await screen.findByText(/invalid_response/);
+    expect(answer).toHaveValue("人工业务依据");
+    expect(screen.getByText("第二轮问题")).toBeInTheDocument();
   });
 
   it("reuses the original DDL snapshot when a failed chat turn is retried", async () => {

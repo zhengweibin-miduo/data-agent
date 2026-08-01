@@ -38,6 +38,7 @@ interface ChatAttempt {
 interface SubmissionAttempt {
   fingerprint: string;
   submissionId: string;
+  replayable: boolean;
 }
 
 // Keep the acceptance coordinate alive across SPA view unmounts. The DDL itself
@@ -286,6 +287,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       setError("上一份 DDL 的任务受理结果尚未确认，请恢复原输入并重试以找回任务坐标。");
       return;
     }
+    if (pendingSubmissionAttempt && !pendingSubmissionAttempt.replayable) {
+      setError("旧版后端的任务受理结果未知，不能安全重复提交；请由管理员查询任务状态或升级后端。");
+      return;
+    }
     setBusy("submit"); setError(""); setAnswers({});
     const controller = new AbortController();
     submitController.current?.abort();
@@ -293,7 +298,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     const submissionId = pendingSubmissionAttempt?.fingerprint === inputFingerprint
       ? pendingSubmissionAttempt.submissionId
       : randomId();
-    pendingSubmissionAttempt = { fingerprint: inputFingerprint, submissionId };
+    pendingSubmissionAttempt = { fingerprint: inputFingerprint, submissionId, replayable: true };
     persistSubmissionAttempt(submissionId);
     const previousPath = window.location.pathname;
     // The client-generated submission ID is also the server job ID. Persist it
@@ -321,6 +326,10 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       setConnection("任务已受理，正在连接事件流");
       watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
     } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "legacy_submission_timeout"
+        && pendingSubmissionAttempt?.submissionId === submissionId) {
+        pendingSubmissionAttempt.replayable = false;
+      }
       if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500
         && cause.status !== 408 && !cause.retryable
         && pendingSubmissionAttempt?.submissionId === submissionId) {
