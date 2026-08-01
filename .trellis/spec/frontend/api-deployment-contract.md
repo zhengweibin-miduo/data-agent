@@ -63,6 +63,9 @@ base resolution, static hosting, or the legacy embedded frontend changes.
 - Allowed CORS origin -> preflight 200 with matching allow-origin header.
 - Unknown CORS origin -> preflight rejected and no allow-origin grant.
 - EventSource unavailable/`stream_error`/malformed event -> bounded GET polling.
+- Parse SSE payloads as `unknown` and validate the complete `JobEventData`
+  shape before projection; a malformed payload on a named event follows the
+  same bounded authoritative GET fallback as malformed generic events.
 - Network `error` -> one authoritative GET; native EventSource reconnect remains active.
 
 ### 5. Good/Base/Bad Cases

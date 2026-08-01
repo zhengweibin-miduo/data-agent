@@ -15,6 +15,7 @@ class FakeEventSource {
   constructor(url: string | URL) { this.url = String(url); FakeEventSource.latest = this; }
   addEventListener(type: string, listener: EventListener) { this.listeners.set(type, listener); }
   emit(type: string, data: JobEventData) { this.listeners.get(type)?.(new MessageEvent(type, { data: JSON.stringify(data) })); }
+  emitRaw(type: string, data: unknown) { this.listeners.get(type)?.(new MessageEvent(type, { data: JSON.stringify(data) })); }
 }
 
 const waitingJob: JobRecord = {
@@ -152,6 +153,26 @@ describe("job event adapter", () => {
     await vi.advanceTimersByTimeAsync(3000);
 
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onJob).toHaveBeenCalledWith(waitingJob);
+    subscription.close();
+  });
+
+  it("falls back to authoritative polling for a malformed named event", async () => {
+    vi.useFakeTimers();
+    const getAuthoritativeJob = vi.fn().mockResolvedValue(waitingJob);
+    const onEvent = vi.fn();
+    const onJob = vi.fn();
+    const onError = vi.fn();
+    const subscription = connectJobEvents("/events", {
+      getAuthoritativeJob, onJob, onEvent, onConnection: vi.fn(), onError,
+    }, FakeEventSource as unknown as typeof EventSource);
+
+    FakeEventSource.latest.emitRaw("waiting_input", {});
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(getAuthoritativeJob).toHaveBeenCalledOnce();
     expect(onJob).toHaveBeenCalledWith(waitingJob);
     subscription.close();
   });

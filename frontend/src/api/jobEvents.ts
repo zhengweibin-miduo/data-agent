@@ -11,6 +11,52 @@ export const JOB_EVENT_TYPES = [
   "failed",
 ] as const;
 
+const JOB_STATUSES = new Set(["pending", "running", "waiting_input", "succeeded", "rejected", "failed"]);
+const JOB_STAGES = new Set([
+  "queued", "running", "parsing", "memory_loading", "metadata_generating",
+  "metadata_validating", "question_planning", "waiting_input", "metric_generating",
+  "metric_validating", "memory_building", "persisting", "succeeded", "rejected",
+  "failed", "stream_error",
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const isNullable = (value: unknown, validate: (candidate: unknown) => boolean): boolean =>
+  value === null || validate(value);
+
+const isMetricQuestion = (value: unknown): boolean => isRecord(value)
+  && typeof value.question_id === "string" && value.question_id.length > 0
+  && typeof value.prompt === "string" && value.prompt.length > 0
+  && typeof value.fact_table_id === "string"
+  && Array.isArray(value.column_ids) && value.column_ids.every((item) => typeof item === "string")
+  && typeof value.required === "boolean";
+
+const isJobResult = (value: unknown): boolean => isRecord(value)
+  && typeof value.ddl_hash === "string"
+  && typeof value.table_count === "number"
+  && typeof value.column_count === "number"
+  && typeof value.metric_count === "number";
+
+const isJobError = (value: unknown): boolean => isRecord(value)
+  && typeof value.code === "string"
+  && typeof value.stage === "string"
+  && typeof value.retryable === "boolean"
+  && Number.isInteger(value.attempt)
+  && isRecord(value.details)
+  && Object.values(value.details).every((detail) => typeof detail === "string");
+
+const isJobEventData = (value: unknown): value is JobEventData => isRecord(value)
+  && typeof value.job_id === "string" && value.job_id.length > 0
+  && Number.isInteger(value.revision) && Number(value.revision) >= 0
+  && Number.isInteger(value.attempt) && Number(value.attempt) >= 0
+  && typeof value.status === "string" && JOB_STATUSES.has(value.status)
+  && typeof value.stage === "string" && JOB_STAGES.has(value.stage)
+  && typeof value.emitted_at === "string" && value.emitted_at.length > 0
+  && isNullable(value.questions, (questions) => Array.isArray(questions) && questions.every(isMetricQuestion))
+  && isNullable(value.result, isJobResult)
+  && isNullable(value.error, isJobError);
+
 interface JobEventHandlers {
   getAuthoritativeJob: () => Promise<JobRecord>;
   onEvent: (event: JobEventData) => void;
@@ -120,7 +166,10 @@ export function connectJobEvents(
   };
   const receive = (event: MessageEvent<string>) => {
     try {
-      const data = JSON.parse(event.data) as JobEventData;
+      const data: unknown = JSON.parse(event.data);
+      if (!isJobEventData(data)) {
+        throw new Error("事件流响应不符合 JobEventData 契约");
+      }
       handlers.onEvent(data);
       if (data.status === "waiting_input") {
         void poll(true);
