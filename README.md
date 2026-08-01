@@ -109,6 +109,8 @@ npm run build
 心跳间隔，例如 Nginx location 中使用 `proxy_buffering off`、
 `proxy_cache off`、`proxy_read_timeout 3600s`。分域部署时，将
 `VITE_API_BASE_URL` 设置为完整 API Origin，并在后端只允许实际前端 Origin。
+示例代理默认只监听 `127.0.0.1:80`，与无认证的本地单用户边界保持一致；如需
+向局域网或公网开放，必须先增加认证，并通过防火墙或其它网络访问控制限制来源。
 
 ## 验证
 

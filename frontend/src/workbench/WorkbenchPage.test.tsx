@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -132,6 +133,21 @@ describe("workbench chat", () => {
     await Promise.resolve();
     expect(window.location.pathname).toBe("/workbench");
     expect(connectJobEvents).not.toHaveBeenCalled();
+  });
+
+  it("accepts a task submission after StrictMode replays effects", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockResolvedValue({ job_id: "strict-job", status: "pending", status_url: "/jobs/strict-job", events_url: null });
+    render(<StrictMode><WorkbenchPage /></StrictMode>);
+
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/workbench/strict-job"));
+    expect(await screen.findByText("任务已受理")).toBeInTheDocument();
+    expect(connectJobEvents).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled();
   });
 
   it("marks edits after a successful submission as unsaved", async () => {

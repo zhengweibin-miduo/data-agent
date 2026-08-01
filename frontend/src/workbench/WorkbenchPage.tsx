@@ -157,10 +157,14 @@ export function WorkbenchPage({ onUnsavedChange }: WorkbenchPageProps = {}) {
     return () => { cancelled = true; subscription.current?.close(); };
   }, [acceptJob, watchJob]);
 
-  useEffect(() => () => {
-    mounted.current = false;
-    submitController.current?.abort();
-    subscription.current?.close();
+  useEffect(() => {
+    // StrictMode replays effect setup after cleanup in development.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      submitController.current?.abort();
+      subscription.current?.close();
+    };
   }, []);
 
   const handlePreview = async () => {

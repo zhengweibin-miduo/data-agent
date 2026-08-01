@@ -32,6 +32,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   covers the server's sequential readiness, repair, generation, and retry calls.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
+- Unauthenticated example proxies bind to `127.0.0.1` by default. Non-loopback
+  exposure requires authentication and network access controls.
 - Static-host SPA fallback must be isolated from `/api/**`; Caddy configurations
   use mutually exclusive `handle` blocks so `try_files` cannot rewrite API paths.
 

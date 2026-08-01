@@ -22,18 +22,20 @@ def test_static_host_examples_fallback_spa_deep_links() -> None:
 
     check_condition(
         "Nginx SPA fallback",
-        "try_files $uri $uri/ /index.html;" in nginx,
+        "listen 127.0.0.1:80;" in nginx
+        and "try_files $uri $uri/ /index.html;" in nginx,
         actual=nginx,
-        expected="未知 /workbench、/knowledge 和任务深链接回退到 /index.html",
+        expected="仅监听回环地址，且前端深链接回退到 /index.html",
     )
     check_condition(
         "Caddy SPA fallback",
-        "handle /api/* {\n        reverse_proxy 127.0.0.1:8000\n    }"
+        caddy.startswith("http://127.0.0.1:80 {")
+        and "handle /api/* {\n        reverse_proxy 127.0.0.1:8000\n    }"
         in caddy
         and "handle {\n        try_files {path} /index.html\n        file_server\n    }"
         in caddy,
         actual=caddy,
-        expected="API 代理与 SPA fallback 位于互斥的 handle 路由中",
+        expected="仅监听回环地址，且 API 代理与 SPA fallback 位于互斥路由中",
     )
 
 
