@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJob, previewDDL, searchMemories, submitDDL } from "./dataAgent";
+import { getJob, getMemoryHistory, previewDDL, searchMemories, submitDDL } from "./dataAgent";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -165,5 +165,45 @@ describe("memory search", () => {
     })));
 
     await expect(searchMemories("dw", "订单")).resolves.toEqual(payload);
+  });
+});
+
+describe("memory history", () => {
+  const validEvent = {
+    id: 1,
+    memory_uid: "memory-1",
+    event_type: "ADD",
+    old_content: null,
+    new_content: { table: "orders" },
+    job_id: "job-1",
+    actor_type: "WORKFLOW",
+    created_at: "2026-08-01T12:00:00Z",
+  };
+  const validPage = { items: [validEvent], offset: 0, limit: 50, has_more: false };
+
+  it.each([
+    {},
+    { ...validPage, items: [{ ...validEvent, event_type: "UNKNOWN" }] },
+    { ...validPage, items: [{ ...validEvent, old_content: "invalid" }] },
+    { ...validPage, items: [{ ...validEvent, actor_type: 42 }] },
+    { ...validPage, has_more: "false" },
+  ])("rejects invalid successful history DTOs", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(getMemoryHistory("memory-1")).rejects.toMatchObject({
+      status: 502, code: "invalid_response", stage: "response", retryable: true,
+    });
+  });
+
+  it("accepts a complete memory history DTO", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(validPage), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(getMemoryHistory("memory-1")).resolves.toEqual(validPage);
   });
 });

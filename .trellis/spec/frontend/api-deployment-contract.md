@@ -96,6 +96,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   Validate memory search items, nested memory details, ranking scores, signals,
   and degraded targets before rendering results so incompatible responses remain
   recoverable contract errors.
+  Validate memory history pagination and every event's identifiers, type,
+  contents, actor, and timestamp before rendering record details.
 
 ### 7. Wrong vs Correct
 

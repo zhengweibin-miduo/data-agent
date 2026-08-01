@@ -168,10 +168,18 @@ export interface MemorySearchResponse {
 
 export interface MemoryHistoryPage {
   items: Array<{
+    id: number;
+    memory_uid: string;
     event_type: string;
+    old_content: Record<string, unknown> | null;
+    new_content: Record<string, unknown> | null;
+    job_id: string | null;
     created_at: string;
     actor_type: string;
   }>;
+  offset: number;
+  limit: number;
+  has_more: boolean;
 }
 
 export interface MemoryMutationResult {

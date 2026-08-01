@@ -89,6 +89,26 @@ const isMemorySearchResponse = (payload: unknown): payload is MemorySearchRespon
     && isStringArray(payload.degraded_targets);
 };
 
+const MEMORY_EVENT_TYPES = new Set(["ADD", "UPDATE", "MERGE", "DELETE", "NOOP", "EXPIRE", "LINK"]);
+const MEMORY_ACTOR_TYPES = new Set(["WORKFLOW", "USER", "SYSTEM"]);
+
+const isMemoryHistoryPage = (payload: unknown): payload is MemoryHistoryPage => {
+  if (!isRecord(payload)) return false;
+  return Array.isArray(payload.items) && payload.items.every((item) =>
+    isRecord(item)
+      && Number.isInteger(item.id) && Number(item.id) >= 1
+      && typeof item.memory_uid === "string" && item.memory_uid.length > 0
+      && typeof item.event_type === "string" && MEMORY_EVENT_TYPES.has(item.event_type)
+      && isNullable(item.old_content, isRecord)
+      && isNullable(item.new_content, isRecord)
+      && isNullable(item.job_id, (value) => typeof value === "string")
+      && typeof item.actor_type === "string" && MEMORY_ACTOR_TYPES.has(item.actor_type)
+      && typeof item.created_at === "string" && item.created_at.length > 0)
+    && Number.isInteger(payload.offset) && Number(payload.offset) >= 0
+    && Number.isInteger(payload.limit) && Number(payload.limit) >= 1
+    && typeof payload.has_more === "boolean";
+};
+
 const isMetricQuestion = (payload: unknown): boolean => {
   if (!isRecord(payload)) return false;
   return typeof payload.question_id === "string" && payload.question_id.length > 0
@@ -211,7 +231,9 @@ export const getMemory = (uid: string): Promise<MemoryDetail> =>
   apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}`);
 
 export const getMemoryHistory = (uid: string): Promise<MemoryHistoryPage> =>
-  apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}/history`);
+  apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}/history`, {
+    validateResponse: isMemoryHistoryPage,
+  });
 
 export const updateMemory = (
   uid: string,

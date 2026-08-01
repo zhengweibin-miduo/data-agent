@@ -12,7 +12,7 @@ describe("knowledge corrections", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/knowledge?memory=memory-1");
     vi.mocked(getMemory).mockResolvedValue({ uid: "memory-1", source: "warehouse", category: "metadata", memory_key: "orders", memory_text: "订单", content: { name: "订单" }, record_version: 1, status: "active" });
-    vi.mocked(getMemoryHistory).mockResolvedValue({ items: [] });
+    vi.mocked(getMemoryHistory).mockResolvedValue({ items: [], offset: 0, limit: 50, has_more: false });
     vi.mocked(updateMemory).mockResolvedValue({ memory_uid: "memory-1", requires_reprocess: true });
     vi.mocked(searchMemories).mockReset();
     vi.mocked(deleteMemory).mockReset();
@@ -30,7 +30,7 @@ describe("knowledge corrections", () => {
       .mockResolvedValueOnce({ uid: "memory-1", source: "warehouse", category: "metadata", memory_key: "orders", memory_text: "订单", content: {}, record_version: 1, status: "active" })
       .mockImplementationOnce(() => new Promise(() => undefined));
     vi.mocked(getMemoryHistory)
-      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [], offset: 0, limit: 50, has_more: false })
       .mockImplementationOnce(() => new Promise(() => undefined));
     vi.mocked(searchMemories).mockResolvedValue({
       items: [{
