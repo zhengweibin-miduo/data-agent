@@ -54,6 +54,7 @@ mutation($threadId: ID!) {
 function parseArgs(argv) {
   const values = {};
   const names = new Map([
+    ["--pr-number", "prNumber"],
     ["--thread-id", "threadId"],
     ["--outcome", "outcome"],
     ["--reason", "reason"],
@@ -117,6 +118,10 @@ function rejectUnexpected(input, names) {
 }
 
 function validateInput(input) {
+  const prNumber = input.prNumber === undefined ? undefined : singleLine("prNumber", input.prNumber);
+  if (prNumber !== undefined && !/^[1-9][0-9]*$/.test(prNumber)) {
+    throw new Error("prNumber 必须是正整数");
+  }
   const threadId = singleLine("threadId", input.threadId, { required: true });
   const outcome = singleLine("outcome", input.outcome, { required: true });
   if (!OUTCOMES.has(outcome)) {
@@ -132,11 +137,11 @@ function validateInput(input) {
     if (!/^[0-9a-f]{40}$/.test(commitSha)) {
       throw new Error("commitSha 必须是 40 位小写十六进制 SHA");
     }
-    return { threadId, outcome, reason, fix, commitSha, testCommand, testSummary };
+    return { prNumber, threadId, outcome, reason, fix, commitSha, testCommand, testSummary };
   }
 
   rejectUnexpected(input, ["fix", "commitSha", "testCommand", "testSummary"]);
-  return { threadId, outcome, reason };
+  return { prNumber, threadId, outcome, reason };
 }
 
 function replyMarker(input) {
@@ -210,7 +215,7 @@ function assertGraphqlPayload(payload, operation) {
   return payload;
 }
 
-function createGhAdapter(execute = runGh) {
+function createGhAdapter(execute = runGh, prNumber) {
   function graphql(query, fields, operation) {
     const args = ["api", "graphql", "-f", `query=${query}`];
     for (const [name, value] of Object.entries(fields)) {
@@ -222,10 +227,12 @@ function createGhAdapter(execute = runGh) {
 
   return {
     getCurrentPr() {
+      const prArgs = prNumber === undefined ? [] : [prNumber];
       return parseGhJson(
         execute([
           "pr",
           "view",
+          ...prArgs,
           "--json",
           "number,url,state,headRefName,headRefOid",
         ]),
@@ -525,6 +532,8 @@ function selfTest() {
   );
 
   assert.deepEqual(parseArgs([
+    "--pr-number",
+    "76",
     "--thread-id",
     "PRRT_1",
     "--outcome",
@@ -532,10 +541,29 @@ function selfTest() {
     "--reason",
     "缺少依赖",
   ]), {
+    prNumber: "76",
     threadId: "PRRT_1",
     outcome: "blocked",
     reason: "缺少依赖",
   });
+  assert.throws(() => validateInput({
+    prNumber: "0",
+    threadId: "T",
+    outcome: "blocked",
+    reason: "缺少依赖",
+  }), /prNumber 必须是正整数/);
+  const prViewCalls = [];
+  createGhAdapter((args) => {
+    prViewCalls.push(args);
+    return JSON.stringify({
+      number: 76,
+      url: "https://github.test/pull/76",
+      state: "OPEN",
+      headRefName: "refactor/separate-frontend-backend-20260801",
+      headRefOid: "a".repeat(40),
+    });
+  }, "76").getCurrentPr();
+  assert.deepEqual(prViewCalls[0].slice(0, 3), ["pr", "view", "76"]);
   assert.throws(() => parseArgs(["--unknown", "value"]), /未知参数/);
 
   const graphqlCalls = [];
@@ -581,7 +609,7 @@ function selfTest() {
 
 function main(argv) {
   const input = parseArgs(argv);
-  const result = publishReply(input);
+  const result = publishReply(input, createGhAdapter(runGh, input.prNumber));
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

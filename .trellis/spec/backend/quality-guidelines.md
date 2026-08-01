@@ -266,7 +266,10 @@ remaining active unresolved thread even if it was delegated previously.
 ### 2. Signatures
 
 - CLI:
-  `.github/scripts/codex-review-thread-reply.js --thread-id <id> --outcome <fixed|no_change|blocked> ...`
+  `.github/scripts/codex-review-thread-reply.js --pr-number <number> --thread-id <id> --outcome <fixed|no_change|blocked> ...`
+- `pr-number` is required when the publisher runs from a checkout whose local
+  branch is not the PR head; it makes `gh pr view` resolve the intended PR
+  instead of inferring one from the current branch.
 - Fixed fields: `thread-id`, `outcome`, `reason`, `fix`, `commit-sha`,
   `test-command`, and `test-summary`.
 - No-change and blocked fields: `thread-id`, `outcome`, and `reason`.

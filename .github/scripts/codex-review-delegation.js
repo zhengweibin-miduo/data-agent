@@ -50,12 +50,12 @@ ${threadList}
 
 所有原 thread 回复和 resolve 必须通过仓库的结构化发布器执行，禁止直接使用 \`gh api\`、GraphQL mutation 或网页手工拼接回复正文：
 
-- 已修复：推送并核验实际 40 位 SHA 后执行
-  \`node .github/scripts/codex-review-thread-reply.js --thread-id <THREAD_ID> --outcome fixed --commit-sha <实际40位SHA> --reason "<单行根因>" --fix "<单行修复说明>" --test-command "<测试命令>" --test-summary "<单行测试摘要>"\`
-- 确认无需修改：执行
-  \`node .github/scripts/codex-review-thread-reply.js --thread-id <THREAD_ID> --outcome no_change --reason "<单行判断依据>"\`
-- 无法安全完成：执行
-  \`node .github/scripts/codex-review-thread-reply.js --thread-id <THREAD_ID> --outcome blocked --reason "<单行阻塞原因>"\`
+  - 已修复：推送并核验实际 40 位 SHA 后执行
+  \`node .github/scripts/codex-review-thread-reply.js --pr-number <PR_NUMBER> --thread-id <THREAD_ID> --outcome fixed --commit-sha <实际40位SHA> --reason "<单行根因>" --fix "<单行修复说明>" --test-command "<测试命令>" --test-summary "<单行测试摘要>"\`
+  - 确认无需修改：执行
+  \`node .github/scripts/codex-review-thread-reply.js --pr-number <PR_NUMBER> --thread-id <THREAD_ID> --outcome no_change --reason "<单行判断依据>"\`
+  - 无法安全完成：执行
+  \`node .github/scripts/codex-review-thread-reply.js --pr-number <PR_NUMBER> --thread-id <THREAD_ID> --outcome blocked --reason "<单行阻塞原因>"\`
 
 发布器负责校验实际 SHA、拒绝字面量换行和完整日志、生成固定 Markdown、跳过已 resolved thread，并且只在回复成功后按 outcome resolve。发布器失败时不得绕过它直接回复或 resolve，只在最终任务总结中说明失败。
 
@@ -363,7 +363,7 @@ async function selfTest() {
   assert.match(body, /修复此 PR 中所有有效且尚未解决的审查问题/);
   assert.match(body, /所有结构化字段、提交信息和任务总结必须使用简体中文/);
   assert.match(body, /所有原 thread 回复和 resolve 必须通过仓库的结构化发布器执行/);
-  assert.match(body, /codex-review-thread-reply\.js --thread-id <THREAD_ID> --outcome fixed/);
+  assert.match(body, /codex-review-thread-reply\.js --pr-number <PR_NUMBER> --thread-id <THREAD_ID> --outcome fixed/);
   assert.match(body, /--commit-sha <实际40位SHA>/);
   assert.match(body, /--outcome no_change/);
   assert.match(body, /--outcome blocked/);
