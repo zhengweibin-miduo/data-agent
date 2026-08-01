@@ -42,6 +42,12 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   deterministic pre-acceptance rejection such as `source_busy`.
   A retained unconfirmed coordinate takes precedence over a task ID left in the
   URL; only its authoritative 404 may fall back to restoring that older task.
+  Persist the coordinate and acceptance start time in session storage before
+  POST. During the bounded acceptance window, a restore-time 404 is provisional
+  and must be retried because it can race the original atomic acceptance.
+- A successful HTTP response with malformed JSON is a retryable
+  `invalid_response` contract error. Never cast an empty fallback object to a
+  success DTO or release an unconfirmed submission coordinate on parse failure.
 - Production static hosting is independent from the Python wheel. A same-origin
   proxy should route `/api/` to FastAPI and disable SSE buffering/cache.
 - Unauthenticated example proxies bind to `127.0.0.1` by default. Non-loopback

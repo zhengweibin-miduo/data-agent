@@ -36,4 +36,15 @@ describe("API client", () => {
     await vi.advanceTimersByTimeAsync(25);
     await expectation;
   });
+
+  it("projects malformed successful JSON as a retryable response contract error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", {
+      status: 202,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(apiRequest("/api/v1/metadata/ddl-jobs")).rejects.toMatchObject({
+      status: 502, code: "invalid_response", stage: "response", retryable: true,
+    });
+  });
 });

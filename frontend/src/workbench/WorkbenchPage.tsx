@@ -18,6 +18,8 @@ const DEFAULT_DDL = `CREATE TABLE customers (\n  id BIGINT PRIMARY KEY,\n  name 
 const MAX_DDL_BYTES = 262_144;
 const MAX_SOURCE_CHARS = 128;
 const SOURCE_PATTERN = /^[\w.-]+$/;
+const PENDING_SUBMISSION_KEY = "schema-loom-pending-submission";
+const ACCEPTANCE_RECONCILIATION_WINDOW_MS = 120_000;
 
 interface ChatMessage {
   id: string;
@@ -42,6 +44,35 @@ interface SubmissionAttempt {
 // remains component-owned and is never copied into browser storage.
 let pendingSubmissionAttempt: SubmissionAttempt | null = null;
 
+interface PersistedSubmissionAttempt {
+  submissionId: string;
+  startedAt: number;
+}
+
+function readPersistedSubmissionAttempt(): PersistedSubmissionAttempt | null {
+  const raw = sessionStorage.getItem(PENDING_SUBMISSION_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedSubmissionAttempt>;
+    return typeof parsed.submissionId === "string" && typeof parsed.startedAt === "number"
+      ? { submissionId: parsed.submissionId, startedAt: parsed.startedAt }
+      : null;
+  } catch {
+    sessionStorage.removeItem(PENDING_SUBMISSION_KEY);
+    return null;
+  }
+}
+
+function persistSubmissionAttempt(submissionId: string): void {
+  sessionStorage.setItem(PENDING_SUBMISSION_KEY, JSON.stringify({ submissionId, startedAt: Date.now() }));
+}
+
+function clearPersistedSubmissionAttempt(submissionId: string): void {
+  if (readPersistedSubmissionAttempt()?.submissionId === submissionId) {
+    sessionStorage.removeItem(PENDING_SUBMISSION_KEY);
+  }
+}
+
 const randomId = () => globalThis.crypto?.randomUUID?.()
   ?? "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
     const value = Math.floor(Math.random() * 16);
@@ -65,7 +96,10 @@ interface WorkbenchPageProps {
 }
 
 export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: WorkbenchPageProps = {}) {
-  const restoredJob = useRef(pendingSubmissionAttempt?.submissionId ?? restoredJobId() ?? null);
+  const persistedSubmission = useRef(readPersistedSubmissionAttempt());
+  const restoredJob = useRef(
+    pendingSubmissionAttempt?.submissionId ?? persistedSubmission.current?.submissionId ?? restoredJobId() ?? null,
+  );
   const fallbackRestoredJob = useRef(
     pendingSubmissionAttempt && restoredJobId() !== pendingSubmissionAttempt.submissionId
       ? restoredJobId()
@@ -174,6 +208,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
             const record = await getJob(jobId);
             if (cancelled || currentJobId.current !== jobId) return;
             if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+            clearPersistedSubmissionAttempt(jobId);
             const jobPath = `/workbench/${encodeURIComponent(jobId)}`;
             if (window.location.pathname !== jobPath) window.history.replaceState(null, "", jobPath);
             setSource(record.source);
@@ -191,7 +226,15 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
             if (cancelled || currentJobId.current !== jobId) return;
             const notFound = cause instanceof ApiError && cause.status === 404;
             if (notFound) {
+              const persisted = persistedSubmission.current;
+              if (persisted?.submissionId === jobId
+                && Date.now() - persisted.startedAt < ACCEPTANCE_RECONCILIATION_WINDOW_MS) {
+                await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelay));
+                retryDelay = Math.min(retryDelay * 2, 5_000);
+                continue;
+              }
               if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+              clearPersistedSubmissionAttempt(jobId);
               break;
             }
             setError(formatApiError(cause, "无法恢复这个任务，正在重试"));
@@ -250,6 +293,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       ? pendingSubmissionAttempt.submissionId
       : randomId();
     pendingSubmissionAttempt = { fingerprint: inputFingerprint, submissionId };
+    persistSubmissionAttempt(submissionId);
     const previousPath = window.location.pathname;
     // The client-generated submission ID is also the server job ID. Persist it
     // before POST so a full reload can reconcile an accepted-but-unanswered request.
@@ -260,6 +304,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
       }, controller.signal);
       if (!mounted.current || controller.signal.aborted || submitController.current !== controller) return;
       if (pendingSubmissionAttempt?.submissionId === submissionId) pendingSubmissionAttempt = null;
+      clearPersistedSubmissionAttempt(submissionId);
       const pending: JobRecord = {
         job_id: accepted.job_id, source: source.trim(), status: "pending", revision: 0,
         attempt: 0, question_round: 0, question_set_id: null, questions: null, result: null, error: null,
@@ -279,6 +324,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         && cause.status !== 408 && !cause.retryable
         && pendingSubmissionAttempt?.submissionId === submissionId) {
         pendingSubmissionAttempt = null;
+        clearPersistedSubmissionAttempt(submissionId);
         window.history.replaceState(null, "", previousPath);
       }
       if (mounted.current && !controller.signal.aborted) setError(formatApiError(cause, "任务提交失败"));

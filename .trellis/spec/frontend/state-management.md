@@ -55,5 +55,8 @@
 - Write a client-generated submission ID to the workbench URL before sending
   the acceptance request because that ID is also the server job ID and must
   survive a full document reload before the response arrives.
+- Keep an unconfirmed submission marker in session storage for a bounded
+  acceptance window. A GET 404 inside that window may have raced the original
+  POST and must not unlock the sample workbench or discard the job coordinate.
 - While a memory detail switch is loading, keep mutation controls disabled and
   identify the selected record in destructive confirmations.

@@ -159,6 +159,8 @@ describe("workbench chat", () => {
     expect(window.location.pathname).toMatch(/^\/workbench\/[0-9a-f-]+$/);
     expect(connectJobEvents).not.toHaveBeenCalled();
 
+    const pending = JSON.parse(sessionStorage.getItem("schema-loom-pending-submission")!);
+    sessionStorage.setItem("schema-loom-pending-submission", JSON.stringify({ ...pending, startedAt: 0 }));
     vi.mocked(getJob).mockRejectedValue(new ApiError(404, { error: { code: "job_not_found", retryable: false } }));
     const reconciled = render(<WorkbenchPage />);
     await waitFor(() => expect(screen.getByLabelText("数据源")).toBeEnabled());
@@ -180,6 +182,48 @@ describe("workbench chat", () => {
     rejectSubmit(new ApiError(409, { error: { code: "source_busy", retryable: false } }));
     await screen.findByText(/任务提交失败/);
     expect(window.location.pathname).toBe("/workbench");
+  });
+
+  it("retries an initial 404 while a persisted submission may still be accepting", async () => {
+    const submissionId = "11111111-1111-4111-8111-111111111111";
+    sessionStorage.setItem("schema-loom-pending-submission", JSON.stringify({
+      submissionId,
+      startedAt: Date.now(),
+    }));
+    window.history.replaceState(null, "", `/workbench/${submissionId}`);
+    vi.mocked(getJob)
+      .mockRejectedValueOnce(new ApiError(404, { error: { code: "job_not_found", retryable: false } }))
+      .mockResolvedValueOnce(waitingJob({ job_id: submissionId }));
+
+    render(<WorkbenchPage />);
+
+    expect(screen.getByLabelText("数据源")).toBeDisabled();
+    await waitFor(() => expect(screen.getByText("第二轮问题")).toBeInTheDocument(), { timeout: 2_500 });
+    expect(getJob).toHaveBeenCalledTimes(2);
+    expect(sessionStorage.getItem("schema-loom-pending-submission")).toBeNull();
+    expect(connectJobEvents).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the submission coordinate after a malformed successful response", async () => {
+    vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
+    vi.mocked(submitDDL).mockRejectedValue(new ApiError(502, {
+      error: { code: "invalid_response", stage: "response", retryable: true },
+    }));
+    const first = render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+
+    await screen.findByText(/invalid_response/);
+    const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
+    expect(window.location.pathname).toBe(`/workbench/${submissionId}`);
+    expect(JSON.parse(sessionStorage.getItem("schema-loom-pending-submission")!)).toMatchObject({ submissionId });
+
+    first.unmount();
+    sessionStorage.setItem("schema-loom-pending-submission", JSON.stringify({ submissionId, startedAt: 0 }));
+    vi.mocked(getJob).mockRejectedValue(new ApiError(404, { error: { code: "job_not_found", retryable: false } }));
+    render(<WorkbenchPage />);
+    await waitFor(() => expect(sessionStorage.getItem("schema-loom-pending-submission")).toBeNull());
   });
 
   it("reconciles a custom accepted submission after repeated timeouts and an SPA remount", async () => {

@@ -62,12 +62,20 @@ export async function apiRequest<T>(
         ? { "Content-Type": "application/json", ...requestOptions.headers }
         : requestOptions.headers,
     });
-    const payload = response.status === 204
-      ? null
-      : await response.json().catch((error: unknown) => {
+    let payload: unknown = null;
+    if (response.status !== 204) {
+      try {
+        payload = await response.json();
+      } catch (error) {
         if (timedOut) throw error;
-        return {} as ApiErrorEnvelope;
-      });
+        if (response.ok) {
+          throw new ApiError(502, {
+            error: { code: "invalid_response", stage: "response", retryable: true },
+          });
+        }
+        payload = {} as ApiErrorEnvelope;
+      }
+    }
     if (!response.ok) {
       throw new ApiError(response.status, payload as ApiErrorEnvelope);
     }
