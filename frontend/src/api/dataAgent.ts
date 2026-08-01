@@ -118,17 +118,26 @@ const isChatTurnResponse = (payload: unknown): payload is ChatTurnResponse => {
       || payload.readiness === "intent_unresolved");
 };
 
+const isConversationCreated = (payload: unknown): payload is ConversationCreated =>
+  isRecord(payload) && typeof payload.uid === "string" && payload.uid.length > 0;
+
+const isMemoryUpdateResult = (payload: unknown): payload is MemoryMutationResult =>
+  isRecord(payload)
+  && typeof payload.memory_uid === "string" && payload.memory_uid.length > 0
+  && Number.isInteger(payload.event_id) && Number(payload.event_id) >= 1
+  && Number.isInteger(payload.record_version) && Number(payload.record_version) >= 1
+  && typeof payload.requires_reprocess === "boolean";
+
+const isMemoryDeleteResult = (payload: unknown): payload is MemoryMutationResult =>
+  isRecord(payload)
+  && typeof payload.memory_uid === "string" && payload.memory_uid.length > 0
+  && payload.deleted === true;
+
 const supportsSubmissionIdempotency = async (): Promise<boolean> => {
-  try {
-    const health = await apiRequest<unknown>("/api/v1/health");
-    return isRecord(health)
-      && isRecord(health.capabilities)
-      && health.capabilities.ddl_submission_idempotency === true;
-  } catch {
-    // A legacy or temporarily unavailable capability endpoint must not make the
-    // strict legacy submission contract unusable.
-    return false;
-  }
+  const health = await apiRequest<unknown>("/api/v1/health");
+  return isRecord(health)
+    && isRecord(health.capabilities)
+    && health.capabilities.ddl_submission_idempotency === true;
 };
 
 const isMetricQuestion = (payload: unknown): boolean => {
@@ -233,6 +242,7 @@ export const createConversation = (userId: string): Promise<ConversationCreated>
   apiRequest("/api/v1/conversations", {
     method: "POST",
     body: JSON.stringify({ user_id: userId }),
+    validateResponse: isConversationCreated,
   });
 
 export const sendChatTurn = (
@@ -274,6 +284,7 @@ export const updateMemory = (
   apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}`, {
     method: "PATCH",
     body: JSON.stringify({ content, expected_version: expectedVersion }),
+    validateResponse: isMemoryUpdateResult,
   });
 
 export const deleteMemory = (
@@ -282,4 +293,5 @@ export const deleteMemory = (
 ): Promise<MemoryMutationResult> =>
   apiRequest(`/api/v1/metadata/memories/${encodeURIComponent(uid)}?expected_version=${expectedVersion}`, {
     method: "DELETE",
+    validateResponse: isMemoryDeleteResult,
   });

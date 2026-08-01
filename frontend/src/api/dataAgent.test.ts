@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJob, getMemory, getMemoryHistory, previewDDL, searchMemories, sendChatTurn, submitDDL } from "./dataAgent";
+import {
+  createConversation, getJob, getMemory, getMemoryHistory, previewDDL, searchMemories,
+  sendChatTurn, submitDDL, updateMemory,
+} from "./dataAgent";
 
 const capabilityResponse = () => new Response(JSON.stringify({
   status: "ok", capabilities: { ddl_submission_idempotency: true },
@@ -12,6 +15,18 @@ afterEach(() => {
 });
 
 describe("DDL job submission", () => {
+  it("does not submit without a conclusive capability response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: {
+      code: "health_unavailable", stage: "health", retryable: true,
+    } }), { status: 503, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(submitDDL({
+      source: "dw", dialect: "mysql", ddl: "CREATE TABLE t(id INT)", submission_id: "job-1",
+    })).rejects.toMatchObject({ status: 503, code: "health_unavailable", retryable: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([{}, null, { job_id: 123 }, { job_id: "job-1", status: "pending" }])(
     "rejects invalid successful acceptance DTOs",
     async (payload) => {
@@ -85,6 +100,33 @@ describe("DDL job submission", () => {
       submission_id: "11111111-1111-4111-8111-111111111111",
     })).resolves.toMatchObject({ job_id: "legacy-job" });
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ "Content-Type": "application/json" });
+  });
+});
+
+describe("conversation creation", () => {
+  it.each([{}, null, { uid: "" }, { uid: 42 }])("rejects invalid successful creation DTOs", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    await expect(createConversation("user-1")).rejects.toMatchObject({
+      status: 502, code: "invalid_response", retryable: true,
+    });
+  });
+});
+
+describe("memory mutation", () => {
+  it.each([
+    {},
+    { memory_uid: "memory-1", event_id: 1, record_version: 2 },
+    { memory_uid: "memory-1", event_id: "1", record_version: 2, requires_reprocess: true },
+    { memory_uid: "memory-1", event_id: 1, record_version: 2, requires_reprocess: "true" },
+  ])("rejects invalid successful update DTOs", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    await expect(updateMemory("memory-1", { table: "orders" }, 1)).rejects.toMatchObject({
+      status: 502, code: "invalid_response", retryable: true,
+    });
   });
 });
 

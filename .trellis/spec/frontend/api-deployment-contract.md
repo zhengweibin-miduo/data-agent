@@ -106,6 +106,13 @@ base resolution, static hosting, or the legacy embedded frontend changes.
   Validate a memory detail before enabling correction or deletion controls.
   Validate chat messages and readiness decisions before clearing a turn retry
   coordinate or applying a clarification draft.
+  Capability discovery must distinguish an explicit legacy response from a
+  failed read: never downgrade to a non-idempotent submission after a transient
+  health failure. Validate conversation creation and memory mutation responses
+  before persisting identifiers or clearing reprocessing guidance.
+- Normalize every non-success payload from `unknown` into a stable `ApiError`;
+  malformed envelopes (including JSON `null`) must fall back to `http_<status>`
+  so deterministic client failures still release the correct interaction gate.
 
 ### 7. Wrong vs Correct
 

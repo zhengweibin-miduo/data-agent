@@ -23,6 +23,25 @@ describe("API client", () => {
     expect(error).toMatchObject({ status: 409, code: "revision_conflict", stage: "waiting_input", retryable: true, details: { expected: 4 } });
   });
 
+  it.each([null, [], "upstream failure"])(
+    "normalizes malformed error payloads",
+    (payload) => {
+      expect(new ApiError(422, payload)).toMatchObject({
+        status: 422, code: "http_422", stage: "request", retryable: false, details: {},
+      });
+    },
+  );
+
+  it("projects a JSON null error response as a stable ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("null", {
+      status: 422, headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(apiRequest("/api/v1/test")).rejects.toMatchObject({
+      status: 422, code: "http_422", stage: "request", retryable: false,
+    });
+  });
+
   it("aborts a request at the configured deadline with a stable timeout error", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {

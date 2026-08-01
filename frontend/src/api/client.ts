@@ -1,5 +1,3 @@
-import type { ApiErrorEnvelope } from "./types";
-
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 export const API_REQUEST_TIMEOUT_MS = 30_000;
 // A chat turn can perform two readiness calls plus one answer call, and every
@@ -18,16 +16,23 @@ export class ApiError extends Error {
   readonly retryable: boolean;
   readonly details: Record<string, unknown>;
 
-  constructor(status: number, payload: ApiErrorEnvelope) {
-    const projection = payload.error ?? {};
-    const code = projection.code ?? `http_${status}`;
+  constructor(status: number, payload: unknown) {
+    const envelope = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {};
+    const projection = envelope.error && typeof envelope.error === "object" && !Array.isArray(envelope.error)
+      ? envelope.error as Record<string, unknown>
+      : {};
+    const code = typeof projection.code === "string" ? projection.code : `http_${status}`;
     super(code);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
-    this.stage = projection.stage ?? "request";
-    this.retryable = Boolean(projection.retryable);
-    this.details = projection.details ?? {};
+    this.stage = typeof projection.stage === "string" ? projection.stage : "request";
+    this.retryable = typeof projection.retryable === "boolean" ? projection.retryable : false;
+    this.details = projection.details && typeof projection.details === "object" && !Array.isArray(projection.details)
+      ? projection.details as Record<string, unknown>
+      : {};
   }
 }
 
@@ -79,11 +84,11 @@ export async function apiRequest<T>(
             error: { code: "invalid_response", stage: "response", retryable: true },
           });
         }
-        payload = {} as ApiErrorEnvelope;
+        payload = {};
       }
     }
     if (!response.ok) {
-      throw new ApiError(response.status, payload as ApiErrorEnvelope);
+      throw new ApiError(response.status, payload);
     }
     if (validateResponse && !validateResponse(payload)) {
       throw new ApiError(502, {

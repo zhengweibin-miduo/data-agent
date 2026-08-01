@@ -185,7 +185,7 @@ export interface MemoryHistoryPage {
 
 export interface MemoryMutationResult {
   memory_uid: string;
-  event_id?: string;
+  event_id?: number;
   record_version?: number;
   requires_reprocess?: boolean;
   deleted?: boolean;
