@@ -34,6 +34,12 @@ Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取�
 
 Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/workflow.md` 为项目工作流来源；Skill 提供 Git 与 PR 操作的安全边界和通用执行规则。
 
+## 测试开发与完成验证组合技能
+
+测试优先的新功能、bug 修复或测试重构使用项目级 [`tdd`](./.agents/skills/tdd/SKILL.md) Skill。写测试前先确认要覆盖的公共 seam；围绕可观察行为按纵向小切片推进，避免测试实现细节、mock 内部协作者或无价值扩张，也不要求为每个内部函数机械增加测试。
+
+宣称完成前使用项目级 [`verification-before-completion`](./.agents/skills/verification-before-completion/SKILL.md) Skill，运行能够证明相关声明的最新、完整命令并核对结果。两个 Skill 仅补充测试开发与完成验证方法，不替代 `.trellis/workflow.md`、`.trellis/spec/`、pytest、Ruff、Pyright、CI 或 `trellis-check`；如有冲突，以项目规则为准。
+
 ## 技术分析方案文档组合技能
 
 仅当任务需要产出技术分析方案文档时，使用项目级 `create-implementation-plan` Skill：`.agents/skills/create-implementation-plan/SKILL.md`。
