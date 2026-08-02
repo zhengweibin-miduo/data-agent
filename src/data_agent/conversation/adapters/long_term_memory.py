@@ -31,4 +31,3 @@ class MemorySearchLongTermMemoryReader:
             limit=limit,
         )
         return [hit.memory for hit in response.items]
-

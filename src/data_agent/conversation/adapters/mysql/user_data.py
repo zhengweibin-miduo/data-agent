@@ -15,4 +15,3 @@ class MySQLUserDataEraser:
             await ConversationRepository(session).delete_user_conversations(user_id)
             # 步骤二：同一事务 tombstone 用户 Long-term Memory 与删除投影请求。
             await MemoryRepository(session).tombstone_user(user_id)
-
