@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import secrets
-from dataclasses import dataclass
 from typing import Any, Sequence
 
 from sqlalchemy import and_, delete, func, or_, select, text, update
@@ -12,6 +11,10 @@ from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from data_agent.data_sync.application.contracts import (
+    BufferedSyncEvent,
+    ClaimedSyncTask,
+)
 from data_agent.data_sync.models import (
     BinlogCoordinate,
     DesiredSyncTable,
@@ -40,30 +43,6 @@ _RUNNABLE_PHASES = (
 def _rowcount(result: object) -> int:
     """读取 DML 结果影响行数。"""
     return result.rowcount if isinstance(result, CursorResult) else 0
-
-
-@dataclass(frozen=True, slots=True)
-class ClaimedSyncTask:
-    """持有短期租约的数据同步任务投影。"""
-
-    id: int
-    desired: DesiredSyncTable
-    desired_hash: str
-    phase: SyncPhase
-    lease_token: str
-    attempts: int
-    snapshot: BinlogCoordinate | None
-    captured: BinlogCoordinate | None
-    applied: BinlogCoordinate | None
-    last_backfill_key: tuple[object, ...] | None
-
-
-@dataclass(frozen=True, slots=True)
-class BufferedSyncEvent:
-    """待回放的持久化 Binlog 行事件。"""
-
-    id: int
-    event: SyncRowEvent
 
 
 class DataSyncRepository:

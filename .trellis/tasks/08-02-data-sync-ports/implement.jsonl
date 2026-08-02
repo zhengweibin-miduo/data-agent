@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Load the backend pre-development and quality routing rules."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Preserve feature ownership, dependency direction, package naming, and hard internal migrations."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Preserve Data Sync transactions, coordinates, locks, backfill, replay, readiness, and database-clock leases."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Preserve retry, conflict, pause, dead-state, lease-loss, and safe logging behavior."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Preserve named MySQL source, timeout, Binlog, and worker lifecycle contracts."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Use the approved test seam, vertical TDD, documentation rules, and full validation gates."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace source, application, persistence, DW, and Meta Projection data across every seam."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing repository, backfill, schema, and source behavior instead of duplicating it behind ports."}
+{"file": ".trellis/tasks/08-02-data-sync-ports/research/current-boundary-audit.md", "reason": "Use current file and symbol evidence for the refactor and test replacement scope."}

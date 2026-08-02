@@ -1,0 +1,29 @@
+{
+  "id": "data-sync-ports",
+  "name": "data-sync-ports",
+  "title": "重构 Data Sync 应用端口",
+  "description": "为 Data Sync 建立 application ports，消除与 Meta Projection 的双向 implementation 依赖，并替换对应测试。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-02",
+  "completedAt": null,
+  "branch": "refactor/data-sync-ports-20260802",
+  "base_branch": "refactor/align-project-structure-tests-20260802",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-02-data-sync-ports",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-02-align-project-structure-tests",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

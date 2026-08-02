@@ -1,11 +1,16 @@
 """数据同步基线分批清理检查。"""
 
+from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
 import pytest
 from tests.helpers.checks import check_condition, check_equal
 
 from data_agent.data_sync import backfill
+from data_agent.data_sync.application.contracts import (
+    BufferedSyncEvent,
+    ClaimedSyncTask,
+)
 from data_agent.data_sync.models import (
     BinlogCoordinate,
     DesiredColumn,
@@ -14,7 +19,6 @@ from data_agent.data_sync.models import (
     SyncPhase,
     SyncRowEvent,
 )
-from data_agent.data_sync.repository import BufferedSyncEvent, ClaimedSyncTask
 from data_agent.ddl_metadata.meta_projection.application.value_input import (
     MaterializedRowsChanged,
     MaterializedTableRef,
@@ -47,8 +51,16 @@ def _task() -> ClaimedSyncTask:
     )
 
 
+@dataclass(frozen=True)
+class ProjectionProbe:
+    """保存测试 projection participant 与可观察 apply。"""
+
+    participant: AsyncMock
+    apply: AsyncMock
+
+
 @pytest.fixture
-def value_refresh(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+def value_refresh() -> ProjectionProbe:
     """隔离并记录与 DW 写入同事务触发的索引刷新。"""
     refresh = AsyncMock()
     prepared = AsyncMock()
@@ -56,17 +68,12 @@ def value_refresh(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     prepared.apply = refresh
     participant = AsyncMock()
     participant.prepare.return_value = prepared
-    monkeypatch.setattr(
-        backfill,
-        "MySQLValueProjectionParticipant",
-        lambda session, desired: participant,
-    )
-    return refresh
+    return ProjectionProbe(participant=participant, apply=refresh)
 
 
 async def test_reset_source_rows_is_bounded_and_resumable(
     monkeypatch: pytest.MonkeyPatch,
-    value_refresh: AsyncMock,
+    value_refresh: ProjectionProbe,
 ) -> None:
     """大 generation 清理每次只处理一批并通过墓碑续传。"""
     repository = AsyncMock()
@@ -78,10 +85,18 @@ async def test_reset_source_rows_is_bounded_and_resumable(
     session = AsyncMock()
 
     first_complete = await backfill.reset_source_rows(
-        session, _task(), dw_database="dw", limit=2
+        session,
+        _task(),
+        dw_database="dw",
+        limit=2,
+        value_projection=value_refresh.participant,
     )
     second_complete = await backfill.reset_source_rows(
-        session, _task(), dw_database="dw", limit=2
+        session,
+        _task(),
+        dw_database="dw",
+        limit=2,
+        value_projection=value_refresh.participant,
     )
 
     check_equal("满批后需要续传", first_complete, False)
@@ -91,7 +106,7 @@ async def test_reset_source_rows_is_bounded_and_resumable(
         "每批归属都持久化墓碑", repository.tombstone_source_key_owners.call_count, 2
     )
     check_equal("每批 DW 删除使用一条语句", session.execute.await_count, 2)
-    check_equal("每个非空清理批次触发值刷新", value_refresh.await_count, 2)
+    check_equal("每个非空清理批次触发值刷新", value_refresh.apply.await_count, 2)
 
 
 def test_desired_values_normalizes_mysql_set_values() -> None:
@@ -142,7 +157,7 @@ def test_set_primary_key_has_one_identity_before_and_after_binding() -> None:
 
 async def test_apply_backfill_batch_claims_ownership_in_one_batch(
     monkeypatch: pytest.MonkeyPatch,
-    value_refresh: AsyncMock,
+    value_refresh: ProjectionProbe,
 ) -> None:
     """历史回填按块领取 ownership，而不是逐行执行数据库往返。"""
     repository = AsyncMock()
@@ -157,6 +172,7 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
         task,
         [{"id": 1}, {"id": 2}, {"id": 3}],
         dw_database="dw",
+        value_projection=value_refresh.participant,
     )
 
     repository.claim_key_owners.assert_awaited_once()
@@ -166,9 +182,9 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
         3,
     )
     repository.claim_key_owner.assert_not_awaited()
-    value_refresh.assert_awaited_once()
-    assert value_refresh.await_args is not None
-    change = value_refresh.await_args.args[0]
+    value_refresh.apply.assert_awaited_once()
+    assert value_refresh.apply.await_args is not None
+    change = value_refresh.apply.await_args.args[0]
     assert change.checkpoint == {"backfill_key": [3]}
 
 
@@ -244,7 +260,7 @@ def test_backfill_rejects_one_row_over_payload_budget() -> None:
 async def test_missing_old_key_does_not_claim_ownership(
     monkeypatch: pytest.MonkeyPatch,
     operation: RowOperation,
-    value_refresh: AsyncMock,
+    value_refresh: ProjectionProbe,
 ) -> None:
     """扫描前已删除或迁移的旧键不得被删除事件抢占归属。"""
     repository = AsyncMock()
@@ -270,6 +286,7 @@ async def test_missing_old_key_does_not_claim_ownership(
         _task(),
         BufferedSyncEvent(id=1, event=event),
         dw_database="dw",
+        value_projection=value_refresh.participant,
     )
 
     if operation == RowOperation.DELETE:
@@ -278,12 +295,10 @@ async def test_missing_old_key_does_not_claim_ownership(
     else:
         repository.claim_key_owner.assert_awaited_once()
         check_equal("主键迁移只写入新键", session.execute.await_count, 1)
-    value_refresh.assert_awaited_once()
-    assert value_refresh.await_args is not None
-    change = value_refresh.await_args.args[0]
-    assert change.checkpoint == {
-        "coordinate": coordinate.model_dump(mode="json")
-    }
+    value_refresh.apply.assert_awaited_once()
+    assert value_refresh.apply.await_args is not None
+    change = value_refresh.apply.await_args.args[0]
+    assert change.checkpoint == {"coordinate": coordinate.model_dump(mode="json")}
 
 
 async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
@@ -304,11 +319,6 @@ async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
     prepared.apply = apply_changes
     participant = AsyncMock()
     participant.prepare.return_value = prepared
-    monkeypatch.setattr(
-        backfill,
-        "MySQLValueProjectionParticipant",
-        lambda session, desired: participant,
-    )
     coordinate = BinlogCoordinate(file="mysql-bin.000001", position=121, row_index=0)
     event = SyncRowEvent(
         source="local",
@@ -325,6 +335,7 @@ async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
         _task(),
         BufferedSyncEvent(id=2, event=event),
         dw_database="dw",
+        value_projection=participant,
     )
 
     apply_changes.assert_awaited_once()

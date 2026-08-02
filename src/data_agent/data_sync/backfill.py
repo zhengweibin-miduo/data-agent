@@ -10,6 +10,10 @@ from sqlalchemy import and_, column, delete, or_, select, table, text
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from data_agent.data_sync.application.contracts import (
+    BufferedSyncEvent,
+    ClaimedSyncTask,
+)
 from data_agent.data_sync.models import (
     DesiredSyncTable,
     EncodedValue,
@@ -19,14 +23,7 @@ from data_agent.data_sync.models import (
     encode_row_value,
     primary_key_identity,
 )
-from data_agent.data_sync.repository import (
-    BufferedSyncEvent,
-    ClaimedSyncTask,
-    DataSyncRepository,
-)
-from data_agent.ddl_metadata.meta_projection.adapters.mysql_value_input import (
-    MySQLValueProjectionParticipant,
-)
+from data_agent.data_sync.repository import DataSyncRepository
 from data_agent.ddl_metadata.meta_projection.application.value_input import (
     MaterializedRowsChanged,
     MaterializedTableRef,
@@ -77,7 +74,7 @@ async def apply_backfill_batch(
     rows: Sequence[Mapping[str, object]],
     *,
     dw_database: str,
-    value_projection: ValueProjectionParticipant | None = None,
+    value_projection: ValueProjectionParticipant,
 ) -> tuple[object, ...] | None:
     """在一个目标事务内写入回填批次并推进主键游标。"""
     if not rows:
@@ -85,10 +82,7 @@ async def apply_backfill_batch(
     repository = DataSyncRepository(session)
     values = [_desired_values(task.desired, row) for row in rows]
     table_ref = _materialized_table_ref(task.desired)
-    participant = value_projection or MySQLValueProjectionParticipant(
-        session, task.desired
-    )
-    prepared_projection = await participant.prepare(table_ref)
+    prepared_projection = await value_projection.prepare(table_ref)
     identities = [primary_key_identity(task.desired, row) for row in values]
     conflict = await repository.claim_key_owners(
         target_table=task.desired.target_table,
@@ -161,15 +155,12 @@ async def reset_source_rows(
     *,
     dw_database: str,
     limit: int,
-    value_projection: ValueProjectionParticipant | None = None,
+    value_projection: ValueProjectionParticipant,
 ) -> bool:
     """有界清理一批旧行，返回是否已完成。"""
     repository = DataSyncRepository(session)
     table_ref = _materialized_table_ref(task.desired)
-    participant = value_projection or MySQLValueProjectionParticipant(
-        session, task.desired
-    )
-    prepared_projection = await participant.prepare(table_ref)
+    prepared_projection = await value_projection.prepare(table_ref)
     documents = await repository.source_key_documents(
         target_table=task.desired.target_table,
         source=task.desired.source,
@@ -230,7 +221,7 @@ async def apply_buffered_event(
     buffered: BufferedSyncEvent,
     *,
     dw_database: str,
-    value_projection: ValueProjectionParticipant | None = None,
+    value_projection: ValueProjectionParticipant,
 ) -> None:
     """原子应用一个 Binlog 行事件、确认事件并推进位点。"""
     event = buffered.event
@@ -248,8 +239,7 @@ async def apply_buffered_event(
         )
     repository = DataSyncRepository(session)
     table_ref = _materialized_table_ref(desired)
-    participant = value_projection or MySQLValueProjectionParticipant(session, desired)
-    prepared_projection = await participant.prepare(table_ref)
+    prepared_projection = await value_projection.prepare(table_ref)
     event_rows = [
         _decoded_event_row(desired, row)
         for row in (event.before, event.after)

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 from tests.helpers.checks import check_equal
 
+from data_agent.data_sync.application.contracts import ClaimedSyncTask
 from data_agent.data_sync.models import (
     BinlogCoordinate,
     DesiredColumn,
@@ -12,7 +13,7 @@ from data_agent.data_sync.models import (
     SyncPhase,
     SyncRowEvent,
 )
-from data_agent.data_sync.repository import ClaimedSyncTask, DataSyncRepository
+from data_agent.data_sync.repository import DataSyncRepository
 
 
 def _streaming_task() -> ClaimedSyncTask:

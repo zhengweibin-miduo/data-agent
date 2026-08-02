@@ -85,6 +85,13 @@ src/data_agent/
 │   ├── service.py
 │   └── tool.py
 ├── data_sync/
+│   ├── application/
+│   │   ├── contracts.py
+│   │   └── service.py
+│   ├── adapters/
+│   │   ├── composition.py
+│   │   ├── mysql.py
+│   │   └── source.py
 │   ├── backfill.py
 │   ├── binlog.py
 │   ├── models.py
@@ -159,6 +166,14 @@ under `docs/docker/`.
   internal code and does not own an HTTP or Conversation entrypoint.
 - `data_agent.data_sync` owns desired-state CDC tasks, DW schema/backfill/event
   application, source adapters, and its dedicated process.
+  `data_sync.application.service.DataSyncService.dispatch_once()` is the deep
+  application interface. `application.contracts` owns technology-neutral task,
+  source, materialization, and lease interfaces; it does not import SQLAlchemy,
+  global settings, concrete repositories, source clients, schema synchronizers,
+  or projection adapters. `data_sync.adapters` owns MySQL Sessions, repository
+  construction, source engines, generation/schema locks, DW transactions, and
+  production composition. `data_sync.worker` is the composition root that
+  selects the concrete Meta Projection transaction participant.
 - `data_agent.models` owns Pydantic contracts shared across HTTP, workflow,
   persistence, Conversation, and long-term memory.
 - `data_agent.memory` owns deterministic memory rules, application use cases,
@@ -222,6 +237,17 @@ main/application
 
 future answer caller
   -> answer_readiness -> data_sync/repository + infrastructure/llm_client
+
+data_sync/worker
+  -> data_sync/adapters/composition + source clients
+  -> ddl_metadata/meta_projection/adapters (composition only)
+
+data_sync/application
+  -> data_sync/models + application/contracts
+
+data_sync/adapters
+  -> data_sync/application + repository/backfill/schema_sync/binlog
+  -> infrastructure/mysql + Meta Projection application input
 
 worker/settings
   -> worker/job_runner + worker/maintenance + worker/lifecycle

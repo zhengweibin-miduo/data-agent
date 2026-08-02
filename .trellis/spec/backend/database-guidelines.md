@@ -448,14 +448,21 @@ backfill, Binlog replay, source collision handling, or `data_sync` persistence.
 
 ```python
 await DataSyncRepository(session).upsert_desired(desired_tables) -> None
-MySQLDatabase.advisory_locks(names, timeout_seconds=10) -> AsyncIterator[None]
-generation_lock_name(dw_database, target_table) -> str
-await DWSchemaSynchronizer(session, database="dw").synchronize(
-    desired,
-    check_authority=authority_callback,
+await DataSyncService.dispatch_once() -> int
+await SyncTaskPort.record_capture(task, captured) -> None
+await MaterializationPort.synchronize_schema(task) -> None
+await MaterializationPort.reset_generation(task, coordinate, limit=100) -> None
+await MaterializationPort.apply_backfill_batch(
+    task,
+    rows,
+    delay_seconds=1,
 ) -> None
-await apply_backfill_batch(session, task, rows, dw_database="dw")
-await apply_buffered_event(session, task, event, dw_database="dw") -> None
+await MaterializationPort.apply_replay_event(
+    task,
+    event,
+    cleanup_limit=100,
+) -> None
+await ValueProjectionParticipant.prepare(table_ref) -> PreparedValueProjection
 ```
 
 ### 3. Contracts
@@ -463,6 +470,15 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 - `meta` stores definitions, `dw` stores business rows, and `data_sync` stores
   only tasks, leases, retries, Binlog coordinates/events, backfill cursors, and
   `(target_table, primary_key) -> source` ownership.
+- `DataSyncService.dispatch_once()` is the application seam and claims at most
+  one task. The application imports only Data Sync values and abstract ports;
+  it never opens a Session, constructs a repository, exposes a source engine, or
+  selects a schema/projection implementation.
+- `MySQLSyncTaskAdapter` owns short claim/read/capture/settle/retry/lease
+  transactions. `MySQLMaterializationAdapter` owns schema, generation reset,
+  backfill, and replay transactions. `MySQLSourceAdapter` hides the source
+  engine and concrete Binlog result type. `data_sync.worker` is the composition
+  root that selects all production adapters.
 - Accepted Meta rows and `data_sync` desired state commit in the same managed
   MySQL Session. DDL Job success does not wait for DW work.
 - A task identity is unique by source, source schema/table, and target table;
@@ -517,6 +533,13 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   separate. When a streaming capture persists new events, the same transaction
   advances the captured coordinate and changes the task to `replaying`, so
   readiness can never observe a committed backlog with a streaming phase.
+- Every backfill/reset/replay call receives a transaction-bound
+  `ValueProjectionParticipant`. The production participant is created with the
+  exact caller-owned Session, so projection preparation, DW DML, key ownership,
+  cursor/event/coordinate state, frequency deltas, and refresh desired state
+  commit or roll back together. Low-level Data Sync materialization code depends
+  only on the Meta Projection application input and never constructs its MySQL
+  adapter.
 - The first source to write a target primary key owns it permanently, including
   after DELETE. Another source conflicts before DW DML and cannot advance the
   event. Historical backfill claims and verifies a whole bounded batch of key
@@ -571,6 +594,8 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 
 ```powershell
 uv run pytest tests/unit/data_sync
+uv run pytest tests/unit/data_sync/application
+uv run pytest tests/unit/data_sync/adapters
 uv run pytest tests/integration/data_sync
 uv run pytest tests/integration/answer_readiness
 ```
@@ -586,17 +611,27 @@ DELETE. A live MySQL ROW/FULL integration test must carry both null forms throug
 capture, durable event storage, replay, and DW assertions using `IS NULL` and
 `JSON_TYPE`.
 
+Application tests enter only through `dispatch_once()` with in-memory task,
+source, materialization, and lease adapters. They assert durable phases,
+coordinates, event/backfill outcomes, retry classification, and delay values;
+they do not call `_process`, `_capture`, `_retry`, `_reschedule`, or other
+private lifecycle helpers. MySQL adapter tests separately pin Session atomicity,
+generation-lock lifetime, projection participation, and cancellation cleanup.
+
 ### 7. Wrong vs Correct
 
 ```python
-# Wrong: a separate commit can publish Meta without recoverable desired state.
-await metadata_repository.synchronize(snapshot)
-await data_sync_repository.upsert_desired(desired)
-
-# Correct: one accepted-snapshot transaction owns both writes.
+# Wrong: application orchestration creates infrastructure and projection adapters.
 async with MySQLDatabase.session() as session:
-    await MetadataRepository(session).synchronize(...)
-    await DataSyncRepository(session).upsert_desired(desired)
+    await apply_buffered_event(session, task, event, dw_database="dw")
+
+# Correct: the composition root selects adapters; callers learn one interface.
+runtime = build_data_sync_runtime(
+    sources,
+    settings,
+    projection_factory=MySQLValueProjectionParticipant,
+)
+await runtime.service.dispatch_once()
 ```
 
 ```python

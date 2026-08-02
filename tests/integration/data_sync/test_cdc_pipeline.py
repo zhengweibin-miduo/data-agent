@@ -4,11 +4,12 @@ from dataclasses import replace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import make_url, text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import func, make_url, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from tests.helpers.checks import check_condition, check_equal
 from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 
+from data_agent.data_sync.application.contracts import ClaimedSyncTask
 from data_agent.data_sync.backfill import (
     apply_backfill_batch,
     apply_buffered_event,
@@ -26,6 +27,10 @@ from data_agent.data_sync.models import (
 )
 from data_agent.data_sync.repository import DataSyncRepository
 from data_agent.data_sync.schema_sync import DWSchemaSynchronizer
+from data_agent.data_sync.tables import data_sync_task
+from data_agent.ddl_metadata.meta_projection.adapters.mysql_value_input import (
+    MySQLValueProjectionParticipant,
+)
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.persistence.metadata_repository import MetadataRepository
 from data_agent.errors import DataAgentError
@@ -83,15 +88,9 @@ async def test_backfill_then_binlog_converges() -> None:
             await MetadataRepository(session).synchronize(schema, semantic, [])
             repository = DataSyncRepository(session)
             await repository.upsert_desired([desired])
-            tasks = await repository.claim_tasks(
-                limit=1,
-                lease_seconds=120,
-                max_attempts=3,
-            )
-        check_equal("领取一个同步任务", len(tasks), 1)
-        task = tasks[0]
+            task = await _lease_scoped_task(session, desired)
         check_equal(
-            "领取 UUID 目标任务",
+            "租约绑定 UUID 目标任务",
             (task.desired.source, task.desired.target_table),
             (source_name, table_name),
         )
@@ -129,6 +128,7 @@ async def test_backfill_then_binlog_converges() -> None:
                 task,
                 rows,
                 dw_database=app_config.data_sync.dw_database,
+                value_projection=MySQLValueProjectionParticipant(session, task.desired),
             )
 
         # 步骤三：源表产生更新、插入和硬删除，再从基线捕获并顺序回放。
@@ -175,6 +175,10 @@ async def test_backfill_then_binlog_converges() -> None:
                     task,
                     pending[0],
                     dw_database=app_config.data_sync.dw_database,
+                    value_projection=MySQLValueProjectionParticipant(
+                        session,
+                        task.desired,
+                    ),
                 )
 
         # 步骤四：DW 仅保留插入后的第二行，证明回填与硬删除均已收敛。
@@ -228,6 +232,9 @@ async def test_backfill_then_binlog_converges() -> None:
                     contender,
                     [{"id": 2, "amount": 999}],
                     dw_database=app_config.data_sync.dw_database,
+                    value_projection=MySQLValueProjectionParticipant(
+                        session, contender.desired
+                    ),
                 )
         check_equal("跨来源冲突错误码", error.value.code, "dw_primary_key_conflict")
         async with MySQLDatabase.session() as session:
@@ -365,15 +372,9 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
             await MetadataRepository(session).synchronize(schema, semantic, [])
             repository = DataSyncRepository(session)
             await repository.upsert_desired([desired])
-            tasks = await repository.claim_tasks(
-                limit=1,
-                lease_seconds=120,
-                max_attempts=3,
-            )
-        check_equal("领取 JSON 空值同步任务", len(tasks), 1)
-        task = tasks[0]
+            task = await _lease_scoped_task(session, desired)
         check_equal(
-            "领取 UUID 目标任务",
+            "租约绑定 UUID 目标任务",
             (task.desired.source, task.desired.target_table),
             (source_name, table_name),
         )
@@ -444,6 +445,10 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
                     task,
                     pending[0],
                     dw_database=app_config.data_sync.dw_database,
+                    value_projection=MySQLValueProjectionParticipant(
+                        session,
+                        task.desired,
+                    ),
                 )
 
         # 步骤五：IS NULL 只匹配 SQL NULL，JSON_TYPE 则识别 literal null。
@@ -496,6 +501,44 @@ async def test_json_sql_null_and_literal_null_remain_distinct_after_cdc() -> Non
             await source.close()
             await source_writer.dispose()
             await MySQLDatabase.close()
+
+
+async def _lease_scoped_task(
+    session: AsyncSession,
+    desired: DesiredSyncTable,
+) -> ClaimedSyncTask:
+    """只给本测试唯一 source/target 任务写入数据库时钟租约。"""
+    task_id = await session.scalar(
+        select(data_sync_task.c.id).where(
+            data_sync_task.c.source == desired.source,
+            data_sync_task.c.source_schema == desired.source_schema,
+            data_sync_task.c.source_table == desired.source_table,
+            data_sync_task.c.target_table == desired.target_table,
+        )
+    )
+    assert task_id is not None
+    lease_token = uuid4().hex
+    await session.execute(
+        update(data_sync_task)
+        .where(data_sync_task.c.id == task_id)
+        .values(
+            lease_token=lease_token,
+            lease_expires_at=func.timestampadd(text("SECOND"), 120, func.now()),
+            updated_at=func.now(),
+        )
+    )
+    return ClaimedSyncTask(
+        id=int(task_id),
+        desired=desired,
+        desired_hash=desired.desired_hash(),
+        phase=SyncPhase.PENDING_SCHEMA,
+        lease_token=lease_token,
+        attempts=0,
+        snapshot=None,
+        captured=None,
+        applied=None,
+        last_backfill_key=None,
+    )
 
 
 @pytest.mark.integration

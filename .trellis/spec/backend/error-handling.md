@@ -165,10 +165,10 @@ retry classification, or operational logging in the dedicated CDC process.
 
 ```python
 await DataSyncService.dispatch_once() -> int
-await DataSyncRepository.retry_failure(
+await SyncTaskPort.retry_failure(
     task, error_type, retry_base_seconds, retry_max_seconds, max_attempts
 ) -> SyncPhase | None
-await DataSyncRepository.hold_failure(task, phase, error_type) -> bool
+await SyncTaskPort.hold_failure(task, phase, error_type) -> bool
 ```
 
 ### 3. Contracts
@@ -179,6 +179,12 @@ await DataSyncRepository.hold_failure(task, phase, error_type) -> bool
   database-clock exponential backoff. Exhaustion enters `dead`.
 - Every settlement compares task ID, desired hash, lease token, and an unexpired
   lease. A late worker cannot overwrite a newer desired state.
+- Concrete generation/schema lock errors are translated by the MySQL
+  materialization adapter to `SyncResourceBusyError`. The application settles
+  the same phase with a database-clock delay and does not increment attempts.
+- `LeaseCoordinator` cancels a long operation after failed renewal, awaits its
+  cleanup, and raises `LeaseLostError`. The application then performs no retry,
+  hold, or later settlement for that stale worker.
 - Failure state stores only bounded `last_error_type`. Logs may include source,
   target, task, phase, and exception class, never credentials or row images.
 - A failed DW transaction leaves the event unacknowledged and the applied
@@ -207,11 +213,14 @@ await DataSyncRepository.hold_failure(task, phase, error_type) -> bool
 
 ```powershell
 uv run pytest tests/integration/data_sync
-uv run pytest tests/unit/data_sync
+uv run pytest tests/unit/data_sync/application
+uv run pytest tests/unit/data_sync/adapters
+uv run pytest tests/unit/data_sync/test_repository.py
 ```
 
 Tests assert lease compare-and-set, bounded retry/dead state, deterministic
-conflict, rollback, and unchanged applied coordinates on failure.
+conflict, rollback, unchanged applied coordinates on failure, lock-contention
+rescheduling without retry consumption, and cancellation cleanup before return.
 
 ### 7. Wrong vs Correct
 

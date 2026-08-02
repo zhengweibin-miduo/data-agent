@@ -9,9 +9,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from data_agent.data_sync.adapters.composition import build_data_sync_runtime
 from data_agent.data_sync.binlog import MySQLSourceClient, close_sources
-from data_agent.data_sync.repository import DataSyncRepository
-from data_agent.data_sync.service import DataSyncService
+from data_agent.ddl_metadata.meta_projection.adapters.mysql_value_input import (
+    MySQLValueProjectionParticipant,
+)
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.logging import logging_boundary, setup_logging
 from data_agent.settings import app_config
@@ -30,7 +32,11 @@ async def run_worker() -> None:
         )
         for name, settings in app_config.data_sync.sources.items()
     }
-    service = DataSyncService(sources, app_config.data_sync)
+    runtime = build_data_sync_runtime(
+        sources,
+        app_config.data_sync,
+        projection_factory=MySQLValueProjectionParticipant,
+    )
     try:
         # 步骤一：启动前验证全部源满足 ROW/FULL Binlog 契约。
         await asyncio.gather(
@@ -41,7 +47,7 @@ async def run_worker() -> None:
         )
         async with MySQLDatabase.session() as session:
             await _check_dw_table_name_case_sensitivity(session)
-            desired_tables = await DataSyncRepository(session).read_desired_tables()
+        desired_tables = await runtime.tasks.read_desired_tables()
         await asyncio.gather(
             *(
                 sources[item.source].check_select_access(
@@ -55,7 +61,7 @@ async def run_worker() -> None:
         # 步骤二：每轮只执行有界任务步骤；空闲时按配置暂停，避免忙轮询。
         while True:
             try:
-                processed = await service.dispatch_once()
+                processed = await runtime.service.dispatch_once()
             except (ConnectionError, OSError, TimeoutError, SQLAlchemyError):
                 logger.exception("数据同步控制库轮询失败，将在退避后重试")
                 await asyncio.sleep(app_config.data_sync.poll_interval_seconds)

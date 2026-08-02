@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Apply the complete backend quality checklist."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Check ownership, dependency direction, naming, and retired path removal."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check Data Sync atomicity, lock order, coordinates, readiness, lease, and live test requirements."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check retry classification, safe state, and logging behavior."}
+{"file": ".trellis/spec/backend/external-service-integrations.md", "reason": "Check source adapter, timeout, Binlog, startup, and shutdown contracts."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Reject private-method tests and run the required repository gates."}
+{"file": ".trellis/tasks/08-02-data-sync-ports/research/current-boundary-audit.md", "reason": "Compare final imports, tests, and transaction ownership with the audited baseline."}

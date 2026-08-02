@@ -9,6 +9,10 @@ from sqlalchemy.engine import CursorResult
 from tests.helpers.checks import check_equal
 from tests.helpers.factories import ensure_schema
 
+from data_agent.data_sync.application.contracts import (
+    BufferedSyncEvent,
+    ClaimedSyncTask,
+)
 from data_agent.data_sync.backfill import apply_buffered_event
 from data_agent.data_sync.models import (
     BinlogCoordinate,
@@ -19,11 +23,13 @@ from data_agent.data_sync.models import (
     SyncRowEvent,
     primary_key_identity,
 )
-from data_agent.data_sync.repository import BufferedSyncEvent, ClaimedSyncTask
 from data_agent.data_sync.tables import (
     data_sync_event,
     data_sync_key_owner,
     data_sync_task,
+)
+from data_agent.ddl_metadata.meta_projection.adapters.mysql_value_input import (
+    MySQLValueProjectionParticipant,
 )
 from data_agent.ddl_metadata.meta_projection.desired import enqueue_value_refresh
 from data_agent.ddl_metadata.meta_projection.elasticsearch import (
@@ -405,6 +411,10 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
                     task,
                     buffered,
                     dw_database=app_config.data_sync.dw_database,
+                    value_projection=MySQLValueProjectionParticipant(
+                        session,
+                        task.desired,
+                    ),
                 )
                 return buffered
 
@@ -471,6 +481,10 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
                     task,
                     BufferedSyncEvent(id=duplicate.id, event=failed_event),
                     dw_database=app_config.data_sync.dw_database,
+                    value_projection=MySQLValueProjectionParticipant(
+                        session,
+                        task.desired,
+                    ),
                 )
         async with MySQLDatabase.session() as session:
             failed_row_count = await session.scalar(
