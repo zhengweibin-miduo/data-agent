@@ -35,11 +35,11 @@ This parent plan coordinates four independently verifiable child tasks. The pare
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-001 | Validate parent `prd.md`, `design.md`, `implement.md`, context documents and research artifacts; commit only the parent planning baseline. |  |  |
-| TASK-002 | Create `refactor-memory-conversation-boundary` with its own branch/worktree and parent link. |  |  |
-| TASK-003 | Create `refactor-meta-projection-boundary` with its own branch/worktree and parent link. |  |  |
-| TASK-004 | Create `refactor-data-sync-ports` with its own branch/worktree and parent link; record dependency on the reviewed Child 2 projection interface. |  |  |
-| TASK-005 | Create `refactor-workbench-modules` with its own branch/worktree and parent link. |  |  |
+| TASK-001 | Validate parent `prd.md`, `design.md`, `implement.md`, context documents and research artifacts; commit only the parent planning baseline. | ✅ | 2026-08-02 |
+| TASK-002 | Create `refactor-memory-conversation-boundary` with its own branch/worktree and parent link. | ✅ | 2026-08-02 |
+| TASK-003 | Create `refactor-meta-projection-boundary` with its own branch/worktree and parent link. | ✅ | 2026-08-02 |
+| TASK-004 | Create `refactor-data-sync-ports` with its own branch/worktree and parent link; record dependency on the reviewed Child 2 projection interface. | ✅ | 2026-08-02 |
+| TASK-005 | Create `refactor-workbench-modules` with its own branch/worktree and parent link. | ✅ | 2026-08-02 |
 
 ### Implementation Phase 2
 

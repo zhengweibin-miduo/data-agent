@@ -18,7 +18,12 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-02-memory-conversation-boundary",
+    "08-02-meta-projection-boundary",
+    "08-02-data-sync-ports",
+    "08-02-workbench-modules"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
