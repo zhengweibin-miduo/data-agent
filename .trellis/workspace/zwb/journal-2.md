@@ -75,3 +75,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 61: 完成前后端双根结构迁移
+
+**Date**: 2026-08-02
+**Task**: 完成前后端双根结构迁移
+**Branch**: `refactor/separate-backend-frontend-roots-20260802`
+
+### Summary
+
+将 Python 后端迁入 backend/src 并移除 data_agent 包层与 legacy 前端资源；迁移后端配置、测试和构建元数据，更新 CI、文档和规范，并完成后端、前端、wheel 与 Compose 验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `db73176` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
