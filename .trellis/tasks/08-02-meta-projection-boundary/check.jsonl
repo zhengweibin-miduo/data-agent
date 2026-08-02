@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Check final package ownership, composition roots, and inner-to-outer dependency direction."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check snapshot atomicity, transaction boundaries, locks, leases, outbox convergence, and resumability."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Check adapter mappings, timeouts, remote retry behavior, and rebuild compatibility."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check cancellation, original exception preservation, retry classification, and safe boundaries."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check static analysis, focused and integration tests, and completion evidence."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/architecture-combination-review.md","reason":"Compare the implementation against the parent DDD and ownership findings."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/sync-index-flow.md","reason":"Verify the implementation removes the recorded structural cycle without changing runtime flow."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/test-seam-map.md","reason":"Verify new public seam tests replace, rather than duplicate, the old implementation-coupled suite."}

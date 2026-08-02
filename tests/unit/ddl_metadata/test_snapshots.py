@@ -7,8 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from data_agent.data_sync.locks import generation_lock_name
-from data_agent.ddl_metadata.persistence import snapshots
-from data_agent.ddl_metadata.persistence.snapshots import MetadataSnapshotService
+from data_agent.ddl_metadata.adapters.mysql import accepted_snapshot as snapshots
+from data_agent.ddl_metadata.adapters.mysql.accepted_snapshot import (
+    MySQLAcceptedSnapshotPublisher,
+)
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from data_agent.errors import DataAgentError
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import SemanticMetadata
@@ -29,6 +32,18 @@ def _snapshot() -> PhysicalSchema:
 def _metadata() -> SemanticMetadata:
     """构造不影响编排断言的空语义快照。"""
     return SemanticMetadata(tables=[], columns=[])
+
+
+def _accepted_snapshot() -> AcceptedSnapshot:
+    """构造公开发布 seam 使用的空 accepted snapshot。"""
+    return AcceptedSnapshot(
+        schema=_snapshot(),
+        metadata=_metadata(),
+        questions=(),
+        answers=(),
+        metrics=(),
+        candidates=(),
+    )
 
 
 def _install_repository_fakes(
@@ -193,12 +208,8 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
     monkeypatch.setattr(snapshots.MySQLDatabase, "advisory_locks", generation_locks)
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
-    await MetadataSnapshotService({"local": "source_demo"}).persist(
-        _snapshot(),
-        _metadata(),
-        [],
-        [],
-        [],
+    await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
+        _accepted_snapshot()
     )
 
     check_equal(
@@ -263,12 +274,8 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     with pytest.raises(LookupError) as captured:
-        await MetadataSnapshotService({"local": "source_demo"}).persist(
-            _snapshot(),
-            _metadata(),
-            [],
-            [],
-            [],
+        await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
+            _accepted_snapshot()
         )
 
     check_equal("发布失败保留原异常实例", captured.value is signal, True)
@@ -317,12 +324,8 @@ async def test_snapshot_release_failure_after_commit_does_not_reverse_success(
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
     monkeypatch.setattr(snapshots.logger, "warning", warnings.append)
 
-    await MetadataSnapshotService({"local": "source_demo"}).persist(
-        _snapshot(),
-        _metadata(),
-        [],
-        [],
-        [],
+    await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
+        _accepted_snapshot()
     )
 
     check_equal("锁清理失败发生前发布事务已提交", events[-1], "session_commit")
@@ -364,12 +367,8 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     with pytest.raises(DataAgentError) as captured:
-        await MetadataSnapshotService({"local": "source_demo"}).persist(
-            _snapshot(),
-            _metadata(),
-            [],
-            [],
-            [],
+        await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
+            _accepted_snapshot()
         )
 
     check_exception("锁竞争投影为业务错误", captured.value, DataAgentError)

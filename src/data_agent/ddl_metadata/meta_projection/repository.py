@@ -10,14 +10,14 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.models import (
     ClaimedMetadataIndexWork,
     MetadataIndexDesired,
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.tables import (
+from data_agent.ddl_metadata.meta_projection.tables import (
     metadata_index_outbox,
     metadata_value_frequency,
 )

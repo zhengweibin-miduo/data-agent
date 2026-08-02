@@ -3,15 +3,16 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from data_agent.ddl_metadata.application.accepted_snapshot import (
+    AcceptedSnapshotPublisher,
+)
 from data_agent.ddl_metadata.workflow.memory_context import LoadedMemoryContext
 from data_agent.models.memory import (
-    MemoryCandidate,
     MemoryContent,
 )
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (
     MetricAnswer,
-    MetricMetadata,
     MetricOutput,
     MetricQuestion,
     MetricQuestionSet,
@@ -65,26 +66,10 @@ class MemoryContext(Protocol):
         ...
 
 
-class SnapshotWriter(Protocol):
-    """持久化节点的最小契约。"""
-
-    async def persist(
-        self,
-        schema: PhysicalSchema,
-        metadata: SemanticMetadata,
-        questions: list[MetricQuestion],
-        answers: list[MetricAnswer],
-        metrics: list[MetricMetadata],
-        candidates: list[MemoryCandidate] | None = None,
-    ) -> None:
-        """在一个事务中持久化已验证快照及候选记忆。"""
-        ...
-
-
 @dataclass(frozen=True)
 class DDLGraphDependencies:
     """图节点的进程内依赖，不进入检查点。"""
 
     model: MetadataGenerator
     memory_context: MemoryContext
-    snapshot: SnapshotWriter
+    snapshot_publisher: AcceptedSnapshotPublisher

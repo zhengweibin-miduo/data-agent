@@ -2,7 +2,7 @@
 
 ## Contexts
 
-- [DDL Metadata](./src/data_agent/ddl_metadata/) — validates physical DDL and produces accepted Meta Snapshots. It owns Meta Projection as a rebuildable representation, currently implemented with supporting modules under [`metadata_indexing`](./src/data_agent/metadata_indexing/).
+- [DDL Metadata](./src/data_agent/ddl_metadata/) — validates physical DDL and produces accepted Meta Snapshots. It owns Meta Projection as a rebuildable representation under [`ddl_metadata/meta_projection`](./src/data_agent/ddl_metadata/meta_projection/).
 - [Long-term Memory](./src/data_agent/memory/) — owns authoritative reusable facts, their lifecycle, history, and rebuildable Memory Projections.
 - [Conversation](./src/data_agent/conversation/) — owns permanent user conversations, messages, turn coordination, and extraction requests.
 - [Data Sync](./src/data_agent/data_sync/) — owns desired synchronization tasks, DW materialization, CDC progress, and data-readiness state.

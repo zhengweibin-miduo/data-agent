@@ -15,8 +15,8 @@ from typing import Any, cast
 
 from elasticsearch import AsyncElasticsearch
 
+from data_agent.ddl_metadata.meta_projection.models import MetadataValueProjection
 from data_agent.errors import DataAgentError
-from data_agent.metadata_indexing.models import MetadataValueProjection
 from data_agent.settings import app_config
 
 _ANALYZER = "metadata_value_zh"

@@ -21,12 +21,12 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from data_agent.errors import DataAgentError
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.models import (
     MetadataObjectKind,
     MetadataSemanticHit,
     MetadataSemanticProjection,
 )
+from data_agent.errors import DataAgentError
 from data_agent.settings import app_config
 
 _DENSE = "dense"

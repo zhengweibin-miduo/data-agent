@@ -11,13 +11,10 @@ from sqlalchemy.sql import Select
 
 from data_agent.data_sync.models import DesiredSyncTable, SyncPhase, encode_row_value
 from data_agent.data_sync.tables import data_sync_task
-from data_agent.ddl_metadata.persistence.tables import (
-    column_info,
-    column_metric,
-    metric_info,
-    table_info,
+from data_agent.ddl_metadata.meta_projection.application.contracts import (
+    ProjectionNotReadyError,
 )
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.models import (
     MetadataCandidate,
     MetadataIndexOperation,
     MetadataIndexTarget,
@@ -28,8 +25,14 @@ from data_agent.metadata_indexing.models import (
     MetadataValueProjection,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.repository import metadata_desired_version
-from data_agent.metadata_indexing.tables import metadata_index_outbox
+from data_agent.ddl_metadata.meta_projection.repository import metadata_desired_version
+from data_agent.ddl_metadata.meta_projection.tables import metadata_index_outbox
+from data_agent.ddl_metadata.persistence.tables import (
+    column_info,
+    column_metric,
+    metric_info,
+    table_info,
+)
 from data_agent.models.semantic import ColumnValueIndexProfile
 from data_agent.settings import app_config
 
@@ -49,10 +52,6 @@ def _pending_value_scope_statement(table_ids: set[str]) -> Select[tuple[str]]:
             metadata_index_outbox.c.operation == MetadataIndexOperation.REBUILD.value,
         ),
     )
-
-
-class ProjectionNotReadyError(RuntimeError):
-    """权威 DW 投影尚未物化，任务应无损延后。"""
 
 
 @dataclass(frozen=True)

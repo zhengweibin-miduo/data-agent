@@ -5,10 +5,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.persistence.snapshots import (
-    MetadataSnapshotService,
+from data_agent.ddl_metadata.adapters.mysql.accepted_snapshot import (
+    MySQLAcceptedSnapshotPublisher,
 )
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
+from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.memory.indexing.rebuilder import MemoryIndexRebuilder
 from data_agent.memory.mysql.tables import memory_index_outbox
@@ -25,12 +26,15 @@ async def test_memory_rebuild_enqueue() -> None:
         "CREATE TABLE dim_region (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
     try:
-        await MetadataSnapshotService({schema.source: "source_demo"}).persist(
-            schema,
-            semantic_for(schema, fact=False),
-            [],
-            [],
-            [],
+        await MySQLAcceptedSnapshotPublisher({schema.source: "source_demo"}).publish(
+            AcceptedSnapshot(
+                schema=schema,
+                metadata=semantic_for(schema, fact=False),
+                questions=(),
+                answers=(),
+                metrics=(),
+                candidates=(),
+            )
         )
         result = await MemoryIndexRebuilder().enqueue_batch()
         check_condition(

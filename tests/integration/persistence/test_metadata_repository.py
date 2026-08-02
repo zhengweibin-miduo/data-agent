@@ -1,16 +1,19 @@
 """Meta、权威记忆与 outbox 原子事务集成检查。"""
 
 import asyncio
+from collections.abc import Sequence
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.exc import IntegrityError
 
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.persistence.snapshots import (
-    MetadataSnapshotService,
+from data_agent.ddl_metadata.adapters.mysql.accepted_snapshot import (
+    MySQLAcceptedSnapshotPublisher,
 )
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
+from data_agent.ddl_metadata.meta_projection.tables import metadata_index_outbox
+from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.persistence.tables import (
     table_info,
 )
@@ -22,8 +25,14 @@ from data_agent.memory.mysql.tables import (
     agent_memory_link,
     memory_index_outbox,
 )
-from data_agent.metadata_indexing.tables import metadata_index_outbox
 from data_agent.models.memory import MemoryCandidate, MemoryStatus
+from data_agent.models.physical import PhysicalSchema
+from data_agent.models.semantic import (
+    MetricAnswer,
+    MetricMetadata,
+    MetricQuestion,
+    SemanticMetadata,
+)
 from data_agent.settings import app_config
 from tests.helpers.checks import check_equal, check_exception, fail_check
 from tests.helpers.factories import (
@@ -32,6 +41,24 @@ from tests.helpers.factories import (
     metric_bundle,
     semantic_for,
 )
+
+
+def _accepted_snapshot(
+    schema: PhysicalSchema,
+    metadata: SemanticMetadata,
+    questions: Sequence[MetricQuestion] = (),
+    answers: Sequence[MetricAnswer] = (),
+    metrics: Sequence[MetricMetadata] = (),
+) -> AcceptedSnapshot:
+    """构造集成场景使用的公开发布命令。"""
+    return AcceptedSnapshot(
+        schema=schema,
+        metadata=metadata,
+        questions=tuple(questions),
+        answers=tuple(answers),
+        metrics=tuple(metrics),
+        candidates=(),
+    )
 
 
 async def _force_memory_failure(
@@ -100,27 +127,16 @@ async def test_meta_memory_outbox_atomicity() -> None:
         rollback_source,
         "CREATE TABLE dim_rollback (id BIGINT PRIMARY KEY)",
     )
-    service = MetadataSnapshotService(
+    service = MySQLAcceptedSnapshotPublisher(
         {
             source: "source_demo",
             rollback_source: "source_demo",
         }
     )
     try:
-        await service.persist(
-            schema,
-            semantic_for(schema, fact=False),
-            [],
-            [],
-            [],
-        )
-        await service.persist(
-            schema,
-            semantic_for(schema, fact=False),
-            [],
-            [],
-            [],
-        )
+        snapshot = _accepted_snapshot(schema, semantic_for(schema, fact=False))
+        await service.publish(snapshot)
+        await service.publish(snapshot)
         async with MySQLDatabase.session() as session:
             memory_count = await session.scalar(
                 select(func.count())
@@ -160,12 +176,11 @@ async def test_meta_memory_outbox_atomicity() -> None:
         MemoryRepository.upsert_candidates = _force_memory_failure
         try:
             try:
-                await service.persist(
-                    rollback_schema,
-                    semantic_for(rollback_schema, fact=False),
-                    [],
-                    [],
-                    [],
+                await service.publish(
+                    _accepted_snapshot(
+                        rollback_schema,
+                        semantic_for(rollback_schema, fact=False),
+                    )
                 )
             except IntegrityError as error:
                 check_exception(
@@ -223,7 +238,7 @@ async def test_snapshot_commit_does_not_wait_for_dw_schema_lock() -> None:
         source,
         "CREATE TABLE dim_lock_independent (id BIGINT PRIMARY KEY)",
     )
-    service = MetadataSnapshotService({source: "source_demo"})
+    service = MySQLAcceptedSnapshotPublisher({source: "source_demo"})
     lock_name = "data_sync_schema:dw:dim_lock_independent"
     try:
         async with MySQLDatabase.get_client().connect() as lock_connection:
@@ -232,7 +247,9 @@ async def test_snapshot_commit_does_not_wait_for_dw_schema_lock() -> None:
             )
             check_equal("测试连接取得 DW 结构锁", acquired, 1)
             await asyncio.wait_for(
-                service.persist(schema, semantic_for(schema, fact=False), [], [], []),
+                service.publish(
+                    _accepted_snapshot(schema, semantic_for(schema, fact=False))
+                ),
                 timeout=5,
             )
             released = await lock_connection.scalar(
@@ -257,26 +274,24 @@ async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> No
         source,
         "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, full_name VARCHAR(128))",
     )
-    service = MetadataSnapshotService({source: "source_demo"})
+    service = MySQLAcceptedSnapshotPublisher({source: "source_demo"})
     try:
-        await service.persist(
-            original_schema,
-            semantic_for(original_schema, fact=False),
-            [],
-            [],
-            [],
+        await service.publish(
+            _accepted_snapshot(
+                original_schema,
+                semantic_for(original_schema, fact=False),
+            )
         )
         original_table_id = original_schema.tables[0].id
         original = MemoryRepository.upsert_candidates
         MemoryRepository.upsert_candidates = _force_memory_failure
         try:
             try:
-                await service.persist(
-                    changed_schema,
-                    semantic_for(changed_schema, fact=False),
-                    [],
-                    [],
-                    [],
+                await service.publish(
+                    _accepted_snapshot(
+                        changed_schema,
+                        semantic_for(changed_schema, fact=False),
+                    )
                 )
             except IntegrityError as error:
                 check_exception(
@@ -335,21 +350,19 @@ async def test_snapshot_expires_removed_column_and_metric_memories() -> None:
         if column.name == "amount"
     )
     metric_id = metrics[0].id
-    service = MetadataSnapshotService({source: "source_demo"})
+    service = MySQLAcceptedSnapshotPublisher({source: "source_demo"})
     try:
-        await service.persist(
-            original_schema,
-            semantic_for(original_schema, fact=True),
-            questions,
-            answers,
-            metrics,
+        await service.publish(
+            _accepted_snapshot(
+                original_schema,
+                semantic_for(original_schema, fact=True),
+                questions,
+                answers,
+                metrics,
+            )
         )
-        await service.persist(
-            changed_schema,
-            semantic_for(changed_schema, fact=True),
-            [],
-            [],
-            [],
+        await service.publish(
+            _accepted_snapshot(changed_schema, semantic_for(changed_schema, fact=True))
         )
         async with MySQLDatabase.session() as session:
             rows = list(

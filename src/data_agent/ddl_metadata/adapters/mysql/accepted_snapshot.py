@@ -8,6 +8,21 @@ from sqlalchemy.engine import make_url
 from data_agent.data_sync.locks import generation_lock_name
 from data_agent.data_sync.models import build_desired_tables
 from data_agent.data_sync.repository import DataSyncRepository
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
+from data_agent.ddl_metadata.meta_projection.desired import (
+    semantic_desired_states,
+    shared_value_refresh_states,
+)
+from data_agent.ddl_metadata.meta_projection.models import (
+    MetadataIndexDesired,
+    MetadataIndexOperation,
+    MetadataIndexTarget,
+    MetadataObjectKind,
+)
+from data_agent.ddl_metadata.meta_projection.repository import (
+    MetadataIndexOutboxRepository,
+    metadata_desired_version,
+)
 from data_agent.ddl_metadata.persistence.metadata_repository import MetadataRepository
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import scope_fingerprint
@@ -18,32 +33,10 @@ from data_agent.infrastructure.mysql import (
 )
 from data_agent.memory.domain.candidates import MemoryVersions, build_accepted_memories
 from data_agent.memory.mysql.repository import MemoryRepository
-from data_agent.metadata_indexing.desired import (
-    semantic_desired_states,
-    shared_value_refresh_states,
-)
-from data_agent.metadata_indexing.models import (
-    MetadataIndexDesired,
-    MetadataIndexOperation,
-    MetadataIndexTarget,
-    MetadataObjectKind,
-)
-from data_agent.metadata_indexing.repository import (
-    MetadataIndexOutboxRepository,
-    metadata_desired_version,
-)
-from data_agent.models.memory import MemoryCandidate
-from data_agent.models.physical import PhysicalSchema
-from data_agent.models.semantic import (
-    MetricAnswer,
-    MetricMetadata,
-    MetricQuestion,
-    SemanticMetadata,
-)
 from data_agent.settings import app_config
 
 
-class MetadataSnapshotService:
+class MySQLAcceptedSnapshotPublisher:
     """在一个 MySQL 事务内提交 Meta、权威记忆与双索引 outbox。"""
 
     def __init__(self, source_schemas: Mapping[str, str] | None = None) -> None:
@@ -58,15 +51,7 @@ class MetadataSnapshotService:
             }
         )
 
-    async def persist(
-        self,
-        schema: PhysicalSchema,
-        metadata: SemanticMetadata,
-        questions: list[MetricQuestion],
-        answers: list[MetricAnswer],
-        metrics: list[MetricMetadata],
-        candidates: list[MemoryCandidate] | None = None,
-    ) -> None:
+    async def publish(self, snapshot: AcceptedSnapshot) -> None:
         """在单一事务中提交验证通过的 Meta 与权威记忆快照。
 
         先计算本次提交仍有效的对象作用域指纹，再过期不兼容记忆、同步
@@ -74,11 +59,14 @@ class MetadataSnapshotService:
         失败都由同一 managed Session 回滚。
         """
         # 步骤一：优先使用上游已验证候选，否则从最终快照构建同版本权威候选。
-        accepted = candidates or build_accepted_memories(
+        schema = snapshot.schema
+        metadata = snapshot.metadata
+        metrics = list(snapshot.metrics)
+        accepted = list(snapshot.candidates) or build_accepted_memories(
             schema,
             metadata,
-            questions,
-            answers,
+            list(snapshot.questions),
+            list(snapshot.answers),
             metrics,
             versions=MemoryVersions(
                 content=app_config.memory.ddl_semantic_content_version,

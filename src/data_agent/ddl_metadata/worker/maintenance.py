@@ -8,10 +8,12 @@ from redis.exceptions import RedisError
 
 from data_agent.conversation.application.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.meta_projection.application.dispatcher import (
+    MetadataIndexDispatcher,
+)
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
 from data_agent.memory.application.index_dispatcher import MemoryIndexDispatcher
 from data_agent.memory.application.maintenance import MemoryMaintenance
-from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 
 
 def _log_checkpoint_cleanup_deferred(job_id: str) -> None:
@@ -81,14 +83,14 @@ async def report_memory_index_dead_letters(ctx: dict[Any, Any]) -> None:
 
 async def dispatch_metadata_index_outbox(ctx: dict[Any, Any]) -> None:
     """周期性同步可重建的 Meta 语义与字段值投影。"""
-    del ctx
-    await MetadataIndexDispatcher().dispatch()
+    dispatcher = cast(MetadataIndexDispatcher, ctx["metadata_index_dispatcher"])
+    await dispatcher.dispatch()
 
 
 async def report_metadata_index_dead_letters(ctx: dict[Any, Any]) -> None:
     """周期性暴露已停止重试的 Meta 索引期望状态。"""
-    del ctx
-    await MetadataIndexDispatcher().report_dead_letters()
+    dispatcher = cast(MetadataIndexDispatcher, ctx["metadata_index_dispatcher"])
+    await dispatcher.report_dead_letters()
 
 
 async def extract_conversation_memory(ctx: dict[Any, Any]) -> None:

@@ -11,7 +11,7 @@ from data_agent.data_sync.tables import (
     data_sync_key_owner,
     data_sync_task,
 )
-from data_agent.metadata_indexing.tables import (
+from data_agent.ddl_metadata.meta_projection.tables import (
     metadata_index_outbox,
     metadata_value_frequency,
     metadata_value_publication,

@@ -2,9 +2,9 @@
 
 from langchain_core.runnables import RunnableConfig
 
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from data_agent.ddl_metadata.workflow.memory_context import LoadedMemoryContext
 from data_agent.models.memory import (
-    MemoryCandidate,
     MemoryContent,
 )
 from data_agent.models.physical import PhysicalSchema
@@ -84,17 +84,12 @@ class _Snapshot:
     def __init__(self, fail_once: bool = False) -> None:
         self.calls = 0
         self.fail_once = fail_once
+        self.last_snapshot: AcceptedSnapshot | None = None
 
-    async def persist(
-        self,
-        schema: PhysicalSchema,
-        metadata: SemanticMetadata,
-        questions: list[MetricQuestion],
-        answers: list[MetricAnswer],
-        metrics: list[MetricMetadata],
-        candidates: list[MemoryCandidate] | None = None,
-    ) -> None:
+    async def publish(self, snapshot: AcceptedSnapshot) -> None:
+        """记录工作流通过公共 seam 发布的命令。"""
         self.calls += 1
+        self.last_snapshot = snapshot
         if self.fail_once and self.calls == 1:
             raise ConnectionError("simulated MySQL disconnect")
 

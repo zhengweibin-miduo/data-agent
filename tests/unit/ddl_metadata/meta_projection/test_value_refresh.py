@@ -12,16 +12,18 @@ from sqlalchemy.sql.elements import ClauseElement
 from tests.helpers.checks import check_condition, check_equal
 
 from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
-from data_agent.metadata_indexing import value_refresh
-from data_agent.metadata_indexing.elasticsearch import metadata_value_document_id
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection import value_refresh
+from data_agent.ddl_metadata.meta_projection.elasticsearch import (
+    metadata_value_document_id,
+)
+from data_agent.ddl_metadata.meta_projection.models import (
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.projections import ValueProjectionPlan
-from data_agent.metadata_indexing.value_refresh import FrequencyMutationState
+from data_agent.ddl_metadata.meta_projection.projections import ValueProjectionPlan
+from data_agent.ddl_metadata.meta_projection.value_refresh import FrequencyMutationState
 
 
 def _state(

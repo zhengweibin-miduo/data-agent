@@ -5,17 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_agent.data_sync.models import DesiredSyncTable
 from data_agent.data_sync.tables import data_sync_task
-from data_agent.ddl_metadata.persistence.tables import column_info
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.models import (
     MetadataIndexDesired,
     MetadataIndexOperation,
     MetadataIndexTarget,
     MetadataObjectKind,
 )
-from data_agent.metadata_indexing.repository import (
+from data_agent.ddl_metadata.meta_projection.repository import (
     MetadataIndexOutboxRepository,
     metadata_desired_version,
 )
+from data_agent.ddl_metadata.persistence.tables import column_info
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import MetricMetadata, SemanticMetadata
 from data_agent.settings import app_config

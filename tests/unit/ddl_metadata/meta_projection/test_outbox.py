@@ -14,13 +14,12 @@ from tests.helpers.checks import check_condition, check_equal
 from tests.helpers.factories import semantic_for
 
 from data_agent.data_sync.models import DesiredColumn, DesiredSyncTable
-from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.metadata_indexing.desired import (
+from data_agent.ddl_metadata.meta_projection.desired import (
     enqueue_value_refresh,
     semantic_desired_states,
     shared_value_refresh_states,
 )
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.models import (
     ClaimedMetadataIndexWork,
     MetadataIndexDesired,
     MetadataIndexOperation,
@@ -28,7 +27,10 @@ from data_agent.metadata_indexing.models import (
     MetadataObjectKind,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
+from data_agent.ddl_metadata.meta_projection.repository import (
+    MetadataIndexOutboxRepository,
+)
+from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.models.semantic import MetricMetadata
 
 

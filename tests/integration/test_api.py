@@ -8,11 +8,12 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError
 
 from data_agent.application import create_app
+from data_agent.ddl_metadata.adapters.mysql.accepted_snapshot import (
+    MySQLAcceptedSnapshotPublisher,
+)
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.parsing import parse_ddl
-from data_agent.ddl_metadata.persistence.snapshots import (
-    MetadataSnapshotService,
-)
 from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.models.jobs import DDLJobRequest
 from data_agent.models.memory import (
@@ -278,8 +279,15 @@ async def test_memory_api() -> None:
         "CREATE TABLE dim_api (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
     metadata = semantic_for(schema, fact=False)
-    await MetadataSnapshotService({schema.source: "source_demo"}).persist(
-        schema, metadata, [], [], []
+    await MySQLAcceptedSnapshotPublisher({schema.source: "source_demo"}).publish(
+        AcceptedSnapshot(
+            schema=schema,
+            metadata=metadata,
+            questions=(),
+            answers=(),
+            metrics=(),
+            candidates=(),
+        )
     )
     target = SemanticDecisionContent(
         table=metadata.tables[0],

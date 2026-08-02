@@ -5,6 +5,7 @@ from __future__ import annotations
 from langgraph.types import interrupt
 from loguru import logger
 
+from data_agent.ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from data_agent.ddl_metadata.jobs.identifiers import question_set_id
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.ddl_metadata.validation import (
@@ -493,13 +494,15 @@ class DDLWorkflowNodes:
         ]
         # 步骤二：记忆候选只来自已 finalized 的语义和指标；snapshot 事务成功后才返回
         # SUCCEEDED，异常则交由 runner 统一分类，避免出现成功投影但快照未提交。
-        await self._dependencies.snapshot.persist(
-            schema,
-            metadata,
-            questions,
-            answers,
-            metrics,
-            candidates,
+        await self._dependencies.snapshot_publisher.publish(
+            AcceptedSnapshot(
+                schema=schema,
+                metadata=metadata,
+                questions=tuple(questions),
+                answers=tuple(answers),
+                metrics=tuple(metrics),
+                candidates=tuple(candidates),
+            )
         )
         # 步骤三：事务提交完成后才构造安全结果并把图状态标记为成功。
         result = JobResult(

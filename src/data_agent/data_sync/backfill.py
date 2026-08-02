@@ -24,12 +24,15 @@ from data_agent.data_sync.repository import (
     ClaimedSyncTask,
     DataSyncRepository,
 )
-from data_agent.errors import DataAgentError
-from data_agent.metadata_indexing.desired import enqueue_value_refresh
-from data_agent.metadata_indexing.value_refresh import (
-    apply_frequency_row_changes,
-    prepare_frequency_mutation,
+from data_agent.ddl_metadata.meta_projection.adapters.mysql_value_input import (
+    MySQLValueProjectionParticipant,
 )
+from data_agent.ddl_metadata.meta_projection.application.value_input import (
+    MaterializedRowsChanged,
+    MaterializedTableRef,
+    ValueProjectionParticipant,
+)
+from data_agent.errors import DataAgentError
 
 
 async def read_backfill_batch(
@@ -74,13 +77,18 @@ async def apply_backfill_batch(
     rows: Sequence[Mapping[str, object]],
     *,
     dw_database: str,
+    value_projection: ValueProjectionParticipant | None = None,
 ) -> tuple[object, ...] | None:
     """在一个目标事务内写入回填批次并推进主键游标。"""
     if not rows:
         return None
     repository = DataSyncRepository(session)
     values = [_desired_values(task.desired, row) for row in rows]
-    frequency_states = await prepare_frequency_mutation(session, task.desired)
+    table_ref = _materialized_table_ref(task.desired)
+    participant = value_projection or MySQLValueProjectionParticipant(
+        session, task.desired
+    )
+    prepared_projection = await participant.prepare(table_ref)
     identities = [primary_key_identity(task.desired, row) for row in values]
     conflict = await repository.claim_key_owners(
         target_table=task.desired.target_table,
@@ -96,24 +104,23 @@ async def apply_backfill_batch(
             values,
             dw_database=dw_database,
         )
-        if frequency_states
+        if prepared_projection.needs_before_rows
         else []
     )
     for chunk in _chunk_rows_by_payload(values):
         await session.execute(_upsert_statement(task.desired, chunk, dw_database))
-    await apply_frequency_row_changes(
-        session,
-        frequency_states,
-        before_rows,
-        values,
-    )
     last_key = tuple(values[-1][name] for name in task.desired.primary_key)
     if not await repository.record_backfill_cursor(task, last_key):
         raise RuntimeError("回填批次完成后同步任务租约已失效")
-    await enqueue_value_refresh(
-        session,
-        task.desired,
-        {"backfill_key": [encode_row_value(value) for value in last_key]},
+    await prepared_projection.apply(
+        MaterializedRowsChanged(
+            table=table_ref,
+            before_rows=tuple(before_rows),
+            after_rows=tuple(values),
+            checkpoint={
+                "backfill_key": [encode_row_value(value) for value in last_key]
+            },
+        )
     )
     return last_key
 
@@ -154,10 +161,15 @@ async def reset_source_rows(
     *,
     dw_database: str,
     limit: int,
+    value_projection: ValueProjectionParticipant | None = None,
 ) -> bool:
     """有界清理一批旧行，返回是否已完成。"""
     repository = DataSyncRepository(session)
-    frequency_states = await prepare_frequency_mutation(session, task.desired)
+    table_ref = _materialized_table_ref(task.desired)
+    participant = value_projection or MySQLValueProjectionParticipant(
+        session, task.desired
+    )
+    prepared_projection = await participant.prepare(table_ref)
     documents = await repository.source_key_documents(
         target_table=task.desired.target_table,
         source=task.desired.source,
@@ -186,7 +198,7 @@ async def reset_source_rows(
                 ],
                 dw_database=dw_database,
             )
-            if frequency_states
+            if prepared_projection.needs_before_rows
             else []
         )
         target = table(
@@ -195,22 +207,19 @@ async def reset_source_rows(
         )
         target.schema = dw_database
         await session.execute(delete(target).where(or_(*predicates)))
-        await apply_frequency_row_changes(
-            session,
-            frequency_states,
-            before_rows,
-            [],
-        )
     await repository.tombstone_source_key_owners(
         target_table=task.desired.target_table,
         source=task.desired.source,
         primary_key_documents=documents,
     )
     if documents:
-        await enqueue_value_refresh(
-            session,
-            task.desired,
-            {"reset_documents": documents},
+        await prepared_projection.apply(
+            MaterializedRowsChanged(
+                table=table_ref,
+                before_rows=tuple(before_rows),
+                after_rows=(),
+                checkpoint={"reset_documents": documents},
+            )
         )
     return len(documents) < limit
 
@@ -221,6 +230,7 @@ async def apply_buffered_event(
     buffered: BufferedSyncEvent,
     *,
     dw_database: str,
+    value_projection: ValueProjectionParticipant | None = None,
 ) -> None:
     """原子应用一个 Binlog 行事件、确认事件并推进位点。"""
     event = buffered.event
@@ -237,7 +247,9 @@ async def apply_buffered_event(
             details={"task_id": str(task.id)},
         )
     repository = DataSyncRepository(session)
-    frequency_states = await prepare_frequency_mutation(session, desired)
+    table_ref = _materialized_table_ref(desired)
+    participant = value_projection or MySQLValueProjectionParticipant(session, desired)
+    prepared_projection = await participant.prepare(table_ref)
     event_rows = [
         _decoded_event_row(desired, row)
         for row in (event.before, event.after)
@@ -250,7 +262,7 @@ async def apply_buffered_event(
             event_rows,
             dw_database=dw_database,
         )
-        if frequency_states
+        if prepared_projection.needs_before_rows
         else []
     )
     current_by_key = {_primary_key_values(desired, row): row for row in current_rows}
@@ -293,20 +305,29 @@ async def apply_buffered_event(
         await _claim_owner(repository, desired, after)
         await session.execute(_upsert_statement(desired, [after], dw_database))
         after_changes.append(after)
-    await apply_frequency_row_changes(
-        session,
-        frequency_states,
-        before_changes,
-        after_changes,
-    )
     if not await repository.acknowledge_event(task.id, buffered.id):
         raise RuntimeError("Binlog 事件确认失败")
     if not await repository.advance_applied_coordinate(task, event.coordinate):
         raise RuntimeError("Binlog 事件应用后同步位点未推进")
-    await enqueue_value_refresh(
-        session,
-        desired,
-        {"coordinate": event.coordinate.model_dump(mode="json")},
+    await prepared_projection.apply(
+        MaterializedRowsChanged(
+            table=table_ref,
+            before_rows=tuple(before_changes),
+            after_rows=tuple(after_changes),
+            checkpoint={"coordinate": event.coordinate.model_dump(mode="json")},
+        )
+    )
+
+
+def _materialized_table_ref(desired: DesiredSyncTable) -> MaterializedTableRef:
+    """把 Data Sync 外层模型投影为 Meta Projection 中立表引用。"""
+    return MaterializedTableRef(
+        table_id=desired.desired_hash(),
+        source_id=desired.source,
+        source_schema=desired.source_schema,
+        source_table=desired.source_table,
+        target_table=desired.target_table,
+        primary_key=tuple(desired.primary_key),
     )
 
 

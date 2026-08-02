@@ -224,10 +224,10 @@ previously published ID set, and pending remote actions.
 ### 6. Tests Required
 
 ```powershell
-uv run pytest tests/unit/metadata_indexing/test_outbox.py
-uv run pytest tests/unit/metadata_indexing/test_runtime.py
-uv run pytest tests/unit/metadata_indexing/test_value_refresh.py
-uv run pytest tests/integration/test_metadata_index_resumable_refresh.py
+uv run pytest tests/unit/ddl_metadata/meta_projection/test_outbox.py
+uv run pytest tests/unit/ddl_metadata/meta_projection/test_application.py
+uv run pytest tests/unit/ddl_metadata/meta_projection/test_value_refresh.py
+uv run pytest tests/integration/ddl_metadata/test_meta_projection_resumable_refresh.py
 ```
 
 Tests assert keyset recovery, cursor-envelope identity rejection, peer-source
@@ -322,24 +322,32 @@ history, links, index outbox, user updates, deletion, or accepted-snapshot persi
 ### 2. Signatures
 
 ```python
-await MetadataSnapshotService.persist(snapshot, memory_candidates) -> SnapshotResult
+await AcceptedSnapshotPublisher.publish(snapshot) -> None
 await MemoryService.update(memory_uid, content) -> MemoryUpdateResponse
 await MemoryIndexRebuilder.enqueue_batch(after_id=0) -> MemoryRebuildResult
 ```
 
 ### 3. Contracts
 
-`MetadataSnapshotService.persist()` is the only accepted-snapshot commit
-boundary. In
-one managed MySQL transaction spanning the default Meta database and the
-configured application memory database it:
+`AcceptedSnapshotPublisher.publish()` is the application-facing accepted-snapshot
+commit boundary. Its production `MySQLAcceptedSnapshotPublisher` adapter acquires
+all affected target generation locks before opening one managed MySQL transaction
+spanning the default Meta database, configured application memory database, Data
+Sync control database, and Meta Projection control tables. In that transaction it:
 
 1. upserts submitted table, column, metric, and column/metric rows;
 2. removes stale links and columns only for submitted table IDs;
 3. removes metrics that became orphaned through that scoped cleanup;
 4. applies explicit `ADD/UPDATE/MERGE/DELETE/NOOP` decisions, version history,
    typed links, and the database-unique active slot; and
-5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`.
+5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`;
+6. publishes Data Sync desired state and Meta Projection desired/outbox work.
+
+The generation locks remain held through transaction commit or rollback. Lock
+contention opens no business transaction. A release failure after a successful
+commit is logged as an infrastructure warning and does not reverse the accepted
+snapshot; a failure before commit preserves the original exception and rolls the
+whole transaction back before lock release.
 
 Stable SHA-256 content IDs and the unique memory-link triple make re-execution
 safe after a worker crash. When content whose base UID is `SUPERSEDED` or

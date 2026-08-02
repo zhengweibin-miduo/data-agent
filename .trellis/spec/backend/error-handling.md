@@ -74,9 +74,10 @@ a later `initialize()` creates a fresh resource after close.
 - `CheckpointStore.initialize()` closes its partially entered saver if
   Redis index setup fails; API and worker lifecycles close initialized clients
   in reverse ownership order.
-- `MetadataSnapshotService.persist()` lets the original SQLAlchemy/asyncmy exception
-  escape so the worker can classify transient failures while the managed
-  Session rolls back Meta and memory together.
+- `MySQLAcceptedSnapshotPublisher.publish()` lets the original
+  SQLAlchemy/asyncmy exception escape so the worker can classify transient
+  failures while the managed Session rolls back Meta, memory, Data Sync desired
+  state, and Meta Projection outbox work together.
 
 ## API Error Responses
 

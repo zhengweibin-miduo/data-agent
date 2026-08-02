@@ -1,4 +1,4 @@
-"""真实 MySQL 与 Elasticsearch 下的字段值有界刷新和故障恢复。"""
+"""真实 MySQL 与 Elasticsearch 下的 Meta Projection 有界刷新和故障恢复。"""
 
 from typing import cast
 from uuid import uuid4
@@ -6,6 +6,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.engine import CursorResult
+from tests.helpers.checks import check_equal
+from tests.helpers.factories import ensure_schema
 
 from data_agent.data_sync.backfill import apply_buffered_event
 from data_agent.data_sync.models import (
@@ -23,12 +25,11 @@ from data_agent.data_sync.tables import (
     data_sync_key_owner,
     data_sync_task,
 )
-from data_agent.ddl_metadata.persistence.tables import column_info, table_info
-from data_agent.infrastructure.elasticsearch import ElasticsearchClient
-from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.metadata_indexing.desired import enqueue_value_refresh
-from data_agent.metadata_indexing.elasticsearch import MetadataValueElasticsearchIndex
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.desired import enqueue_value_refresh
+from data_agent.ddl_metadata.meta_projection.elasticsearch import (
+    MetadataValueElasticsearchIndex,
+)
+from data_agent.ddl_metadata.meta_projection.models import (
     ClaimedMetadataIndexWork,
     MetadataIndexDesired,
     MetadataIndexOperation,
@@ -36,20 +37,23 @@ from data_agent.metadata_indexing.models import (
     MetadataObjectKind,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.repository import MetadataIndexOutboxRepository
-from data_agent.metadata_indexing.tables import (
+from data_agent.ddl_metadata.meta_projection.repository import (
+    MetadataIndexOutboxRepository,
+)
+from data_agent.ddl_metadata.meta_projection.tables import (
     metadata_index_outbox,
     metadata_value_frequency,
     metadata_value_publication,
 )
-from data_agent.metadata_indexing.value_refresh import (
+from data_agent.ddl_metadata.meta_projection.value_refresh import (
     MetadataValueFrequencyRepository,
     MetadataValueRefresh,
     ValueRefreshPersistenceError,
 )
+from data_agent.ddl_metadata.persistence.tables import column_info, table_info
+from data_agent.infrastructure.elasticsearch import ElasticsearchClient
+from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
-from tests.helpers.checks import check_equal
-from tests.helpers.factories import ensure_schema
 
 
 async def _phase(table_id: str) -> str | None:
@@ -436,6 +440,11 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
                     )
                 )
             }
+            desired_version_before_failure = await session.scalar(
+                select(metadata_index_outbox.c.desired_version).where(
+                    metadata_index_outbox.c.object_id == table_id
+                )
+            )
         check_equal("CDC INSERT 精确加一", inserted_frequency, {
             ("华东", 2),
             ("华西", 1),
@@ -443,14 +452,62 @@ async def test_value_refresh_is_bounded_and_recovers_publish_cleanup(
             ("启用", 3),
             ("停用", 1),
         })
+        failed_event = SyncRowEvent(
+            source=source,
+            source_schema=desired.source_schema,
+            source_table=desired.source_table,
+            coordinate=BinlogCoordinate(
+                file="mysql-bin.000001",
+                position=105,
+                row_index=0,
+            ),
+            operation=RowOperation.INSERT,
+            after={"id": 5, "region": "华北", "status": "停用"},
+        )
         with pytest.raises(RuntimeError, match="事件确认失败"):
             async with MySQLDatabase.session() as session:
                 await apply_buffered_event(
                     session,
                     task,
-                    duplicate,
+                    BufferedSyncEvent(id=duplicate.id, event=failed_event),
                     dw_database=app_config.data_sync.dw_database,
                 )
+        async with MySQLDatabase.session() as session:
+            failed_row_count = await session.scalar(
+                text(
+                    f"SELECT COUNT(*) FROM `{app_config.data_sync.dw_database}`."
+                    f"`{target_table}` WHERE id = 5"
+                )
+            )
+            frequency_after_failure = {
+                (row.value_text, int(row.frequency))
+                for row in await session.execute(
+                    select(
+                        metadata_value_frequency.c.value_text,
+                        metadata_value_frequency.c.frequency,
+                    ).where(
+                        metadata_value_frequency.c.table_id == table_id,
+                        metadata_value_frequency.c.frequency_version
+                        == frequency_version,
+                    )
+                )
+            }
+            desired_version_after_failure = await session.scalar(
+                select(metadata_index_outbox.c.desired_version).where(
+                    metadata_index_outbox.c.object_id == table_id
+                )
+            )
+        check_equal("事件确认失败回滚 DW DML", failed_row_count, 0)
+        check_equal(
+            "事件确认失败回滚频次差量",
+            frequency_after_failure,
+            inserted_frequency,
+        )
+        check_equal(
+            "事件确认失败回滚 refresh desired",
+            desired_version_after_failure,
+            desired_version_before_failure,
+        )
 
         update_event = SyncRowEvent(
             source=source,

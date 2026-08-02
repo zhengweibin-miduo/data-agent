@@ -33,42 +33,41 @@ from data_agent.data_sync.models import (
     primary_key_identity,
 )
 from data_agent.data_sync.tables import data_sync_key_owner, data_sync_task
-from data_agent.ddl_metadata.persistence.tables import column_info
-from data_agent.infrastructure.elasticsearch import ElasticsearchClient
-from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.metadata_indexing.elasticsearch import (
+from data_agent.ddl_metadata.meta_projection.application.contracts import (
+    ValueRefreshPersistenceError,
+)
+from data_agent.ddl_metadata.meta_projection.elasticsearch import (
     MetadataValueElasticsearchIndex,
     metadata_value_document_id,
     metadata_value_projection_fits_bulk,
 )
-from data_agent.metadata_indexing.models import (
+from data_agent.ddl_metadata.meta_projection.models import (
     ClaimedMetadataIndexWork,
     MetadataValueProjection,
     MetadataValueRefreshPhase,
 )
-from data_agent.metadata_indexing.projections import (
+from data_agent.ddl_metadata.meta_projection.projections import (
     MetadataProjectionRepository,
     ProjectionNotReadyError,
     ValueProjectionPlan,
     _stable_value_text,
 )
-from data_agent.metadata_indexing.repository import (
+from data_agent.ddl_metadata.meta_projection.repository import (
     MetadataIndexOutboxRepository,
     metadata_desired_version,
 )
-from data_agent.metadata_indexing.tables import (
+from data_agent.ddl_metadata.meta_projection.tables import (
     metadata_index_outbox,
     metadata_value_frequency,
     metadata_value_publication,
 )
+from data_agent.ddl_metadata.persistence.tables import column_info
+from data_agent.infrastructure.elasticsearch import ElasticsearchClient
+from data_agent.infrastructure.mysql import MySQLDatabase
 from data_agent.settings import app_config
 
 _ACTION_PAYLOAD_BYTE_LIMIT = 4 * 1024 * 1024
 _VALUE_READ_BYTE_LIMIT = _ACTION_PAYLOAD_BYTE_LIMIT
-
-
-class ValueRefreshPersistenceError(RuntimeError):
-    """字段值状态的本地事务失败，不消耗远程失败预算。"""
 
 
 def _value_hash(value_text: str) -> str:

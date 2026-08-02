@@ -6,9 +6,9 @@ This repository is a backend-only installable Python application. Runtime code
 lives under `src/data_agent/` and is organized by business feature first.
 Shared Pydantic contracts live under `models`, long-term memory is a root
 business module used by both DDL metadata and Conversation, and shared
-external-resource lifecycles live under `infrastructure`. DDL metadata retains
-only its transport, job orchestration, Meta snapshot persistence, workflow,
-and worker entry points.
+external-resource lifecycles live under `infrastructure`. DDL metadata owns its
+transport, job orchestration, accepted Meta Snapshot publication, rebuildable
+Meta Projection, workflow, and worker entry points.
 
 ## Directory Layout
 
@@ -94,6 +94,11 @@ src/data_agent/
 │   ├── tables.py
 │   └── worker.py
 └── ddl_metadata/
+    ├── application/
+    │   └── accepted_snapshot.py
+    ├── adapters/
+    │   └── mysql/
+    │       └── accepted_snapshot.py
     ├── api/
     │   ├── job_events.py
     │   ├── jobs.py
@@ -114,7 +119,11 @@ src/data_agent/
     ├── persistence/
     │   ├── memory_references.py
     │   ├── metadata_repository.py
-    │   ├── snapshots.py
+    │   └── tables.py
+    ├── meta_projection/
+    │   ├── application/
+    │   ├── adapters/
+    │   ├── domain.py
     │   └── tables.py
     ├── workflow/
     │   ├── contracts.py
@@ -183,10 +192,18 @@ under `docs/docker/`.
   caller's `AsyncSession` so record-plus-outbox writes remain atomic.
 - `memory.indexing` owns Elasticsearch/Qdrant adapters and the
   dispatcher/rebuilder use cases for derived projections.
-- `ddl_metadata.persistence` owns the Meta snapshot tables/repository and the
-  accepted-snapshot transaction that composes Meta with root memory persistence.
-  Its memory-reference adapter validates DDL-specific table, column, and metric
+- `ddl_metadata.persistence` owns the Meta snapshot tables/repository. Its
+  memory-reference adapter validates DDL-specific table, column, and metric
   references for root memory use cases.
+- `ddl_metadata.application.accepted_snapshot` owns the immutable accepted
+  snapshot command and publication interface. The
+  `ddl_metadata.adapters.mysql.accepted_snapshot` integration adapter owns the
+  generation-lock-protected single transaction that atomically composes Meta,
+  root memory, Data Sync desired state, and Meta Projection outbox work.
+- `ddl_metadata.meta_projection` owns the rebuildable semantic and value search
+  representation of an accepted Meta Snapshot. Its domain/application modules
+  do not import SQLAlchemy, global settings, external SDKs, or Data Sync
+  persistence implementations; adapters own MySQL and remote-index details.
 - `ddl_metadata.workflow.state` and `.contracts` are importable without graph
   construction; `.nodes` owns dependency-bound node behavior, `.routing` owns
   pure conditional routing, and `.graph` only registers and compiles topology.

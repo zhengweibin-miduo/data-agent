@@ -13,10 +13,17 @@ from data_agent.conversation.adapters.mysql.extraction import (
     MySQLExtractionCommitter,
 )
 from data_agent.conversation.application.extraction import ConversationMemoryExtractor
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.persistence.snapshots import (
-    MetadataSnapshotService,
+from data_agent.ddl_metadata.adapters.mysql.accepted_snapshot import (
+    MySQLAcceptedSnapshotPublisher,
 )
+from data_agent.ddl_metadata.jobs.store import DDLJobStore
+from data_agent.ddl_metadata.meta_projection.adapters.composition import (
+    compose_meta_projection_runtime,
+)
+from data_agent.ddl_metadata.meta_projection.elasticsearch import (
+    MetadataValueElasticsearchIndex,
+)
+from data_agent.ddl_metadata.meta_projection.qdrant import MetadataQdrantIndex
 from data_agent.ddl_metadata.worker.maintenance import (
     cleanup_checkpoints,
     dispatch_pending,
@@ -41,10 +48,6 @@ from data_agent.memory.indexing.elasticsearch import (
     MemoryElasticsearchIndex,
 )
 from data_agent.memory.indexing.qdrant import MemoryQdrantIndex
-from data_agent.metadata_indexing.elasticsearch import (
-    MetadataValueElasticsearchIndex,
-)
-from data_agent.metadata_indexing.qdrant import MetadataQdrantIndex
 from data_agent.settings import app_config
 
 
@@ -158,11 +161,18 @@ async def startup(ctx: dict[Any, Any]) -> None:
         content_version=app_config.memory.content_version,
         projection_version=app_config.memory.projection_version,
     )
+    metadata_projection = compose_meta_projection_runtime(
+        elasticsearch=elasticsearch,
+        qdrant=qdrant,
+        embeddings=embeddings,
+    )
+    ctx["metadata_projection"] = metadata_projection
+    ctx["metadata_index_dispatcher"] = metadata_projection.dispatcher
     ctx["graph"] = build_ddl_metadata_graph(
         DDLGraphDependencies(
             model=LLMMetadataGenerator(),
             memory_context=MemoryContextLoader(),
-            snapshot=MetadataSnapshotService(),
+            snapshot_publisher=MySQLAcceptedSnapshotPublisher(),
         ),
         checkpointer,
     )

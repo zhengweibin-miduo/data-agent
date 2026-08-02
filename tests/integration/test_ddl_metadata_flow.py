@@ -8,10 +8,10 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 from sqlalchemy import func, select
 
-from data_agent.ddl_metadata.jobs.store import DDLJobStore
-from data_agent.ddl_metadata.persistence.snapshots import (
-    MetadataSnapshotService,
+from data_agent.ddl_metadata.adapters.mysql.accepted_snapshot import (
+    MySQLAcceptedSnapshotPublisher,
 )
+from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.persistence.tables import table_info
 from data_agent.ddl_metadata.workflow.contracts import DDLGraphDependencies
 from data_agent.ddl_metadata.workflow.graph import build_ddl_metadata_graph
@@ -91,7 +91,7 @@ async def _test_flow() -> None:
             DDLGraphDependencies(
                 model,
                 MemoryContextLoader(),
-                MetadataSnapshotService({source: "source_demo"}),
+                MySQLAcceptedSnapshotPublisher({source: "source_demo"}),
             ),
             checkpointer,
         )
@@ -207,7 +207,7 @@ async def _test_flow() -> None:
             DDLGraphDependencies(
                 reuse_model,
                 MemoryContextLoader(),
-                MetadataSnapshotService({source: "source_demo"}),
+                MySQLAcceptedSnapshotPublisher({source: "source_demo"}),
             ),
             checkpointer,
         )

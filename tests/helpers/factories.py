@@ -2,6 +2,11 @@
 
 from sqlalchemy import delete, or_, select
 
+from data_agent.ddl_metadata.meta_projection.tables import (
+    metadata_index_outbox,
+    metadata_value_frequency,
+    metadata_value_publication,
+)
 from data_agent.ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
@@ -15,11 +20,6 @@ from data_agent.memory.mysql.tables import (
     agent_memory_event,
     agent_memory_link,
     memory_index_outbox,
-)
-from data_agent.metadata_indexing.tables import (
-    metadata_index_outbox,
-    metadata_value_frequency,
-    metadata_value_publication,
 )
 from data_agent.models.physical import PhysicalSchema
 from data_agent.models.semantic import (

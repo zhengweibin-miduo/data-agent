@@ -15,6 +15,10 @@ from data_agent.data_sync.models import (
     SyncRowEvent,
 )
 from data_agent.data_sync.repository import BufferedSyncEvent, ClaimedSyncTask
+from data_agent.ddl_metadata.meta_projection.application.value_input import (
+    MaterializedRowsChanged,
+    MaterializedTableRef,
+)
 
 
 def _task() -> ClaimedSyncTask:
@@ -47,11 +51,16 @@ def _task() -> ClaimedSyncTask:
 def value_refresh(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """隔离并记录与 DW 写入同事务触发的索引刷新。"""
     refresh = AsyncMock()
-    mutation = AsyncMock(return_value=[])
-    apply_changes = AsyncMock()
-    monkeypatch.setattr(backfill, "enqueue_value_refresh", refresh)
-    monkeypatch.setattr(backfill, "prepare_frequency_mutation", mutation)
-    monkeypatch.setattr(backfill, "apply_frequency_row_changes", apply_changes)
+    prepared = AsyncMock()
+    prepared.needs_before_rows = False
+    prepared.apply = refresh
+    participant = AsyncMock()
+    participant.prepare.return_value = prepared
+    monkeypatch.setattr(
+        backfill,
+        "MySQLValueProjectionParticipant",
+        lambda session, desired: participant,
+    )
     return refresh
 
 
@@ -157,11 +166,56 @@ async def test_apply_backfill_batch_claims_ownership_in_one_batch(
         3,
     )
     repository.claim_key_owner.assert_not_awaited()
-    value_refresh.assert_awaited_once_with(
+    value_refresh.assert_awaited_once()
+    assert value_refresh.await_args is not None
+    change = value_refresh.await_args.args[0]
+    assert change.checkpoint == {"backfill_key": [3]}
+
+
+async def test_backfill_uses_transaction_scoped_value_projection_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回填通过中立参与者在 DW DML 前 prepare，并在同一调用内提交变化。"""
+    events: list[object] = []
+
+    class PreparedProjection:
+        """记录公共输入收到的物化行变化。"""
+
+        needs_before_rows = False
+
+        async def apply(self, change: MaterializedRowsChanged) -> None:
+            events.append(change)
+
+    class ProjectionParticipant:
+        """记录 prepare 相对于 DW 写入的顺序。"""
+
+        async def prepare(self, table: MaterializedTableRef) -> PreparedProjection:
+            events.append(table)
+            return PreparedProjection()
+
+    repository = AsyncMock()
+    repository.claim_key_owners.return_value = None
+    repository.record_backfill_cursor.return_value = True
+    monkeypatch.setattr(backfill, "DataSyncRepository", lambda session: repository)
+    session = AsyncMock()
+    session.execute.side_effect = lambda statement: events.append("dw_dml")
+    task = _task()
+
+    await backfill.apply_backfill_batch(
         session,
-        task.desired,
-        {"backfill_key": [3]},
+        task,
+        [{"id": 1}],
+        dw_database="dw",
+        value_projection=ProjectionParticipant(),
     )
+
+    assert isinstance(events[0], MaterializedTableRef)
+    assert events[1] == "dw_dml"
+    change = events[2]
+    assert isinstance(change, MaterializedRowsChanged)
+    assert change.before_rows == ()
+    assert change.after_rows == ({"id": 1},)
+    assert change.checkpoint == {"backfill_key": [1]}
 
 
 def test_backfill_rows_are_chunked_by_encoded_payload_bytes() -> None:
@@ -224,11 +278,12 @@ async def test_missing_old_key_does_not_claim_ownership(
     else:
         repository.claim_key_owner.assert_awaited_once()
         check_equal("主键迁移只写入新键", session.execute.await_count, 1)
-    value_refresh.assert_awaited_once_with(
-        session,
-        _task().desired,
-        {"coordinate": coordinate.model_dump(mode="json")},
-    )
+    value_refresh.assert_awaited_once()
+    assert value_refresh.await_args is not None
+    change = value_refresh.await_args.args[0]
+    assert change.checkpoint == {
+        "coordinate": coordinate.model_dump(mode="json")
+    }
 
 
 async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
@@ -241,14 +296,19 @@ async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
     repository.advance_applied_coordinate.return_value = True
     monkeypatch.setattr(backfill, "DataSyncRepository", lambda session: repository)
     monkeypatch.setattr(
-        backfill, "prepare_frequency_mutation", AsyncMock(return_value=[object()])
-    )
-    monkeypatch.setattr(
         backfill, "_read_target_rows", AsyncMock(return_value=[{"id": 1}])
     )
     apply_changes = AsyncMock()
-    monkeypatch.setattr(backfill, "apply_frequency_row_changes", apply_changes)
-    monkeypatch.setattr(backfill, "enqueue_value_refresh", AsyncMock())
+    prepared = AsyncMock()
+    prepared.needs_before_rows = True
+    prepared.apply = apply_changes
+    participant = AsyncMock()
+    participant.prepare.return_value = prepared
+    monkeypatch.setattr(
+        backfill,
+        "MySQLValueProjectionParticipant",
+        lambda session, desired: participant,
+    )
     coordinate = BinlogCoordinate(file="mysql-bin.000001", position=121, row_index=0)
     event = SyncRowEvent(
         source="local",
@@ -272,5 +332,6 @@ async def test_buffered_insert_uses_current_dw_row_as_frequency_before_image(
     check_condition("频次变化调用参数存在", call is not None)
     if call is None:
         return
-    check_equal("当前 DW 镜像作为扣减端", call.args[2], [{"id": 1}])
-    check_equal("事件后镜像作为增加端", call.args[3], [{"id": 1}])
+    change = call.args[0]
+    check_equal("当前 DW 镜像作为扣减端", change.before_rows, ({"id": 1},))
+    check_equal("事件后镜像作为增加端", change.after_rows, ({"id": 1},))
