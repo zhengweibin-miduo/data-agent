@@ -1,0 +1,7 @@
+{"file":"AGENTS.md","reason":"项目级任务启动、源码根、前后端所有权和架构组合规则"}
+{"file":"CONTEXT.md","reason":"迁移必须保留既有 bounded-context 统一语言"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"后端目录所有权、模块 interface 与依赖方向"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Python 构建、测试、配置和完成验证门禁"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"独立 frontend/src 所有权和 legacy 资源禁止规则"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端独立安装、测试和构建门禁"}
+{"file":".trellis/tasks/08-02-separate-backend-frontend-roots/research/current-layout-impact.md","reason":"当前 import、入口、构建、CI、配置与 legacy 前端影响面"}

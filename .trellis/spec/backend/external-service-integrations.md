@@ -120,8 +120,8 @@ class TEIEmbeddingClient:
 ### 3. Contracts
 
 - Compose service: `text-embeddings-inference`.
-- Shared client modules live in `src/data_agent/infrastructure/`; matching
-  integration tests live in `tests/integration/infrastructure/`.
+- Shared client modules live in `backend/src/infrastructure/`; matching
+  integration tests live in `backend/tests/integration/infrastructure/`.
 - Image: `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`; no GPU device requests.
 - Model: `BAAI/bge-large-zh-v1.5`; output dimension is 1024.
 - Endpoint: `conf/app_config.yaml` key `tei.url`, with Hugging Face requests sent to `{url}/embed`.
@@ -153,9 +153,9 @@ class TEIEmbeddingClient:
 ### 6. Tests Required
 
 ```powershell
-docker compose -f docs/docker/docker-compose.yml config
-docker compose -f docs/docker/docker-compose.yml up -d text-embeddings-inference
-uv run python -m data_agent.settings
+docker compose -f ../docs/docker/docker-compose.yml config
+docker compose -f ../docs/docker/docker-compose.yml up -d text-embeddings-inference
+uv run python -m settings
 uv run pytest tests/integration/infrastructure/test_tei_embeddings.py
 ```
 
@@ -403,7 +403,7 @@ async with MySQLDatabase.session() as session:
 ### 6. Tests Required
 
 ```powershell
-uv run python -m data_agent.settings
+uv run python -m settings
 uv run pytest tests/integration/infrastructure/test_mysql.py
 uv run ruff check src tests
 uv run pyright src tests
@@ -505,7 +505,7 @@ data-agent-cdc
 ```powershell
 uv run pytest tests/unit/data_sync/test_binlog.py
 uv run pytest tests/integration/data_sync/test_cdc_pipeline.py
-docker compose -f docs/docker/docker-compose.yml config
+docker compose -f ../docs/docker/docker-compose.yml config
 ```
 
 The unit test pins the complete private decoder signature and asserts INSERT,
@@ -572,7 +572,7 @@ JobEventStore(redis, keys).read_after(job_id, after_id, ...) -> list[JobEvent]
   `CheckpointStore` owns a separate `AsyncRedisSaver`, explicitly
   enters its async context, awaits `asetup()`, and closes that same context.
 - Consumers import the application-facing facade from
-  `data_agent.ddl_metadata.jobs.store`. The facade composes
+  `ddl_metadata.jobs.store`. The facade composes
   `RedisJobStateStore`, `SourceLeaseStore`, `JobOutboxStore`, and
   `JobEventStore`; API, worker, and memory services do not construct those
   specialized stores separately.
@@ -642,7 +642,7 @@ JobEventStore(redis, keys).read_after(job_id, after_id, ...) -> list[JobEvent]
 ### 6. Tests Required
 
 ```powershell
-docker compose -f docs/docker/docker-compose.yml config
+docker compose -f ../docs/docker/docker-compose.yml config
 uv run pytest tests/integration/infrastructure/test_redis.py
 uv run pytest tests/integration/test_job_events.py
 uv run pytest tests/integration/test_worker.py

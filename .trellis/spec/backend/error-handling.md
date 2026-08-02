@@ -4,7 +4,7 @@
 
 Configuration and low-level client errors normally propagate unchanged.
 Lifecycle misuse still raises an actionable `RuntimeError`. The root
-`data_agent.errors` module defines one stable safe application error,
+`backend/src/errors.py` module defines one stable safe application error,
 `DataAgentError`, for business rejection and API/worker projection:
 
 ```python
@@ -32,7 +32,7 @@ logs only.
 ## Client Lifecycle Errors
 
 Every infrastructure wrapper's `get_client()` rejects access before
-initialization. For example, `data_agent.infrastructure.mysql` uses this
+initialization. For example, `infrastructure.mysql` uses this
 shape:
 
 ```python
@@ -82,7 +82,7 @@ a later `initialize()` creates a fresh resource after close.
 ## API Error Responses
 
 The application exception handler centrally maps `DataAgentError` raised by
-the split `data_agent.ddl_metadata.api.jobs` and `.memories` routers to its
+the split `ddl_metadata.api.jobs` and `.memories` routers to its
 declared status and a safe envelope:
 
 ```json

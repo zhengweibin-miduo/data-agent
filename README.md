@@ -13,8 +13,13 @@ Data Agent 是一个面向 MySQL DDL 的异步元数据生成项目。它使用�
 安装锁定依赖：
 
 ```powershell
+cd backend
 uv sync --locked
 ```
+
+后端源码、测试、配置和 Python 构建元数据由 `backend/` 独立拥有；前端源码与构建
+配置由 `frontend/` 独立拥有。后端业务包直接从 `backend/src/` 导入，不存在
+`data_agent` Python 包层。
 
 ## 启动依赖服务
 
@@ -31,14 +36,14 @@ MySQL 官方镜像只会在全新的 `mysql_data` 卷上运行
 数据库。已有卷不会重新执行脚本；这些 SQL 是空白环境 bootstrap，不是升级
 迁移，手工重放可能覆盖本地表，不要对包含有用数据的共享卷执行。
 
-应用连接、索引名称和服务地址位于 `conf/app_config.yaml`。配置文件位置按以下顺序
+应用连接、索引名称和服务地址位于 `backend/conf/app_config.yaml`。配置文件位置按以下顺序
 解析，命中即停止：
 
 1. `DATA_AGENT_CONFIG` 环境变量指定的文件；
 2. 当前工作目录下的 `conf/app_config.yaml`；
-3. 源码树相对位置（仓库根的 `conf/app_config.yaml`）。
+3. 源码树相对位置（`backend/conf/app_config.yaml`）。
 
-`conf/` 不随 wheel 一起打包，因此以已安装包运行时必须用 `DATA_AGENT_CONFIG`
+`backend/conf/` 不随 wheel 一起打包，因此以已安装包运行时必须用 `DATA_AGENT_CONFIG`
 指定配置，或从包含 `conf/` 的部署目录启动：
 
 ```powershell
@@ -59,21 +64,19 @@ $env:DATA_AGENT_LLM_API_KEY = "your-api-key"
 
 ## 运行 API 与 worker
 
-先启动依赖服务，再在两个终端分别运行：
+先启动依赖服务，再在两个终端分别进入 `backend/` 运行：
 
 ```powershell
 uv run data-agent-api
 ```
 
-API 默认只提供 `/api/v1/**`、OpenAPI 与健康检查，不再托管前端页面。迁移期如需
-临时恢复旧入口，可显式设置 `ENABLE_LEGACY_FRONTEND=true`；生产环境应保持默认
-关闭。
+API 只提供 `/api/v1/**`、OpenAPI 与健康检查，不托管或打包前端页面。
 
 ```powershell
-uv run arq data_agent.ddl_metadata.worker.settings.WorkerSettings
+uv run arq ddl_metadata.worker.settings.WorkerSettings
 ```
 
-API 使用 `conf/app_config.yaml` 中的回环地址与端口。worker 保留 arq 官方
+API 使用 `backend/conf/app_config.yaml` 中的回环地址与端口。worker 保留 arq 官方
 discovery 路径，并在启动时检查 Redis checkpoint、MySQL、派生索引、TEI 与
 结构化模型能力。
 
@@ -89,7 +92,7 @@ npm run dev
 ```
 
 浏览器访问 `http://127.0.0.1:5173/workbench`。后端
-`conf/app_config.yaml` 默认允许 `127.0.0.1:5173` 与 `localhost:5173`；部署到其它
+`backend/conf/app_config.yaml` 默认允许 `127.0.0.1:5173` 与 `localhost:5173`；部署到其它
 Origin 时必须同步收紧 `api.cors_origins`。
 
 生产构建使用：
@@ -119,12 +122,15 @@ CORS 配置校验，不会改变 API 的回环监听地址；对外发布仍应�
 不依赖本地服务的基础质量门禁：
 
 ```powershell
+cd backend
 uv lock --check
 uv run ruff check src tests
 uv run pyright src tests
 uv run python -m compileall -q src tests
-uv run python -m data_agent.settings
+uv run python -m settings
 uv run pytest -m "not integration"
+uv build
+cd ..
 docker compose -f docs/docker/docker-compose.yml config
 cd frontend
 npm ci
@@ -136,7 +142,7 @@ cd ..
 git diff --check
 ```
 
-MySQL 与 Redis 可用时可继续运行集成测试（不启动可选 TEI 测试）：
+MySQL 与 Redis 可用时可从 `backend/` 继续运行集成测试（不启动可选 TEI 测试）：
 
 ```powershell
 uv run pytest -m "integration and not tei"

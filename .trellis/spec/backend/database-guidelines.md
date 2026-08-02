@@ -5,14 +5,14 @@
 MySQL is the only relational database currently wired into the application.
 The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
 `asyncmy` driver. The DSN is validated by `MySQLSettings` in
-`src/data_agent/settings.py`; engine and Session-factory lifecycle is owned by
-`src/data_agent/infrastructure/mysql.py`.
+`backend/src/settings.py`; engine and Session-factory lifecycle is owned by
+`backend/src/infrastructure/mysql.py`.
 
 The DDL metadata feature uses SQLAlchemy Core table definitions in
 `ddl_metadata/persistence/tables.py` for Meta snapshots and
 `memory/mysql/tables.py` for long-term memory. Conversation has its own table
 definitions under `conversation/mysql_tables.py`. All three import the single
-`MetaData` owner from `data_agent/persistence/schema.py`. The project
+`MetaData` owner from `persistence/schema.py`. The project
 deliberately does not add ORM entities or a migration framework.
 `MetadataRepository` owns the four Meta snapshot tables; `DataSyncRepository`
 owns schema-qualified tasks, Binlog event buffers, offsets, leases, retries,
@@ -751,7 +751,7 @@ The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
 
 ### 6. Tests Required
 
-- Run `docker compose -f docs/docker/docker-compose.yml config` and assert that
+- Run `docker compose -f ../docs/docker/docker-compose.yml config` and assert that
   both `/var/lib/mysql` and the read-only `/docker-entrypoint-initdb.d` mount
   are present.
 - Assert application grants target `'data_agent'@'%'`; the replica account has

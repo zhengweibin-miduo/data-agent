@@ -12,15 +12,15 @@ npm run test
 npm run build
 ```
 
-From the repository root also run `uv run pytest tests/unit/test_frontend.py`,
-Ruff, Pyright, and non-integration pytest. CI must run the npm gates in an
-independent job using `frontend/package-lock.json`.
+From `backend/` also run `uv run pytest tests/unit/test_frontend.py`, Ruff,
+Pyright, and non-integration pytest. CI must run the npm gates in an independent
+job using `frontend/package-lock.json`.
 
 ## Review Checklist
 
 - Test DDL byte counting, authoritative waiting-input refresh, native SSE
   reconnect semantics, polling fallback, stable chat retry IDs, safe server-only
-  LLM access, API-only startup, CORS, and the legacy switch.
+  LLM access, API-only startup, and CORS.
 - API adapter tests own EventSource reconnect, polling fallback, malformed-event,
   and close-race mechanisms. Workbench hook tests own restore/subscription/chat
   lifecycle decisions; page tests assert rendered user-observable outcomes and

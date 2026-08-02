@@ -6,7 +6,7 @@
 
 Use this contract whenever application code emits logs or an execution entry
 establishes logging context. Loguru is configured once by
-`data_agent.logging`; feature and infrastructure modules never configure sinks.
+`backend/src/app_logging.py`; feature and infrastructure modules never configure sinks.
 
 Business code owns only the level and the complete Chinese message:
 

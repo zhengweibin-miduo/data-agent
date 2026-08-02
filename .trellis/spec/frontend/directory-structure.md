@@ -13,15 +13,14 @@ frontend/
 │   └── styles.css
 ├── package.json
 ├── package-lock.json
+├── README.md
 └── vite.config.ts
-
-src/data_agent/frontend/  # migration-only legacy assets
-tests/unit/test_frontend.py
 ```
 
-Vite owns development and production builds. FastAPI exposes only API/OpenAPI/
-health routes by default. The legacy directory is mounted only when
-`ENABLE_LEGACY_FRONTEND=true`.
+Vite owns development and production builds. `frontend/src/` is the only owner
+of frontend business source. FastAPI exposes only API/OpenAPI/health routes and
+does not carry, mount, or package frontend assets. Backend API-only and CORS
+coverage lives under `backend/tests/`.
 
 ## Rules
 
@@ -34,4 +33,5 @@ health routes by default. The legacy directory is mounted only when
 - Components do not concatenate deployment origins; all URLs go through
   `resolveApiUrl` / `apiRequest` or the SSE adapter.
 - Never commit `node_modules`, `dist`, coverage, or `*.tsbuildinfo`.
-- Do not import files from `src/data_agent/frontend/` into the Vite application.
+- Do not import Python source, ORM models, or internal DTOs from `backend/src/`.
+- Do not mirror frontend source or build output under `backend/`.

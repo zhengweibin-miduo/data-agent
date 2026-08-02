@@ -2,13 +2,14 @@
 
 ## Runtime and Dependency Baseline
 
-- Python is constrained to `>=3.13,<3.14` in `pyproject.toml`, and
+- Python is constrained to `>=3.13,<3.14` in `backend/pyproject.toml`, and
   `.python-version` pins `3.13`.
-- The distribution is installed from `src/data_agent/`; direct imports use
-  `data_agent`, never the retired `app` package or repository-root import
-  accidents.
+- The distribution is installed from `backend/src/`; direct imports use
+  top-level owner modules such as `memory`, `conversation`, `data_sync`, and
+  `ddl_metadata`, never `data_agent`, a replacement umbrella package, or
+  repository-root import accidents.
 - Runtime and development dependencies and their resolved versions are managed
-  by `uv`, `pyproject.toml`, and `uv.lock`.
+  by `uv`, `backend/pyproject.toml`, and `backend/uv.lock`.
 - Runtime and test packages use explicit type annotations and Chinese Google
   Style Docstrings. Ruff enforces Docstrings for public packages, modules,
   classes, functions, methods, fixtures, and tests.
@@ -36,7 +37,7 @@
   `close()`.
 - Package `__init__.py` files are documented and side-effect free.
 - HTTP, model, graph, Redis, and persistence boundaries reuse contracts from
-  `data_agent.models`; consumers do not cast shared JSON payloads
+  `models`; consumers do not cast shared JSON payloads
   independently.
 - Before adding or changing a test, identify the agreed public seam and the
   observable behavior under test. Add cases only for requirements, regressions,
@@ -101,14 +102,17 @@
 The repository CI in `.github/workflows/ci.yml` defines the baseline:
 
 ```powershell
+cd backend
 uv sync --locked
 uv lock --check
 uv run ruff check src tests
 uv run pyright src tests
 uv run python -m compileall -q src tests
-uv run python -m data_agent.settings
+uv run python -m settings
 uv run pytest -m "not tei"
-docker compose -f docs/docker/docker-compose.yml config
+uv build
+docker compose -f ../docs/docker/docker-compose.yml config
+cd ..
 git diff --check
 ```
 
@@ -427,7 +431,7 @@ in a disposable environment, then run:
 ```powershell
 uv run pytest tests/unit/data_sync
 uv run pytest tests/integration/data_sync
-docker compose -f docs/docker/docker-compose.yml config
+docker compose -f ../docs/docker/docker-compose.yml config
 ```
 
 For answer-readiness changes, run deterministic classifier/tool/service tests
@@ -445,13 +449,17 @@ shared volume merely to rerun entrypoint scripts.
 No CI test contacts a live LLM. The LLM infrastructure test mocks the
 capability probe; the real worker startup probe is a separate deployment check.
 
-`pyproject.toml` persists Ruff, Pyright, and pytest configuration. Ruff uses
+`backend/pyproject.toml` persists setuptools package/module declarations plus
+Ruff, Pyright, and pytest configuration. Ruff uses
 the Google pydocstyle convention, pytest collects from `tests/` with async
-support, and the installed `data_agent` package is the runtime import target.
+support, and the installed top-level packages/modules are the runtime import
+targets. Installed-wheel verification must run outside the repository source
+path and confirm both console entry points plus standard-library `logging` identity.
 
 ## Configuration Loading
 
-`conf/` is outside `src/`, so uv_build does not ship it inside the wheel. A path
+`backend/conf/` is outside `backend/src/`, so setuptools does not ship it inside
+the wheel. A path
 derived from `__file__` therefore cannot locate configuration once the package is
 installed, and the console script would fail to start. `resolve_config_path()`
 resolves in a fixed order and stops at the first hit:
@@ -487,8 +495,8 @@ arguments), which is separate work.
 - Reject tests coupled to private methods, internal collaborator calls, or
   internal call counts and ordering. Confirm unavoidable boundary mocks and new
   setup do not duplicate an existing fake, factory, or fixture.
-- Trace configuration changes across `conf/app_config.yaml`,
-  `src/data_agent/settings.py`, every consumer, and configuration validation.
+- Trace configuration changes across `backend/conf/app_config.yaml`,
+  `backend/src/settings.py`, every consumer, and configuration validation.
 - Verify that a new infrastructure client follows the established lifecycle
   and closes the exact underlying async resource.
 - Confirm tests exercise real behavior rather than only checking object shape;
@@ -524,8 +532,8 @@ arguments), which is separate work.
   history, tenant isolation, one active turn, turn/outbox idempotency, exact
   quote evidence, ambiguous-confirmation rejection, summary cursor
   monotonicity, and delete-before-purge ordering.
-- Verify pytest collection uses `tests/` and the installed `data_agent`
-  package, not a repository-root fallback import.
+- Verify pytest collection runs from `backend/`, uses `tests/`, and imports the
+  installed top-level packages/modules rather than a repository-root fallback.
 - Verify every public runtime and test object has a meaningful Docstring; do
   not satisfy Ruff with restatements such as "X class."
 - Run checks relevant to the changed service and report unavailable live
@@ -547,3 +555,5 @@ arguments), which is separate work.
 - `asyncio.run()` wrappers or executable main guards in pytest modules.
 - Missing or placeholder public Docstrings.
 - Claims that a skipped or unavailable live-service check passed.
+- A `data_agent` Python package, compatibility shim, or top-level `logging.py`
+  that shadows the standard library.
