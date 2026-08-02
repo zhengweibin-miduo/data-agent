@@ -1,0 +1,29 @@
+{
+  "id": "workbench-modules",
+  "name": "workbench-modules",
+  "title": "深化 Workbench 模块与测试",
+  "description": "提炼 Workbench feature 内部 module/seam，保持 HTTP/SSE 与状态权威，并替换重复或实现耦合测试。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-02",
+  "completedAt": "2026-08-02",
+  "branch": "refactor/workbench-modules-20260802",
+  "base_branch": "refactor/align-project-structure-tests-20260802",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-02-workbench-modules",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-02-align-project-structure-tests",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

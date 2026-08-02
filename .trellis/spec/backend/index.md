@@ -27,23 +27,23 @@ local Docker services that exist in this repository.
 The repository now has a loopback FastAPI boundary, typed application models,
 feature-owned services and persistence, a LangGraph workflow, an arq worker,
 and a dedicated MySQL Binlog CDC process. Runtime code is installed from
-`src/data_agent/`; tests use pytest
-under `tests/`. It still has no ORM entity layer or migration framework:
+`backend/src/`; tests use pytest under `backend/tests/`. The Python backend has
+no umbrella package namespace. It still has no ORM entity layer or migration framework:
 SQLAlchemy Core table definitions and local bootstrap SQL own the current
 relational schema.
 
 ## Pre-Development Checklist
 
 - Identify the concrete files involved: configuration belongs in
-  `src/data_agent/settings.py` and `conf/app_config.yaml`, cross-feature
-  contracts in `src/data_agent/models/`, long-term memory in
-  `src/data_agent/memory/`, shared SQLAlchemy metadata in
-  `src/data_agent/persistence/schema.py`, shared async resources in
-  `src/data_agent/infrastructure/`, DDL-specific behavior in
-  `src/data_agent/ddl_metadata/`, DW/CDC behavior in
-  `src/data_agent/data_sync/`, application composition in
-  `src/data_agent/application.py`, logging setup in
-  `src/data_agent/logging.py`, pytest checks in `tests/`, and local
+  `backend/src/settings.py` and `backend/conf/app_config.yaml`, cross-feature
+  contracts in `backend/src/models/`, long-term memory in
+  `backend/src/memory/`, shared SQLAlchemy metadata in
+  `backend/src/persistence/schema.py`, shared async resources in
+  `backend/src/infrastructure/`, DDL-specific behavior in
+  `backend/src/ddl_metadata/`, DW/CDC behavior in
+  `backend/src/data_sync/`, application composition in
+  `backend/src/application.py`, logging setup in
+  `backend/src/app_logging.py`, pytest checks in `backend/tests/`, and local
   infrastructure in `docs/docker/`.
 - Read [Directory Structure](./directory-structure.md) for every backend change.
 - Read [Database Guidelines](./database-guidelines.md) for MySQL, SQLAlchemy,
@@ -71,9 +71,9 @@ relational schema.
   when the corresponding service is available, and report an unavailable
   dependency instead of claiming the check passed.
 - Trace renamed package and configuration paths end to end. Current references
-  use `data_agent.models`, `data_agent.memory`, `data_agent.persistence`,
-  `data_agent.infrastructure`, `data_agent.ddl_metadata`, `tests`, and
-  `conf/app_config.yaml`. Retired `app`, `app_test`, root `main.py`, and
+  use top-level `models`, `memory`, `persistence`, `infrastructure`,
+  `ddl_metadata`, `backend/tests`, and `backend/conf/app_config.yaml`. Retired
+  `data_agent`, `app`, `app_test`, repository-root Python build files, and
   feature-nested shared-contract paths must not remain in active code, CI, or
   current specs. Archived task and journal records may keep names that were
   accurate when those records were written.

@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Defines bounded-context ownership, application/adapter placement, and composition roots."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Defines transaction, authoritative state, outbox, lease, history, and tombstone contracts."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Defines ES, Qdrant, TEI timeout, degradation, mapping, and retry requirements."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines cancellation, retry classification, infrastructure exception, and safe-boundary behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Defines typing, testing, and verification gates for backend refactors."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Provides the cross-layer data-flow and authority checklist."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/import-graph-audit.md","reason":"Records concrete application-to-infrastructure and cross-context dependency violations."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/memory-conversation-flow.md","reason":"Records current Conversation and Memory authority, transaction, search, extraction, and projection flows."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/test-seam-map.md","reason":"Records approved public seams and implementation-coupled tests to replace."}

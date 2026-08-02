@@ -57,6 +57,9 @@ jobs:
     name: quality
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
 
     services:
       mysql:
@@ -110,6 +113,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: backend/uv.lock
 
       - name: Install dependencies
         run: uv sync --locked
@@ -124,19 +128,19 @@ jobs:
             'until curl --fail --silent http://localhost:9200/_cluster/health?wait_for_status=yellow; do sleep 2; done'
 
       - name: Initialize metadata database
-        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/meta.sql
+        run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/meta.sql
 
       - name: Initialize application memory database
-        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_agent.sql
+        run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/data_agent.sql
 
       - name: Initialize data sync database
-        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/data_sync.sql
+        run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/data_sync.sql
 
       - name: Initialize data sync source database
-        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/source_demo.sql
+        run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/source_demo.sql
 
       - name: Initialize data warehouse database
-        run: mysql -h 127.0.0.1 -uroot -proot < docs/docker/mysql/dw.sql
+        run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/dw.sql
 
       - name: Configure Redis durability
         run: |
@@ -144,7 +148,7 @@ jobs:
           docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET appendfsync everysec
 
       - name: Render Docker Compose configuration
-        run: docker compose -f docs/docker/docker-compose.yml config
+        run: docker compose -f ../docs/docker/docker-compose.yml config
 
       - name: Check lock file
         run: uv lock --check
@@ -159,7 +163,18 @@ jobs:
         run: uv run python -m compileall -q src tests
 
       - name: Validate application configuration
-        run: uv run python -m data_agent.settings
+        run: uv run python -m settings
 
       - name: Run pytest suite
         run: uv run pytest -m "not tei"
+
+      - name: Build backend distribution
+        run: uv build
+
+      - name: Verify installed wheel boundary
+        run: |
+          uv venv "${RUNNER_TEMP}/data-agent-wheel-smoke"
+          uv pip install --python "${RUNNER_TEMP}/data-agent-wheel-smoke/bin/python" dist/*.whl
+          DATA_AGENT_CONFIG="${PWD}/conf/app_config.yaml" \
+            "${RUNNER_TEMP}/data-agent-wheel-smoke/bin/python" \
+            scripts/verify_installed_wheel.py dist/*.whl

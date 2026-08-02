@@ -98,7 +98,7 @@ textarea { resize: vertical; }
 .chat-message.user { border-color: var(--cyan); }
 .chat-message strong { color: var(--violet); font-size: 11px; }
 .chat-message.user strong { color: var(--cyan); }
-.chat-message p { margin: 4px 0; color: #cfdae5; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.chat-message p { margin: 4px 0; color: #cfdae5; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
 .chat-form { border-top: 1px solid var(--line); }
 .chat-form button { width: 100%; margin-top: 8px; }
 .chat-retry { width: 100%; margin-top: 8px; }

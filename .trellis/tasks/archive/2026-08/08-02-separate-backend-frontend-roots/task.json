@@ -1,0 +1,29 @@
+{
+  "id": "separate-backend-frontend-roots",
+  "name": "separate-backend-frontend-roots",
+  "title": "迁移为 backend/src 与 frontend/src 双根结构",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-02",
+  "completedAt": "2026-08-02",
+  "branch": "refactor/separate-backend-frontend-roots-20260802",
+  "base_branch": "master",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-02-separate-backend-frontend-roots",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

@@ -5,12 +5,11 @@
 ### 1. Scope / Trigger
 
 Apply this contract whenever frontend code, FastAPI composition, CORS, SSE, API
-base resolution, static hosting, or the legacy embedded frontend changes.
+base resolution, or static hosting changes.
 
 ### 2. Signatures
 
 - Frontend environment: `VITE_API_BASE_URL=<empty|/api|absolute-origin>`.
-- Backend migration environment: `ENABLE_LEGACY_FRONTEND=<boolean>`, default false.
 - Liveness: `GET /api/v1/health` returns `status: "ok"` and a capability map.
 - Business routes remain under `/api/v1/**`; DDL events remain
   `GET /api/v1/metadata/ddl-jobs/{job_id}/events`.
@@ -81,9 +80,7 @@ base resolution, static hosting, or the legacy embedded frontend changes.
 
 ### 4. Validation & Error Matrix
 
-- Missing legacy env -> API-only, `/`, `/workbench`, `/assets/**` return 404.
-- Accepted true value -> mount legacy assets and log a deprecation warning.
-- Ambiguous legacy value -> fail application construction with `ValueError`.
+- FastAPI startup -> API-only; `/`, `/workbench`, `/knowledge`, and `/assets/**` return 404.
 - Allowed CORS origin -> preflight 200 with matching allow-origin header.
 - Unknown CORS origin -> preflight rejected and no allow-origin grant.
 - EventSource unavailable/`stream_error`/malformed event -> bounded GET polling.
@@ -103,8 +100,8 @@ base resolution, static hosting, or the legacy embedded frontend changes.
 
 ### 6. Tests Required
 
-- Python: default 404 routes, OpenAPI business route, health, valid/invalid legacy
-  env, allowed/rejected CORS, and existing SSE headers.
+- Python: permanent 404 frontend routes, OpenAPI business route, health,
+  allowed/rejected CORS, and existing SSE headers.
 - TypeScript: API-base joining, stable error projection, authoritative
   waiting-input read, native reconnect behavior, polling fallback, chat turn UID
   reuse, DDL limits, and application navigation.

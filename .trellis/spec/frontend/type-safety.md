@@ -10,7 +10,7 @@ projection, not an independent schema authority.
 
 - Centralize HTTP failure projection in `ApiError` and treat missing envelope
   fields as an opaque HTTP failure.
-- Keep job status/stage values aligned with `data_agent.models.jobs`.
+- Keep job status/stage values aligned with `backend/src/models/jobs.py`.
 - Do not use SSE `JobEventData` as an answer-submission contract: it lacks
   `question_set_id`; fetch `JobRecord` first.
 - Preserve response nullability and empty states instead of assuming result,

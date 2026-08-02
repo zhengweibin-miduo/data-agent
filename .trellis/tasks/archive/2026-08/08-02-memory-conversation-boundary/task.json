@@ -1,0 +1,29 @@
+{
+  "id": "memory-conversation-boundary",
+  "name": "memory-conversation-boundary",
+  "title": "重构 Memory 与 Conversation 边界",
+  "description": "建立 Memory/Conversation application ports，消除具体 persistence/infrastructure 依赖，并按确认 seam 替换测试。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-02",
+  "completedAt": "2026-08-02",
+  "branch": "refactor/memory-conversation-boundary-20260802",
+  "base_branch": "refactor/align-project-structure-tests-20260802",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-02-memory-conversation-boundary",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-02-align-project-structure-tests",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

@@ -1,7 +1,8 @@
 # Data Agent Frontend
 
-独立的 React + TypeScript + Vite 前端。它只通过 HTTP JSON 与 SSE 使用 Data
-Agent FastAPI，不读取 Python 包内资源，也不持有数据库、Redis 或模型密钥。
+独立的 React + TypeScript + Vite 前端。业务源码唯一位于 `src/`。它只通过 HTTP
+JSON 与 SSE 使用 Data Agent FastAPI，不读取后端资源，也不持有数据库、Redis
+或模型密钥。
 
 ## 开发
 

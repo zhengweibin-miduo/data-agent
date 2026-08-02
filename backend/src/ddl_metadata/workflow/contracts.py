@@ -1,0 +1,75 @@
+"""DDL 元数据工作流依赖契约。"""
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from ddl_metadata.application.accepted_snapshot import (
+    AcceptedSnapshotPublisher,
+)
+from ddl_metadata.workflow.memory_context import LoadedMemoryContext
+from models.memory import (
+    MemoryContent,
+)
+from models.physical import PhysicalSchema
+from models.semantic import (
+    MetricAnswer,
+    MetricOutput,
+    MetricQuestion,
+    MetricQuestionSet,
+    SemanticMetadata,
+    ValidationIssue,
+)
+
+
+class MetadataGenerator(Protocol):
+    """图节点依赖的最小结构化模型契约。"""
+
+    async def classify(
+        self,
+        schema: PhysicalSchema,
+        issues: list[ValidationIssue],
+        memory: list[MemoryContent],
+    ) -> SemanticMetadata:
+        """生成表列语义分类。"""
+        ...
+
+    async def plan_questions(
+        self,
+        schema: PhysicalSchema,
+        metadata: SemanticMetadata,
+        answers: list[MetricAnswer],
+        round_number: int,
+    ) -> MetricQuestionSet:
+        """生成当前轮次所需的指标澄清问题。"""
+        ...
+
+    async def generate_metrics(
+        self,
+        schema: PhysicalSchema,
+        metadata: SemanticMetadata,
+        questions: list[MetricQuestion],
+        answers: list[MetricAnswer],
+        issues: list[ValidationIssue],
+    ) -> MetricOutput:
+        """根据已验证语义和用户回答生成指标。"""
+        ...
+
+
+class MemoryContext(Protocol):
+    """长期记忆读取节点的最小契约。"""
+
+    async def load(
+        self,
+        schema: PhysicalSchema,
+    ) -> LoadedMemoryContext:
+        """加载与当前物理模式兼容的有界记忆上下文。"""
+        ...
+
+
+@dataclass(frozen=True)
+class DDLGraphDependencies:
+    """图节点的进程内依赖，不进入检查点。"""
+
+    model: MetadataGenerator
+    memory_context: MemoryContext
+    snapshot_publisher: AcceptedSnapshotPublisher

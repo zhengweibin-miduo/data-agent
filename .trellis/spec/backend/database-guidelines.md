@@ -5,14 +5,14 @@
 MySQL is the only relational database currently wired into the application.
 The project uses SQLAlchemy 2's async engine and `AsyncSession` with the
 `asyncmy` driver. The DSN is validated by `MySQLSettings` in
-`src/data_agent/settings.py`; engine and Session-factory lifecycle is owned by
-`src/data_agent/infrastructure/mysql.py`.
+`backend/src/settings.py`; engine and Session-factory lifecycle is owned by
+`backend/src/infrastructure/mysql.py`.
 
 The DDL metadata feature uses SQLAlchemy Core table definitions in
 `ddl_metadata/persistence/tables.py` for Meta snapshots and
 `memory/mysql/tables.py` for long-term memory. Conversation has its own table
 definitions under `conversation/mysql_tables.py`. All three import the single
-`MetaData` owner from `data_agent/persistence/schema.py`. The project
+`MetaData` owner from `persistence/schema.py`. The project
 deliberately does not add ORM entities or a migration framework.
 `MetadataRepository` owns the four Meta snapshot tables; `DataSyncRepository`
 owns schema-qualified tasks, Binlog event buffers, offsets, leases, retries,
@@ -224,10 +224,10 @@ previously published ID set, and pending remote actions.
 ### 6. Tests Required
 
 ```powershell
-uv run pytest tests/unit/metadata_indexing/test_outbox.py
-uv run pytest tests/unit/metadata_indexing/test_runtime.py
-uv run pytest tests/unit/metadata_indexing/test_value_refresh.py
-uv run pytest tests/integration/test_metadata_index_resumable_refresh.py
+uv run pytest tests/unit/ddl_metadata/meta_projection/test_outbox.py
+uv run pytest tests/unit/ddl_metadata/meta_projection/test_application.py
+uv run pytest tests/unit/ddl_metadata/meta_projection/test_value_refresh.py
+uv run pytest tests/integration/ddl_metadata/test_meta_projection_resumable_refresh.py
 ```
 
 Tests assert keyset recovery, cursor-envelope identity rejection, peer-source
@@ -302,8 +302,10 @@ Contracts:
   become audited `NOOP` decisions instead of in-place content updates.
 - Repository methods accept and return typed application contracts or bounded
   row projections; JSON is decoded through the central memory parser.
-- Service code owns the transaction boundary. Repositories can share one
-  Session when Meta rows and trusted memories must commit atomically.
+- A use-case MySQL adapter owns each short transaction boundary. Repositories can
+  share one caller-owned Session inside an outer integration adapter when Meta
+  rows and trusted memories, Conversation erasure and Memory tombstones, or
+  extraction completion and Memory candidates must commit atomically.
 - Do not create a second engine or Session for the application memory
   database. Static schema-qualified memory tables keep the cross-database
   transaction on one MySQL connection.
@@ -320,24 +322,32 @@ history, links, index outbox, user updates, deletion, or accepted-snapshot persi
 ### 2. Signatures
 
 ```python
-await MetadataSnapshotService.persist(snapshot, memory_candidates) -> SnapshotResult
+await AcceptedSnapshotPublisher.publish(snapshot) -> None
 await MemoryService.update(memory_uid, content) -> MemoryUpdateResponse
 await MemoryIndexRebuilder.enqueue_batch(after_id=0) -> MemoryRebuildResult
 ```
 
 ### 3. Contracts
 
-`MetadataSnapshotService.persist()` is the only accepted-snapshot commit
-boundary. In
-one managed MySQL transaction spanning the default Meta database and the
-configured application memory database it:
+`AcceptedSnapshotPublisher.publish()` is the application-facing accepted-snapshot
+commit boundary. Its production `MySQLAcceptedSnapshotPublisher` adapter acquires
+all affected target generation locks before opening one managed MySQL transaction
+spanning the default Meta database, configured application memory database, Data
+Sync control database, and Meta Projection control tables. In that transaction it:
 
 1. upserts submitted table, column, metric, and column/metric rows;
 2. removes stale links and columns only for submitted table IDs;
 3. removes metrics that became orphaned through that scoped cleanup;
 4. applies explicit `ADD/UPDATE/MERGE/DELETE/NOOP` decisions, version history,
    typed links, and the database-unique active slot; and
-5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`.
+5. writes Elasticsearch and Qdrant desired operations to `memory_index_outbox`;
+6. publishes Data Sync desired state and Meta Projection desired/outbox work.
+
+The generation locks remain held through transaction commit or rollback. Lock
+contention opens no business transaction. A release failure after a successful
+commit is logged as an infrastructure warning and does not reverse the accepted
+snapshot; a failure before commit preserves the original exception and rolls the
+whole transaction back before lock release.
 
 Stable SHA-256 content IDs and the unique memory-link triple make re-execution
 safe after a worker crash. When content whose base UID is `SUPERSEDED` or
@@ -438,14 +448,21 @@ backfill, Binlog replay, source collision handling, or `data_sync` persistence.
 
 ```python
 await DataSyncRepository(session).upsert_desired(desired_tables) -> None
-MySQLDatabase.advisory_locks(names, timeout_seconds=10) -> AsyncIterator[None]
-generation_lock_name(dw_database, target_table) -> str
-await DWSchemaSynchronizer(session, database="dw").synchronize(
-    desired,
-    check_authority=authority_callback,
+await DataSyncService.dispatch_once() -> int
+await SyncTaskPort.record_capture(task, captured) -> None
+await MaterializationPort.synchronize_schema(task) -> None
+await MaterializationPort.reset_generation(task, coordinate, limit=100) -> None
+await MaterializationPort.apply_backfill_batch(
+    task,
+    rows,
+    delay_seconds=1,
 ) -> None
-await apply_backfill_batch(session, task, rows, dw_database="dw")
-await apply_buffered_event(session, task, event, dw_database="dw") -> None
+await MaterializationPort.apply_replay_event(
+    task,
+    event,
+    cleanup_limit=100,
+) -> None
+await ValueProjectionParticipant.prepare(table_ref) -> PreparedValueProjection
 ```
 
 ### 3. Contracts
@@ -453,6 +470,15 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 - `meta` stores definitions, `dw` stores business rows, and `data_sync` stores
   only tasks, leases, retries, Binlog coordinates/events, backfill cursors, and
   `(target_table, primary_key) -> source` ownership.
+- `DataSyncService.dispatch_once()` is the application seam and claims at most
+  one task. The application imports only Data Sync values and abstract ports;
+  it never opens a Session, constructs a repository, exposes a source engine, or
+  selects a schema/projection implementation.
+- `MySQLSyncTaskAdapter` owns short claim/read/capture/settle/retry/lease
+  transactions. `MySQLMaterializationAdapter` owns schema, generation reset,
+  backfill, and replay transactions. `MySQLSourceAdapter` hides the source
+  engine and concrete Binlog result type. `data_sync.worker` is the composition
+  root that selects all production adapters.
 - Accepted Meta rows and `data_sync` desired state commit in the same managed
   MySQL Session. DDL Job success does not wait for DW work.
 - A task identity is unique by source, source schema/table, and target table;
@@ -507,6 +533,13 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
   separate. When a streaming capture persists new events, the same transaction
   advances the captured coordinate and changes the task to `replaying`, so
   readiness can never observe a committed backlog with a streaming phase.
+- Every backfill/reset/replay call receives a transaction-bound
+  `ValueProjectionParticipant`. The production participant is created with the
+  exact caller-owned Session, so projection preparation, DW DML, key ownership,
+  cursor/event/coordinate state, frequency deltas, and refresh desired state
+  commit or roll back together. Low-level Data Sync materialization code depends
+  only on the Meta Projection application input and never constructs its MySQL
+  adapter.
 - The first source to write a target primary key owns it permanently, including
   after DELETE. Another source conflicts before DW DML and cannot advance the
   event. Historical backfill claims and verifies a whole bounded batch of key
@@ -561,6 +594,8 @@ await apply_buffered_event(session, task, event, dw_database="dw") -> None
 
 ```powershell
 uv run pytest tests/unit/data_sync
+uv run pytest tests/unit/data_sync/application
+uv run pytest tests/unit/data_sync/adapters
 uv run pytest tests/integration/data_sync
 uv run pytest tests/integration/answer_readiness
 ```
@@ -576,17 +611,27 @@ DELETE. A live MySQL ROW/FULL integration test must carry both null forms throug
 capture, durable event storage, replay, and DW assertions using `IS NULL` and
 `JSON_TYPE`.
 
+Application tests enter only through `dispatch_once()` with in-memory task,
+source, materialization, and lease adapters. They assert durable phases,
+coordinates, event/backfill outcomes, retry classification, and delay values;
+they do not call `_process`, `_capture`, `_retry`, `_reschedule`, or other
+private lifecycle helpers. MySQL adapter tests separately pin Session atomicity,
+generation-lock lifetime, projection participation, and cancellation cleanup.
+
 ### 7. Wrong vs Correct
 
 ```python
-# Wrong: a separate commit can publish Meta without recoverable desired state.
-await metadata_repository.synchronize(snapshot)
-await data_sync_repository.upsert_desired(desired)
-
-# Correct: one accepted-snapshot transaction owns both writes.
+# Wrong: application orchestration creates infrastructure and projection adapters.
 async with MySQLDatabase.session() as session:
-    await MetadataRepository(session).synchronize(...)
-    await DataSyncRepository(session).upsert_desired(desired)
+    await apply_buffered_event(session, task, event, dw_database="dw")
+
+# Correct: the composition root selects adapters; callers learn one interface.
+runtime = build_data_sync_runtime(
+    sources,
+    settings,
+    projection_factory=MySQLValueProjectionParticipant,
+)
+await runtime.service.dispatch_once()
 ```
 
 ```python
@@ -706,7 +751,7 @@ The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
 
 ### 6. Tests Required
 
-- Run `docker compose -f docs/docker/docker-compose.yml config` and assert that
+- Run `docker compose -f ../docs/docker/docker-compose.yml config` and assert that
   both `/var/lib/mysql` and the read-only `/docker-entrypoint-initdb.d` mount
   are present.
 - Assert application grants target `'data_agent'@'%'`; the replica account has

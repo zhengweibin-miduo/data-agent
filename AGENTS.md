@@ -34,6 +34,14 @@ Codex GitHub Review、Trellis 检查代理及其他 AI 代码审查必须读取�
 
 Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/workflow.md` 为项目工作流来源；Skill 提供 Git 与 PR 操作的安全边界和通用执行规则。
 
+## 任务启动与需求盘问组合技能
+
+创建 Trellis 任务并进入规划后，必须先使用项目级 `trellis-brainstorm` Skill：`.agents/skills/trellis-brainstorm/SKILL.md`，基于代码、测试、配置、文档、现有规范和任务历史补齐可由仓库回答的事实，并把已确认目标、约束、验收标准和仍未解决的产品决策写入 `prd.md`。
+
+完成上述证据勘察后，再判断是否需要组合使用 grill-me 对应的项目级 `grilling` Skill：`.agents/skills/grilling/SKILL.md`。仅当仍存在会实质改变任务范围、架构方向、兼容策略、风险承受或交付取舍的用户决策，或者用户明确要求压力测试方案时触发；意图已经明确、仓库证据能够回答、实现路径单一或属于简单可逆任务时跳过，不得为了使用 Skill 而机械盘问。
+
+触发 `grilling` 时，必须一次只询问一个决策并提供推荐答案，等待用户逐项确认；可从环境和仓库查证的事实不得询问用户。在双方明确确认已达成共同理解前，不得启动实现。未触发 `grilling` 时，仍须完成 `trellis-brainstorm` 的 PRD 收敛和 Trellis 实现启动审批；本组合不替代任务创建授权、`task.py start` 或其他阶段门禁。
+
 ## 测试开发与完成验证组合技能
 
 测试优先的新功能、bug 修复或测试重构使用项目级 [`tdd`](./.agents/skills/tdd/SKILL.md) Skill。写测试前先确认要覆盖的公共 seam；围绕可观察行为按纵向小切片推进，避免测试实现细节、mock 内部协作者或无价值扩张，也不要求为每个内部函数机械增加测试。
@@ -67,11 +75,11 @@ Trellis 已规定任务阶段、提交时机或收尾顺序时，以 `.trellis/w
 
 源码根目录按所有权隔离：
 
-- 根目录 `frontend/` 是前端应用源码、静态资源、构建/部署配置和前端测试的唯一所有者；前端修改必须遵守 `.trellis/spec/frontend/`。
-- `src/data_agent/frontend/` 仅保留只读的迁移期兼容资源，可由 FastAPI 通过显式兼容开关挂载并随 Python 包分发；不得在其中新增或恢复前端业务源码。
-- 除上一条明确保留的只读兼容资源外，`src/data_agent/` 是 Python 后端源码、运行入口和后端业务能力的唯一所有者。
+- 根目录 `frontend/` 是前端应用源码、静态资源、构建/部署配置和前端测试的唯一所有者；前端业务源码直接位于 `frontend/src/`，前端修改必须遵守 `.trellis/spec/frontend/`。
+- 根目录 `backend/` 是 Python 后端源码、运行入口、测试、配置和构建元数据的唯一所有者；后端业务源码直接位于 `backend/src/`，不得创建 `backend/src/data_agent/`、替代 umbrella namespace 或兼容 shim。
+- 后端不得携带、挂载或打包前端资源；FastAPI 只提供 API、OpenAPI 与健康检查。
 - `contracts/` 为可选目录，仅在需要时承载技术中立的 OpenAPI、JSON Schema 等契约源或生成配置，不得承载前端或后端业务源码。
-- 前端不得直接导入 `src/data_agent/` 中的 Python 源码、ORM 模型或内部 DTO；后端不得依赖 `frontend/` 的组件、状态模型或构建产物表达业务行为。跨端交互只能通过 HTTP、SSE 等运行时协议及显式契约完成。
+- 前端不得直接导入 `backend/src/` 中的 Python 源码、ORM 模型或内部 DTO；后端不得依赖 `frontend/` 的组件、状态模型或构建产物表达业务行为。跨端交互只能通过 HTTP、SSE 等运行时协议及显式契约完成。
 - 每项跨端契约必须有唯一的权威来源、明确的所有者和单向生成规则；生成客户端或生成类型不得反向成为领域模型的权威来源。
 
 后端保持模块化单体并按 bounded context 组织业务能力，采用渐进式 DDD 与 Ports and Adapters：新建或实质重构的业务模块中，`domain` 负责实体、值对象、聚合、领域规则和领域事件，不依赖 FastAPI、SQLAlchemy、Redis、外部 SDK 或配置加载；`application` 负责用例编排、事务边界以及 driving/driven ports 的定义，只依赖领域模型和抽象端口；`adapters` 实现输入或输出端口，负责 HTTP/SSE、持久化、消息、搜索和外部服务之间的转换，不承载领域规则；`infrastructure` 只提供数据库连接、客户端、框架配置等低层驱动与资源，不定义用例或领域规则；组合根只在应用启动位置选择具体适配器和基础设施资源并完成依赖注入。内层不得导入外层，领域层与应用层不得依赖 `adapters` 或 `infrastructure`；外层通过应用端口进入内层。不同 bounded context 默认不直接共享实体或 ORM 模型，通过标识符、领域事件或防腐层协作；确需 Shared Kernel 时必须范围极小、双方共同维护并记录决策。现有模块按实际改动渐进迁移，不要求一次性重排目录或创建空层。

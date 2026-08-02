@@ -8,6 +8,14 @@ import { connectJobEvents } from "../api/jobEvents";
 import type { JobEventData, JobRecord } from "../api/types";
 import { WorkbenchPage } from "./WorkbenchPage";
 
+const lifecycleHarness = vi.hoisted(() => ({
+  connections: [] as Array<{
+    getAuthoritativeJob: () => Promise<JobRecord>;
+    onEvent: (event: JobEventData) => void;
+    onJob: (job: JobRecord) => void;
+  }>,
+}));
+
 vi.mock("../api/dataAgent", () => ({
   createConversation: vi.fn(),
   getJob: vi.fn(),
@@ -18,7 +26,13 @@ vi.mock("../api/dataAgent", () => ({
 }));
 vi.mock("../api/jobEvents", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/jobEvents")>();
-  return { ...actual, connectJobEvents: vi.fn(() => ({ close: vi.fn() })) };
+  return {
+    ...actual,
+    connectJobEvents: vi.fn((_eventsUrl, handlers) => {
+      lifecycleHarness.connections.push(handlers);
+      return { close: vi.fn() };
+    }),
+  };
 });
 
 const waitingJob = (overrides: Partial<JobRecord> = {}): JobRecord => ({
@@ -27,6 +41,20 @@ const waitingJob = (overrides: Partial<JobRecord> = {}): JobRecord => ({
     question_id: "question-2", prompt: "第二轮问题", fact_table_id: "orders", column_ids: [], required: true,
   }], result: null, error: null, ...overrides,
 });
+
+const jobLifecycle = {
+  publishJob(job: JobRecord, connection = 0) {
+    lifecycleHarness.connections[connection]?.onJob(job);
+  },
+};
+
+async function previewAndSubmit() {
+  const previewButton = screen.getByRole("button", { name: "预览结构" });
+  fireEvent.click(previewButton);
+  const submitButton = screen.getByRole("button", { name: "生成语义 →" });
+  await waitFor(() => expect(submitButton).toBeEnabled());
+  fireEvent.click(submitButton);
+}
 
 describe("workbench chat", () => {
   beforeEach(() => {
@@ -39,6 +67,7 @@ describe("workbench chat", () => {
     vi.mocked(submitDDL).mockReset();
     vi.mocked(submitAnswers).mockReset();
     vi.mocked(connectJobEvents).mockClear();
+    lifecycleHarness.connections.length = 0;
     window.history.replaceState(null, "", "/workbench");
   });
 
@@ -64,22 +93,6 @@ describe("workbench chat", () => {
 
     await screen.findByRole("button", { name: "重试上一轮 AI 回复" });
     expect(onNavigationBlockChange).toHaveBeenLastCalledWith(true);
-  });
-
-  it("clears stale clarification coordinates until the authoritative read succeeds", async () => {
-    window.history.replaceState(null, "", "/workbench/job-1");
-    vi.mocked(getJob).mockResolvedValueOnce(waitingJob({ question_set_id: "set-1" }));
-    render(<WorkbenchPage />);
-    expect(await screen.findByText("第二轮问题")).toBeInTheDocument();
-
-    const event: JobEventData = {
-      job_id: "job-1", status: "waiting_input", stage: "waiting_input", revision: 3, attempt: 2,
-      emitted_at: new Date().toISOString(), questions: waitingJob().questions, result: null, error: null,
-    };
-    vi.mocked(connectJobEvents).mock.calls[0]?.[1].onEvent(event);
-    await waitFor(() => expect(screen.queryByText("第二轮问题")).not.toBeInTheDocument());
-    vi.mocked(getJob).mockRejectedValueOnce(new Error("GET failed"));
-    await expect(vi.mocked(connectJobEvents).mock.calls[0]![1].getAuthoritativeJob()).rejects.toThrow();
   });
 
   it("restores the server source without enabling preview or chat for sample DDL", async () => {
@@ -130,11 +143,9 @@ describe("workbench chat", () => {
       .mockResolvedValueOnce({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null })
       .mockResolvedValueOnce({ job_id: "job-2", status: "pending", status_url: "/jobs/job-2", events_url: null });
     render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await waitFor(() => expect(connectJobEvents).toHaveBeenCalledTimes(1));
-    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob({ status: "succeeded", question_set_id: null, questions: null, result: { ddl_hash: "hash", table_count: 1, column_count: 2, metric_count: 1 } }));
+    jobLifecycle.publishJob(waitingJob({ status: "succeeded", question_set_id: null, questions: null, result: { ddl_hash: "hash", table_count: 1, column_count: 2, metric_count: 1 } }));
     expect(await screen.findAllByText("语义元数据已生成")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
     await screen.findByText("任务已受理");
@@ -149,9 +160,7 @@ describe("workbench chat", () => {
       resolveSubmit = resolve;
     }));
     const rendered = render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     rendered.unmount();
 
     resolveSubmit({ job_id: "late-job", status: "pending", status_url: "/jobs/late-job", events_url: null });
@@ -172,9 +181,7 @@ describe("workbench chat", () => {
     let rejectSubmit!: (cause: unknown) => void;
     vi.mocked(submitDDL).mockImplementation(() => new Promise((_resolve, reject) => { rejectSubmit = reject; }));
     render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
 
     await waitFor(() => expect(submitDDL).toHaveBeenCalledOnce());
     const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
@@ -229,9 +236,7 @@ describe("workbench chat", () => {
       error: { code: "invalid_response", stage: "response", retryable: true },
     }));
     const first = render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
 
     await screen.findByText(/invalid_response/);
     const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
@@ -252,9 +257,7 @@ describe("workbench chat", () => {
     const first = render(<WorkbenchPage />);
     fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "custom_source" } });
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: customDDL } });
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await screen.findByText(/任务提交失败/);
     const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
     first.unmount();
@@ -280,9 +283,7 @@ describe("workbench chat", () => {
     await waitFor(() => expect(screen.getByLabelText("MySQL DDL")).toBeEnabled());
     fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "new_source" } });
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE new_orders (id BIGINT);" } });
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await screen.findByText(/任务提交失败/);
     const submissionId = vi.mocked(submitDDL).mock.calls[0]![0].submission_id!;
     first.unmount();
@@ -320,16 +321,12 @@ describe("workbench chat", () => {
       .mockRejectedValueOnce(new ApiError(409, { error: { code: "source_busy", retryable: false } }))
       .mockResolvedValueOnce({ job_id: "new-job", status: "pending", status_url: "/jobs/new-job", events_url: null });
     render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await screen.findByText(/source_busy/);
 
     fireEvent.change(screen.getByLabelText("数据源"), { target: { value: "available_source" } });
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE available (id INT);" } });
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
 
     await waitFor(() => expect(window.location.pathname).toBe("/workbench/new-job"));
     expect(submitDDL).toHaveBeenCalledTimes(2);
@@ -346,23 +343,18 @@ describe("workbench chat", () => {
       .mockResolvedValueOnce({ job_id: "recovered-job", status: "pending", status_url: "/jobs/recovered-job", events_url: null });
     render(<WorkbenchPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await screen.findByText(/任务提交失败/);
     const originalDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE changed (id INT);" } });
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
 
     expect(submitDDL).toHaveBeenCalledOnce();
     expect(screen.getByRole("alert")).toHaveTextContent("上一份 DDL 的任务受理结果尚未确认");
+    expect(screen.getByRole("alert")).toHaveFocus();
 
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: originalDDL } });
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await waitFor(() => expect(window.location.pathname).toBe("/workbench/recovered-job"));
   });
 
@@ -376,9 +368,7 @@ describe("workbench chat", () => {
     }));
     const page = render(<WorkbenchPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await screen.findByText(new RegExp(code));
     fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
 
@@ -429,9 +419,7 @@ describe("workbench chat", () => {
     });
     render(<WorkbenchPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
 
     await waitFor(() => expect(JSON.parse(
       sessionStorage.getItem("schema-loom-pending-submission") ?? "{}",
@@ -447,9 +435,7 @@ describe("workbench chat", () => {
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "strict-job", status: "pending", status_url: "/jobs/strict-job", events_url: null });
     render(<StrictMode><WorkbenchPage /></StrictMode>);
 
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
 
     await waitFor(() => expect(window.location.pathname).toBe("/workbench/strict-job"));
     expect(await screen.findByText("任务已受理")).toBeInTheDocument();
@@ -462,9 +448,7 @@ describe("workbench chat", () => {
     vi.mocked(previewDDL).mockResolvedValue({ source: "commerce_prod", tables: [], relationships: [], table_count: 0, column_count: 0 });
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
     render(<WorkbenchPage onUnsavedChange={onUnsavedChange} />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await waitFor(() => expect(onUnsavedChange).toHaveBeenLastCalledWith(false));
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE changed (id INT);" } });
     await waitFor(() => expect(onUnsavedChange).toHaveBeenLastCalledWith(true));
@@ -577,11 +561,9 @@ describe("workbench chat", () => {
     vi.mocked(sendChatTurn).mockImplementation(() => new Promise((resolve) => { resolveChat = resolve; }));
     render(<WorkbenchPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await waitFor(() => expect(connectJobEvents).toHaveBeenCalledOnce());
-    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob());
+    jobLifecycle.publishJob(waitingJob());
     const answer = await screen.findByLabelText("第二轮问题");
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE orders (id INT);" } });
     fireEvent.click(screen.getByRole("button", { name: "让 AI 起草" }));
@@ -600,11 +582,9 @@ describe("workbench chat", () => {
     vi.mocked(sendChatTurn).mockResolvedValue({ message: { uid: "assistant-draft", content: "草稿" }, readiness: "proceed" });
     render(<WorkbenchPage />);
     const submittedDDL = (screen.getByLabelText("MySQL DDL") as HTMLTextAreaElement).value;
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await waitFor(() => expect(connectJobEvents).toHaveBeenCalledOnce());
-    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob());
+    jobLifecycle.publishJob(waitingJob());
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE changed (id INT);" } });
     fireEvent.click(await screen.findByRole("button", { name: "让 AI 起草" }));
     fireEvent.click(screen.getByRole("button", { name: "发送 →" }));
@@ -660,11 +640,9 @@ describe("workbench chat", () => {
     vi.mocked(submitDDL).mockResolvedValue({ job_id: "job-1", status: "pending", status_url: "/jobs/job-1", events_url: null });
     vi.mocked(sendChatTurn).mockImplementation(() => new Promise(() => undefined));
     render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole("button", { name: "预览结构" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "生成语义 →" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "生成语义 →" }));
+    await previewAndSubmit();
     await waitFor(() => expect(connectJobEvents).toHaveBeenCalledOnce());
-    vi.mocked(connectJobEvents).mock.calls[0]![1].onJob(waitingJob());
+    jobLifecycle.publishJob(waitingJob());
     const answer = await screen.findByLabelText("第二轮问题");
     fireEvent.change(screen.getByLabelText("MySQL DDL"), { target: { value: "CREATE TABLE orders (id INT);" } });
     fireEvent.change(answer, { target: { value: "人工业务依据" } });

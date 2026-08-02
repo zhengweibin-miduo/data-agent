@@ -2,20 +2,21 @@
 
 ## Current Scope
 
-This repository is a backend-only installable Python application. Runtime code
-lives under `src/data_agent/` and is organized by business feature first.
+The installable Python application is independently owned by `backend/`.
+Runtime code lives directly under `backend/src/` and is organized by business
+feature first; there is no `data_agent` package or replacement umbrella namespace.
 Shared Pydantic contracts live under `models`, long-term memory is a root
 business module used by both DDL metadata and Conversation, and shared
-external-resource lifecycles live under `infrastructure`. DDL metadata retains
-only its transport, job orchestration, Meta snapshot persistence, workflow,
-and worker entry points.
+external-resource lifecycles live under `infrastructure`. DDL metadata owns its
+transport, job orchestration, accepted Meta Snapshot publication, rebuildable
+Meta Projection, workflow, and worker entry points.
 
 ## Directory Layout
 
 ```text
-src/data_agent/
+backend/src/
 ├── application.py
-├── logging.py
+├── app_logging.py
 ├── main.py
 ├── settings.py
 ├── errors.py
@@ -29,7 +30,15 @@ src/data_agent/
 ├── persistence/
 │   └── schema.py
 ├── memory/
+│   ├── adapters/
+│   │   ├── composition.py
+│   │   ├── mysql.py
+│   │   ├── projection_indexes.py
+│   │   └── search_indexes.py
 │   ├── application/
+│   │   ├── contracts.py
+│   │   ├── index_dispatcher.py
+│   │   ├── maintenance.py
 │   │   ├── search.py
 │   │   └── service.py
 │   ├── domain/
@@ -39,7 +48,6 @@ src/data_agent/
 │   │   ├── policies.py
 │   │   └── ranking.py
 │   ├── indexing/
-│   │   ├── dispatcher.py
 │   │   ├── elasticsearch.py
 │   │   ├── qdrant.py
 │   │   └── rebuilder.py
@@ -57,26 +65,46 @@ src/data_agent/
 │   └── tei_embeddings.py
 ├── conversation/
 │   ├── api.py
-│   ├── extraction.py
+│   ├── application/
+│   │   ├── contracts.py
+│   │   ├── extraction.py
+│   │   └── service.py
+│   ├── adapters/
+│   │   ├── extraction_model.py
+│   │   ├── long_term_memory.py
+│   │   └── mysql/
+│   │       ├── extraction.py
+│   │       ├── store.py
+│   │       └── user_data.py
 │   ├── models.py
 │   ├── mysql_tables.py
-│   ├── repository.py
-│   └── service.py
+│   └── repository.py
 ├── answer_readiness/
 │   ├── classifier.py
 │   ├── models.py
 │   ├── service.py
 │   └── tool.py
 ├── data_sync/
+│   ├── application/
+│   │   ├── contracts.py
+│   │   └── service.py
+│   ├── adapters/
+│   │   ├── composition.py
+│   │   ├── mysql.py
+│   │   └── source.py
 │   ├── backfill.py
 │   ├── binlog.py
 │   ├── models.py
 │   ├── repository.py
 │   ├── schema_sync.py
-│   ├── service.py
 │   ├── tables.py
 │   └── worker.py
 └── ddl_metadata/
+    ├── application/
+    │   └── accepted_snapshot.py
+    ├── adapters/
+    │   └── mysql/
+    │       └── accepted_snapshot.py
     ├── api/
     │   ├── job_events.py
     │   ├── jobs.py
@@ -97,7 +125,11 @@ src/data_agent/
     ├── persistence/
     │   ├── memory_references.py
     │   ├── metadata_repository.py
-    │   ├── snapshots.py
+    │   └── tables.py
+    ├── meta_projection/
+    │   ├── application/
+    │   ├── adapters/
+    │   ├── domain.py
     │   └── tables.py
     ├── workflow/
     │   ├── contracts.py
@@ -116,32 +148,40 @@ src/data_agent/
     └── validation.py
 ```
 
-Tests mirror deterministic package boundaries under `tests/unit/`; integration
-tests remain scenario-oriented under `tests/integration/`. Configuration stays
-under `conf/`, while local service definitions and SQL bootstrap assets stay
-under `docs/docker/`.
+Tests mirror deterministic package boundaries under `backend/tests/unit/`;
+integration tests remain scenario-oriented under `backend/tests/integration/`.
+Configuration stays under `backend/conf/`, while local service definitions and
+SQL bootstrap assets stay under the repository-owned `docs/docker/`.
 
 ## Ownership
 
-- `data_agent.application` is the FastAPI composition root and lifecycle owner.
-- `data_agent.conversation` owns permanent text conversations, turn
+- `application` is the FastAPI composition root and lifecycle owner.
+- `conversation` owns permanent text conversations, turn
   idempotency, bounded context, and the leased conversation-memory extraction
   outbox. It reuses the authoritative memory package instead of defining a
   second memory stack.
-- `data_agent.answer_readiness` owns typed question-dependency classification,
+- `answer_readiness` owns typed question-dependency classification,
   the bounded readiness tool, and deterministic answer gating. It is reusable
   internal code and does not own an HTTP or Conversation entrypoint.
-- `data_agent.data_sync` owns desired-state CDC tasks, DW schema/backfill/event
+- `data_sync` owns desired-state CDC tasks, DW schema/backfill/event
   application, source adapters, and its dedicated process.
-- `data_agent.models` owns Pydantic contracts shared across HTTP, workflow,
+  `data_sync.application.service.DataSyncService.dispatch_once()` is the deep
+  application interface. `application.contracts` owns technology-neutral task,
+  source, materialization, and lease interfaces; it does not import SQLAlchemy,
+  global settings, concrete repositories, source clients, schema synchronizers,
+  or projection adapters. `data_sync.adapters` owns MySQL Sessions, repository
+  construction, source engines, generation/schema locks, DW transactions, and
+  production composition. `data_sync.worker` is the composition root that
+  selects the concrete Meta Projection transaction participant.
+- `models` owns Pydantic contracts shared across HTTP, workflow,
   persistence, Conversation, and long-term memory.
-- `data_agent.memory` owns deterministic memory rules, application use cases,
+- `memory` owns deterministic memory rules, application use cases,
   authoritative MySQL persistence, and rebuildable index adapters.
-- `data_agent.persistence.schema.metadata` is the single SQLAlchemy `MetaData`
+- `persistence.schema.metadata` is the single SQLAlchemy `MetaData`
   shared by Conversation, Meta snapshot, and memory tables.
-- `data_agent.errors` and `data_agent.identifiers` own stable cross-feature
+- `errors` and `identifiers` own stable cross-feature
   business errors and identifiers.
-- `data_agent.infrastructure` owns one explicit external-resource lifecycle per
+- `infrastructure` owns one explicit external-resource lifecycle per
   module. It does not own feature orchestration.
 - `ddl_metadata.api` owns HTTP request/response mapping. Job and memory routes
   are separate owners, `api.job_events` owns SSE framing/generation, and
@@ -152,28 +192,41 @@ under `docs/docker/`.
 - `memory.domain` contains deterministic transformations only. It
   must not import FastAPI, arq, initialized clients, SQLAlchemy sessions, Redis,
   Elasticsearch, Qdrant, or TEI.
-- `memory.application` owns memory use cases and transaction boundaries. It
-  composes domain behavior, MySQL repositories, index adapters, and injected
-  DDL lease/reference interfaces without importing the DDL package or defining
-  SQL and external payload formats.
+- `memory.application` owns memory use cases and explicit ports. It depends on
+  domain values and stable contracts only; it does not import MySQL repositories,
+  SQLAlchemy, infrastructure clients, external SDKs, or global settings.
+- `memory.adapters` implements the MySQL, search-index, projection-index, and
+  composition roles. MySQL adapters own short use-case transactions; the API and
+  worker composition roots inject initialized external clients and explicit
+  budgets into long-lived application instances.
 - `memory.mysql.MemoryRepository` owns authoritative records,
   history, links, browser mutations, and exact reads.
   `MemoryIndexOutboxRepository` separately owns desired index state, claims,
   retries, acknowledgements, projections, and rebuild scans. Both receive the
   caller's `AsyncSession` so record-plus-outbox writes remain atomic.
-- `memory.indexing` owns Elasticsearch/Qdrant adapters and the
-  dispatcher/rebuilder use cases for derived projections.
-- `ddl_metadata.persistence` owns the Meta snapshot tables/repository and the
-  accepted-snapshot transaction that composes Meta with root memory persistence.
-  Its memory-reference adapter validates DDL-specific table, column, and metric
+- `memory.indexing` owns the concrete Elasticsearch/Qdrant implementations and
+  rebuild orchestration for derived projections. Dispatch orchestration belongs
+  to `memory.application.index_dispatcher`; outer adapters inject the concrete
+  projection targets.
+- `ddl_metadata.persistence` owns the Meta snapshot tables/repository. Its
+  memory-reference adapter validates DDL-specific table, column, and metric
   references for root memory use cases.
+- `ddl_metadata.application.accepted_snapshot` owns the immutable accepted
+  snapshot command and publication interface. The
+  `ddl_metadata.adapters.mysql.accepted_snapshot` integration adapter owns the
+  generation-lock-protected single transaction that atomically composes Meta,
+  root memory, Data Sync desired state, and Meta Projection outbox work.
+- `ddl_metadata.meta_projection` owns the rebuildable semantic and value search
+  representation of an accepted Meta Snapshot. Its domain/application modules
+  do not import SQLAlchemy, global settings, external SDKs, or Data Sync
+  persistence implementations; adapters own MySQL and remote-index details.
 - `ddl_metadata.workflow.state` and `.contracts` are importable without graph
   construction; `.nodes` owns dependency-bound node behavior, `.routing` owns
   pure conditional routing, and `.graph` only registers and compiles topology.
 - `ddl_metadata.worker.job_runner` owns one DDL execution/recovery unit,
   `.maintenance` owns scheduled jobs, `.lifecycle` owns resources and graph
   composition, and `.settings.WorkerSettings` is the only arq discovery class.
-- Models, parsing, validation, identifiers, errors, settings, logging, and root
+- Models, parsing, validation, identifiers, errors, settings, `app_logging`, and root
   composition remain cohesive. File size alone is not a reason to split them.
 
 ## Dependency Direction
@@ -185,6 +238,17 @@ main/application
 
 future answer caller
   -> answer_readiness -> data_sync/repository + infrastructure/llm_client
+
+data_sync/worker
+  -> data_sync/adapters/composition + source clients
+  -> ddl_metadata/meta_projection/adapters (composition only)
+
+data_sync/application
+  -> data_sync/models + application/contracts
+
+data_sync/adapters
+  -> data_sync/application + repository/backfill/schema_sync/binlog
+  -> infrastructure/mysql + Meta Projection application input
 
 worker/settings
   -> worker/job_runner + worker/maintenance + worker/lifecycle
@@ -199,14 +263,24 @@ workflow/nodes
   -> memory/domain + parsing + validation + models
 
 memory/application
-  -> memory/domain + memory/mysql + memory/indexing
+  -> memory/domain + models
+
+memory/adapters
+  -> memory/application + memory/mysql + memory/indexing + infrastructure
+
+conversation/application
+  -> conversation/models + memory/domain values + models
+
+conversation/adapters
+  -> conversation/application + conversation/repository + memory/application
+     + memory/mysql + infrastructure
 
 jobs/store
   -> jobs/redis
 ```
 
 Conversation depends on root `models`, `memory`, `persistence`, `errors`, and
-`identifiers`; it must not import `data_agent.ddl_metadata`. Technology-specific
+`identifiers`; it must not import `ddl_metadata`. Technology-specific
 packages may depend on typed models, settings, and shared
 infrastructure clients, but deterministic domain modules never depend on
 technology-specific packages. API, worker, workflow, and memory consumers use
@@ -251,15 +325,20 @@ configuration, and current specs; archived Trellis artifacts remain historical.
 - `MemoryMutationLeaseProvider` and `MemoryReferenceValidator` are application
   protocols. DDL-specific implementations are injected at the composition
   root.
-- `data_agent.persistence.schema.metadata` is the only shared SQLAlchemy
+- `persistence.schema.metadata` is the only shared SQLAlchemy
   `MetaData` instance used by Conversation, Meta snapshot, and memory tables.
 
 ### 3. Contracts
 
-- `data_agent.memory` may depend on root models, identifiers, errors,
-  persistence, settings outside the domain layer, and infrastructure adapters.
-- `data_agent.memory` and `data_agent.conversation` must not import
-  `data_agent.ddl_metadata`.
+- `memory.application` may depend on root models, identifiers, errors,
+  and memory domain values. Concrete persistence, settings, and infrastructure
+  dependencies remain in `memory.adapters` or composition roots.
+- `conversation.application` collaborates with Long-term Memory only
+  through its application interface. The two intentional atomic cross-context
+  transactions live in outer MySQL integration adapters for user-data erasure and
+  extraction completion.
+- `memory` and `conversation` must not import
+  `ddl_metadata`.
 - DDL-specific snapshot context and reference validation remain in
   `ddl_metadata.workflow` and `ddl_metadata.persistence`.
 - Package moves are hard migrations; active code and current specs receive no
@@ -299,7 +378,7 @@ configuration, and current specs; archived Trellis artifacts remain historical.
 #### Wrong
 
 ```python
-from data_agent.ddl_metadata.persistence.memory_references import (
+from ddl_metadata.persistence.memory_references import (
     MetadataMemoryReferenceValidator,
 )
 

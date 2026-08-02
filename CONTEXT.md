@@ -27,3 +27,7 @@ _Avoid_: Memory snapshot, index snapshot
 **Memory Projection**:
 A rebuildable search representation of an authoritative Long-term Memory.
 _Avoid_: Memory record, source of truth
+
+**Meta Projection**:
+A rebuildable search representation of an accepted Meta Snapshot, including semantic objects and bounded value candidates.
+_Avoid_: Metadata index, source of truth

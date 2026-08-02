@@ -1,0 +1,29 @@
+{
+  "id": "meta-projection-boundary",
+  "name": "meta-projection-boundary",
+  "title": "重构 Accepted Snapshot 与 Meta Projection 边界",
+  "description": "落实 DDL Metadata 对 Meta Projection 的所有权，重塑 accepted snapshot publication seam，并替换对应测试。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-02",
+  "completedAt": "2026-08-02",
+  "branch": "refactor/meta-projection-boundary-20260802",
+  "base_branch": "refactor/align-project-structure-tests-20260802",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-02-meta-projection-boundary",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-02-align-project-structure-tests",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

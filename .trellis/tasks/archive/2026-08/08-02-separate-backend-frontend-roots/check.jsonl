@@ -1,0 +1,6 @@
+{"file":"code_review.md","reason":"独立检查只报告经过核验的 P0/P1"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"复核后端 source root、import 和内外层依赖"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"复核 wheel、CLI、配置、静态检查和 pytest 门禁"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"复核 backend 不再拥有 legacy frontend"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"复核独立前端 npm 门禁"}
+{"file":".trellis/tasks/08-02-separate-backend-frontend-roots/research/current-layout-impact.md","reason":"复核所有已知迁移引用和外部标识排除项"}

@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Defines backend ownership, layer placement, and allowed dependency direction for the hard package move."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Defines single-session atomicity, lock duration, outbox, lease, and resumable value-refresh contracts."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Defines Elasticsearch, Qdrant, TEI timeout, mapping, retry, and projection adapter requirements."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines infrastructure exception propagation and retry, defer, dead-letter, and cancellation behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Defines typing, test, and verification requirements for changed backend modules."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Provides the repository cross-layer data-flow checklist used while moving composition and persistence seams."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/architecture-combination-review.md","reason":"Records the parent architecture evidence and DDD compliance findings that scope this child."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/ddl-request-flow.md","reason":"Records the accepted DDL request and snapshot publication flow with file and symbol evidence."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/sync-index-flow.md","reason":"Records the Data Sync and Meta Projection cycle, refresh state machine, and runtime flow."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/test-seam-map.md","reason":"Records the approved public seams and implementation-coupled tests to replace."}
