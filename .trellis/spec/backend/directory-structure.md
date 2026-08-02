@@ -47,7 +47,6 @@ src/data_agent/
 │   │   ├── policies.py
 │   │   └── ranking.py
 │   ├── indexing/
-│   │   ├── dispatcher.py
 │   │   ├── elasticsearch.py
 │   │   ├── qdrant.py
 │   │   └── rebuilder.py
@@ -97,7 +96,6 @@ src/data_agent/
 │   ├── models.py
 │   ├── repository.py
 │   ├── schema_sync.py
-│   ├── service.py
 │   ├── tables.py
 │   └── worker.py
 └── ddl_metadata/
@@ -205,8 +203,10 @@ under `docs/docker/`.
   `MemoryIndexOutboxRepository` separately owns desired index state, claims,
   retries, acknowledgements, projections, and rebuild scans. Both receive the
   caller's `AsyncSession` so record-plus-outbox writes remain atomic.
-- `memory.indexing` owns Elasticsearch/Qdrant adapters and the
-  dispatcher/rebuilder use cases for derived projections.
+- `memory.indexing` owns the concrete Elasticsearch/Qdrant implementations and
+  rebuild orchestration for derived projections. Dispatch orchestration belongs
+  to `memory.application.index_dispatcher`; outer adapters inject the concrete
+  projection targets.
 - `ddl_metadata.persistence` owns the Meta snapshot tables/repository. Its
   memory-reference adapter validates DDL-specific table, column, and metric
   references for root memory use cases.

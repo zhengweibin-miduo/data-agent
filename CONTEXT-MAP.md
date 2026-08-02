@@ -12,5 +12,5 @@
 - **DDL Metadata → Long-term Memory**: an accepted Meta Snapshot proposes validated memory candidates through the Long-term Memory application interface; DDL-specific reference validation remains an injected adapter.
 - **DDL Metadata → Data Sync**: an accepted Meta Snapshot publishes desired synchronization state through a Data Sync application port.
 - **Conversation → Long-term Memory**: Conversation recalls and proposes user memories through Long-term Memory application interfaces; it does not use Long-term Memory persistence implementations directly.
-- **Data Sync → DDL Metadata**: Data Sync exposes stable value-read and readiness information through a port or projection event. It does not invoke Meta Projection implementations.
-- **Meta Projection (inside DDL Metadata)**: consumes accepted Meta Snapshot state and stable Data Sync value inputs, while Meta Snapshot remains authoritative and the projection remains rebuildable.
+- **Data Sync → DDL Metadata**: Data Sync materialization participates in value projection through the technology-neutral `ValueProjectionParticipant` application port. Data Sync application and low-level materialization code do not import a Meta Projection adapter; the outer worker composition root selects the DDL Metadata MySQL participant.
+- **Meta Projection (inside DDL Metadata)**: consumes accepted Meta Snapshot state and the stable Data Sync value-input contract, while Meta Snapshot remains authoritative and the projection remains rebuildable.
