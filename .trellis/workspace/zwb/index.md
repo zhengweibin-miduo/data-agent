@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 59
+- **Total Sessions**: 60
 - **Last Active**: 2026-08-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~44 | Active |
+| `journal-2.md` | ~77 | Active |
 | `journal-1.md` | ~1987 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 60 | 2026-08-02 | 补齐项目结构集成 diff 门禁 | `addba92` | `refactor/align-project-structure-tests-20260802` |
 | 59 | 2026-08-02 | 完成项目结构、DDD 边界与测试重构 | `743a895`, `c4f979c`, `2d5c003`, `1b53ccf`, `b86ebb7` | `refactor/align-project-structure-tests-20260802` |
 | 58 | 2026-08-02 | 安装测试指导并收紧测试规范 | `b93f1bb`, `ee2b46b` | `chore/evaluate-tdd-guidance-v2-20260802` |
 | 57 | 2026-08-01 | 制定项目架构与职责边界规则 | `3d00d22` | `docs/project-architecture-rules-20260801` |
