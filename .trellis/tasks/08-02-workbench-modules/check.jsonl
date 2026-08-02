@@ -1,0 +1,8 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check semantic controls, focus, live regions, errors, and keyboard reachability."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Check cleanup, StrictMode, stable callbacks, and state/ref ownership."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check URL/storage/backend authority and all restore/submission/chat invariants."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check typed transports, errors, and SSE projections."}
+{"file":".trellis/spec/frontend/api-deployment-contract.md","reason":"Check build and API/SSE/legacy compatibility."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check full frontend and Python compatibility gates."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/onboarding-frontend-flow.md","reason":"Compare final runtime flow with the original evidence."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/test-seam-map.md","reason":"Verify feature tests replace rather than duplicate adapter mechanisms."}

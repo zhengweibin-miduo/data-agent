@@ -1,0 +1,9 @@
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Defines frontend source ownership and feature/shared boundaries."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Defines semantic DOM, labels, focus, live status, and clarification accessibility."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Defines effect cleanup, StrictMode refs, state/ref ownership, and transport placement."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Defines URL, React, storage, backend authority, restore, submission, and chat invariants."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Defines typed HTTP/SSE boundary and error projection requirements."}
+{"file":".trellis/spec/frontend/api-deployment-contract.md","reason":"Defines API base, SSE, CORS, build, and legacy compatibility contracts."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Defines npm, Vitest, build, and Python frontend verification gates."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/onboarding-frontend-flow.md","reason":"Records Workbench state ownership, HTTP/SSE flow, storage, and deployment evidence."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/test-seam-map.md","reason":"Records approved frontend transport/feature seams and tests to replace."}

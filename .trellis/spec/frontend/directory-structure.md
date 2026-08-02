@@ -27,6 +27,10 @@ health routes by default. The legacy directory is mounted only when
 
 - Put transport code in `frontend/src/api`, page-specific code in its feature
   directory, and application navigation in `App.tsx`.
+- Keep `WorkbenchPage` as the Workbench composition/render entry. Pure submission
+  recovery rules and hooks for job subscription, restore, and chat session state
+  live beside it in `frontend/src/workbench`; each hook owns its effects, refs,
+  cleanup, and stale-continuation guards rather than duplicating them in the page.
 - Components do not concatenate deployment origins; all URLs go through
   `resolveApiUrl` / `apiRequest` or the SSE adapter.
 - Never commit `node_modules`, `dist`, coverage, or `*.tsbuildinfo`.

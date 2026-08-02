@@ -9,64 +9,39 @@ import {
   submitAnswers,
   submitDDL,
 } from "../api/dataAgent";
-import { connectJobEvents, TERMINAL_STATUSES, type JobEventSubscription } from "../api/jobEvents";
-import type { DDLPreview, JobEventData, JobRecord, JobStage, MetricQuestion } from "../api/types";
+import { connectJobEvents, TERMINAL_STATUSES } from "../api/jobEvents";
+import type { DDLPreview, JobRecord } from "../api/types";
 import { LineageCanvas } from "./LineageCanvas";
+import {
+  PENDING_SUBMISSION_KEY,
+  parsePersistedSubmissionAttempt,
+  recoveryCoordinates,
+  resolveSubmissionAttempt,
+  submissionFingerprint,
+  type PersistedSubmissionAttempt,
+  type SubmissionAttempt,
+  workbenchJobIdFromPath,
+  workbenchJobPath,
+} from "./submissionRecovery";
 import { TraceDock } from "./TraceDock";
+import { useChatSession, type WorkbenchOperation } from "./useChatSession";
+import { useJobRestore } from "./useJobRestore";
+import { useJobSubscription } from "./useJobSubscription";
 
 const DEFAULT_DDL = `CREATE TABLE customers (\n  id BIGINT PRIMARY KEY,\n  name VARCHAR(120) NOT NULL\n);\n\nCREATE TABLE orders (\n  id BIGINT PRIMARY KEY,\n  customer_id BIGINT NOT NULL,\n  total DECIMAL(12,2) NOT NULL,\n  FOREIGN KEY (customer_id) REFERENCES customers(id)\n);`;
 const MAX_DDL_BYTES = 262_144;
 const MAX_SOURCE_CHARS = 128;
 const SOURCE_PATTERN = /^[\w.-]+$/;
-const PENDING_SUBMISSION_KEY = "schema-loom-pending-submission";
-const ACCEPTANCE_RECONCILIATION_WINDOW_MS = 120_000;
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-}
-
-interface ChatAttempt {
-  turnUid: string;
-  content: string;
-  draftQuestion: MetricQuestion | null;
-  draftAnswerSnapshot: string | null;
-  ddlContext: { source: string; dialect: "mysql"; ddl: string };
-}
-
-interface SubmissionAttempt {
-  fingerprint: string;
-  submissionId: string;
-  replayable: boolean;
-}
 
 // Keep the acceptance coordinate alive across SPA view unmounts. The DDL itself
 // remains component-owned and is never copied into browser storage.
 let pendingSubmissionAttempt: SubmissionAttempt | null = null;
 
-interface PersistedSubmissionAttempt {
-  submissionId: string;
-  startedAt: number;
-  replayable: boolean;
-}
-
 function readPersistedSubmissionAttempt(): PersistedSubmissionAttempt | null {
   const raw = sessionStorage.getItem(PENDING_SUBMISSION_KEY);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<PersistedSubmissionAttempt>;
-    return typeof parsed.submissionId === "string" && typeof parsed.startedAt === "number"
-      ? {
-        submissionId: parsed.submissionId,
-        startedAt: parsed.startedAt,
-        replayable: typeof parsed.replayable === "boolean" ? parsed.replayable : true,
-      }
-      : null;
-  } catch {
-    sessionStorage.removeItem(PENDING_SUBMISSION_KEY);
-    return null;
-  }
+  const parsed = parsePersistedSubmissionAttempt(raw);
+  if (raw && !parsed) sessionStorage.removeItem(PENDING_SUBMISSION_KEY);
+  return parsed;
 }
 
 function persistSubmissionAttempt(submissionId: string, replayable = true): void {
@@ -87,16 +62,12 @@ const randomId = () => globalThis.crypto?.randomUUID?.()
     return (token === "x" ? value : (value & 0x3) | 0x8).toString(16);
   });
 
-function restoredJobId(): string | null {
-  const match = window.location.pathname.match(/^\/workbench\/([^/]+)$/);
-  return match?.[1] ? decodeURIComponent(match[1]) : null;
+function jobIdFromCurrentPath(): string | null {
+  return workbenchJobIdFromPath(window.location.pathname);
 }
 
-function inferredStage(job: JobRecord): JobStage {
-  if (job.status === "pending") return "queued";
-  if (job.status === "running") return "running";
-  return job.status;
-}
+const jobSubscriptionTransport = { getJob, connect: connectJobEvents };
+const formatJobSubscriptionError = (cause: unknown) => formatApiError(cause, "任务状态更新失败");
 
 interface WorkbenchPageProps {
   onUnsavedChange?: (unsaved: boolean) => void;
@@ -105,41 +76,99 @@ interface WorkbenchPageProps {
 
 export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: WorkbenchPageProps = {}) {
   const persistedSubmission = useRef(readPersistedSubmissionAttempt());
-  const restoredJob = useRef(
-    pendingSubmissionAttempt?.submissionId ?? persistedSubmission.current?.submissionId ?? restoredJobId() ?? null,
-  );
-  const fallbackRestoredJob = useRef(
-    restoredJob.current && restoredJobId() !== restoredJob.current
-      ? restoredJobId()
-      : null,
-  );
+  const recovery = useRef(recoveryCoordinates({
+    inMemorySubmissionId: pendingSubmissionAttempt?.submissionId ?? null,
+    persistedSubmissionId: persistedSubmission.current?.submissionId ?? null,
+    pathJobId: jobIdFromCurrentPath(),
+  }));
+  const restoredJob = useRef(recovery.current.primaryJobId);
+  const fallbackRestoredJob = useRef(recovery.current.fallbackJobId);
   const [source, setSource] = useState(restoredJob.current ? "" : "commerce_prod");
   const [ddl, setDDL] = useState(restoredJob.current ? "" : DEFAULT_DDL);
-  const [restoringJob, setRestoringJob] = useState(Boolean(restoredJob.current));
   const [preview, setPreview] = useState<DDLPreview | null>(null);
   const [previewFingerprint, setPreviewFingerprint] = useState("");
-  const [job, setJob] = useState<JobRecord | null>(null);
-  const [stage, setStage] = useState<JobStage | null>(null);
-  const [reachedStages, setReachedStages] = useState(new Map<JobStage, string>());
-  const [connection, setConnection] = useState("尚未连接事件流");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState<"preview" | "submit" | "answers" | "chat" | null>(null);
+  const [busy, setBusy] = useState<WorkbenchOperation>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [chatInput, setChatInput] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    { id: "welcome", role: "assistant", content: "载入 DDL 后，我可以围绕当前 source、表列和澄清问题协作。" },
-  ]);
-  const [draftQuestion, setDraftQuestion] = useState<MetricQuestion | null>(null);
-  const [failedChat, setFailedChat] = useState<ChatAttempt | null>(null);
   const [submittedFingerprint, setSubmittedFingerprint] = useState<string | null>(null);
-  const subscription = useRef<JobEventSubscription | null>(null);
-  const currentJobId = useRef<string | null>(restoredJob.current);
   const mounted = useRef(true);
   const submitController = useRef<AbortController | null>(null);
-  const submittedDDLContext = useRef<ChatAttempt["ddlContext"] | null>(null);
-  const restoredDraftContext = useRef(false);
+  const {
+    job,
+    stage,
+    reachedStages,
+    connection,
+    error,
+    setConnection,
+    setError,
+    claim: claimJob,
+    isCurrent: isCurrentJob,
+    acceptAuthoritativeJob: acceptJob,
+    watch: watchJob,
+    stop: stopWatchingJob,
+  } = useJobSubscription({
+    transport: jobSubscriptionTransport,
+    formatError: formatJobSubscriptionError,
+  });
+  const clearRecoveryCoordinate = useCallback((jobId: string) => {
+    if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
+    clearPersistedSubmissionAttempt(jobId);
+  }, []);
+  const handleRestoredJob = useCallback((record: JobRecord) => {
+    setSource(record.source);
+    setDDL("");
+    setPreview(null);
+    setPreviewFingerprint("");
+    setSubmittedFingerprint(submissionFingerprint(record.source, ""));
+  }, []);
+  const handleRestoreReleased = useCallback(() => {
+    setSource("commerce_prod");
+    setDDL(DEFAULT_DDL);
+    setSubmittedFingerprint(null);
+  }, []);
+  const { restoringJob, restoredJobId } = useJobRestore({
+    initialJobId: restoredJob.current,
+    fallbackJobId: fallbackRestoredJob.current,
+    persistedSubmission: persistedSubmission.current,
+    getJob,
+    claimJob,
+    isCurrentJob,
+    acceptJob,
+    watchJob,
+    stopWatchingJob,
+    setConnection,
+    setError,
+    clearRecoveryCoordinate,
+    onRestored: handleRestoredJob,
+    onReleased: handleRestoreReleased,
+    formatError: formatApiError,
+  });
+  const {
+    chatInput,
+    setChatInput,
+    chatMessages,
+    failedChat,
+    setAnswer,
+    send: sendChat,
+    retry: retryChat,
+    askToDraft,
+    recordSubmittedDDLContext,
+  } = useChatSession({
+    source,
+    ddl,
+    answers,
+    setAnswers,
+    job,
+    restoredJobId,
+    interactionBusy: busy,
+    setInteractionBusy: setBusy,
+    setError,
+    createConversation,
+    sendChatTurn,
+    formatError: formatApiError,
+    randomId,
+  });
 
-  const inputFingerprint = `${source}\n${ddl}`;
+  const inputFingerprint = submissionFingerprint(source, ddl);
   const ddlBytes = new TextEncoder().encode(ddl).length;
   const sourceValue = source.trim();
   const sourceValid = sourceValue.length > 0
@@ -161,118 +190,12 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     return () => onNavigationBlockChange?.(false);
   }, [busy, failedChat, onNavigationBlockChange]);
 
-  const recordStage = useCallback((next: JobStage, emittedAt = new Date().toISOString()) => {
-    setStage(next);
-    setReachedStages((previous) => new Map(previous).set(next, emittedAt));
-  }, []);
-
-  const acceptJob = useCallback((next: JobRecord) => {
-    if (currentJobId.current && next.job_id !== currentJobId.current) return;
-    setJob(next);
-    recordStage(inferredStage(next));
-    if (TERMINAL_STATUSES.has(next.status)) subscription.current?.close();
-  }, [recordStage]);
-
-  const acceptEvent = useCallback((event: JobEventData) => {
-    if (currentJobId.current && event.job_id !== currentJobId.current) return;
-    recordStage(event.stage, event.emitted_at);
-    setJob((previous) => previous ? {
-      ...previous,
-      status: event.status,
-      revision: event.revision,
-      attempt: event.attempt,
-      // waiting_input 事件没有 question_set_id；在权威 GET 完成前不得沿用旧坐标。
-      question_set_id: event.status === "waiting_input" ? null : previous.question_set_id,
-      questions: event.status === "waiting_input" ? null : event.questions,
-      result: event.result,
-      error: event.error,
-    } : previous);
-  }, [recordStage]);
-
-  const watchJob = useCallback((jobId: string, eventsUrl: string) => {
-    subscription.current?.close();
-    currentJobId.current = jobId;
-    subscription.current = connectJobEvents(eventsUrl, {
-      getAuthoritativeJob: () => getJob(jobId),
-      onEvent: acceptEvent,
-      onJob: acceptJob,
-      onConnection: setConnection,
-      onError: (cause) => setError(formatApiError(cause, "任务状态更新失败")),
-    });
-  }, [acceptEvent, acceptJob]);
-
-  useEffect(() => {
-    const initialJobId = restoredJob.current;
-    if (!initialJobId) return;
-    let cancelled = false;
-    setConnection("正在恢复任务状态");
-    void (async () => {
-      const candidates = [initialJobId, fallbackRestoredJob.current]
-        .filter((jobId): jobId is string => Boolean(jobId));
-      for (const jobId of candidates) {
-        currentJobId.current = jobId;
-        let retryDelay = 1_000;
-        while (!cancelled && currentJobId.current === jobId) {
-          try {
-            const record = await getJob(jobId);
-            if (cancelled || currentJobId.current !== jobId) return;
-            if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
-            clearPersistedSubmissionAttempt(jobId);
-            const jobPath = `/workbench/${encodeURIComponent(jobId)}`;
-            if (window.location.pathname !== jobPath) window.history.replaceState(null, "", jobPath);
-            setSource(record.source);
-            setDDL("");
-            setPreview(null);
-            setPreviewFingerprint("");
-            setSubmittedFingerprint(`${record.source}\n`);
-            setRestoringJob(false);
-            acceptJob(record);
-            if (!TERMINAL_STATUSES.has(record.status)) {
-              watchJob(jobId, `/api/v1/metadata/ddl-jobs/${encodeURIComponent(jobId)}/events`);
-            }
-            return;
-          } catch (cause) {
-            if (cancelled || currentJobId.current !== jobId) return;
-            const notFound = cause instanceof ApiError && cause.status === 404;
-            if (notFound) {
-              const persisted = persistedSubmission.current;
-              if (persisted?.submissionId === jobId && !persisted.replayable) {
-                setError("旧版后端的任务受理结果未知，不能安全重复提交；请由管理员查询任务状态或升级后端。");
-                return;
-              }
-              if (persisted?.submissionId === jobId
-                && Date.now() - persisted.startedAt < ACCEPTANCE_RECONCILIATION_WINDOW_MS) {
-                await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelay));
-                retryDelay = Math.min(retryDelay * 2, 5_000);
-                continue;
-              }
-              if (pendingSubmissionAttempt?.submissionId === jobId) pendingSubmissionAttempt = null;
-              clearPersistedSubmissionAttempt(jobId);
-              break;
-            }
-            setError(formatApiError(cause, "无法恢复这个任务，正在重试"));
-            await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelay));
-            retryDelay = Math.min(retryDelay * 2, 5_000);
-          }
-        }
-      }
-      currentJobId.current = null;
-      restoredJob.current = null;
-      setSource("commerce_prod");
-      setDDL(DEFAULT_DDL);
-      setSubmittedFingerprint(null);
-      setRestoringJob(false);
-    })();
-    return () => { cancelled = true; subscription.current?.close(); };
-  }, [acceptJob, watchJob]);
-
   useEffect(() => {
     // StrictMode replays effect setup after cleanup in development.
     mounted.current = true;
     return () => {
       mounted.current = false;
       submitController.current?.abort();
-      subscription.current?.close();
     };
   }, []);
 
@@ -294,11 +217,16 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     }
     if (!inputValid) { setError("请先修正数据源命名或 DDL 字节限制。"); return; }
     if (!preview || previewStale) { setError("请先预览当前 source 和 DDL，再生成语义。"); return; }
-    if (pendingSubmissionAttempt && pendingSubmissionAttempt.fingerprint !== inputFingerprint) {
+    const submissionDecision = resolveSubmissionAttempt({
+      pendingAttempt: pendingSubmissionAttempt,
+      fingerprint: inputFingerprint,
+      newSubmissionId: randomId(),
+    });
+    if (submissionDecision.kind === "input_mismatch") {
       setError("上一份 DDL 的任务受理结果尚未确认，请恢复原输入并重试以找回任务坐标。");
       return;
     }
-    if (pendingSubmissionAttempt && !pendingSubmissionAttempt.replayable) {
+    if (submissionDecision.kind === "legacy_non_replayable") {
       setError("旧版后端的任务受理结果未知，不能安全重复提交；请由管理员查询任务状态或升级后端。");
       return;
     }
@@ -306,15 +234,13 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     const controller = new AbortController();
     submitController.current?.abort();
     submitController.current = controller;
-    const submissionId = pendingSubmissionAttempt?.fingerprint === inputFingerprint
-      ? pendingSubmissionAttempt.submissionId
-      : randomId();
-    pendingSubmissionAttempt = { fingerprint: inputFingerprint, submissionId, replayable: true };
+    const submissionId = submissionDecision.attempt.submissionId;
+    pendingSubmissionAttempt = submissionDecision.attempt;
     persistSubmissionAttempt(submissionId);
     const previousPath = window.location.pathname;
     // The client-generated submission ID is also the server job ID. Persist it
     // before POST so a full reload can reconcile an accepted-but-unanswered request.
-    window.history.replaceState(null, "", `/workbench/${encodeURIComponent(submissionId)}`);
+    window.history.replaceState(null, "", workbenchJobPath(submissionId));
     try {
       const accepted = await submitDDL({
         source: source.trim(), dialect: "mysql", ddl, submission_id: submissionId,
@@ -330,16 +256,13 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         job_id: accepted.job_id, source: source.trim(), status: "pending", revision: 0,
         attempt: 0, question_round: 0, question_set_id: null, questions: null, result: null, error: null,
       };
-      currentJobId.current = accepted.job_id;
-      const queuedAt = new Date().toISOString();
-      setReachedStages(new Map([["queued", queuedAt]]));
-      setStage("queued");
-      setJob(pending);
       setSubmittedFingerprint(inputFingerprint);
-      submittedDDLContext.current = { source: source.trim(), dialect: "mysql", ddl };
-      window.history.replaceState(null, "", `/workbench/${encodeURIComponent(accepted.job_id)}`);
-      setConnection("任务已受理，正在连接事件流");
-      watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`);
+      recordSubmittedDDLContext({ source: source.trim(), dialect: "mysql", ddl });
+      window.history.replaceState(null, "", workbenchJobPath(accepted.job_id));
+      watchJob(accepted.job_id, accepted.events_url ?? `${accepted.status_url}/events`, {
+        initialJob: pending,
+        connection: "任务已受理，正在连接事件流",
+      });
     } catch (cause) {
       if (cause instanceof ApiError
         && (cause.code === "legacy_submission_timeout" || cause.code === "legacy_submission_uncertain")
@@ -387,92 +310,14 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
     finally { setBusy(null); }
   };
 
-  const sendChatAttempt = async (attempt: ChatAttempt, appendUserMessage: boolean) => {
-    if (appendUserMessage) {
-      setChatMessages((items) => [...items, { id: attempt.turnUid, role: "user", content: attempt.content }]);
-      setChatInput("");
-    }
-    setBusy("chat"); setError(""); setFailedChat(null);
-    try {
-      const userId = localStorage.getItem("schema-loom-user") ?? `local-${randomId()}`;
-      localStorage.setItem("schema-loom-user", userId);
-      let conversationUid = sessionStorage.getItem("schema-loom-conversation");
-      let response;
-      try {
-        if (!conversationUid) {
-          conversationUid = (await createConversation(userId)).uid;
-          sessionStorage.setItem("schema-loom-conversation", conversationUid);
-        }
-        response = await sendChatTurn(conversationUid, {
-          user_id: userId, turn_uid: attempt.turnUid, content: attempt.content, ddl_context: attempt.ddlContext,
-        });
-      } catch (cause) {
-        if (!(cause instanceof ApiError) || cause.status !== 404) throw cause;
-        sessionStorage.removeItem("schema-loom-conversation");
-        conversationUid = (await createConversation(userId)).uid;
-        sessionStorage.setItem("schema-loom-conversation", conversationUid);
-        response = await sendChatTurn(conversationUid, {
-          user_id: userId, turn_uid: attempt.turnUid, content: attempt.content, ddl_context: attempt.ddlContext,
-        });
-      }
-      setChatMessages((items) => [...items, { id: response.message.uid ?? randomId(), role: "assistant", content: response.message.content }]);
-      if (attempt.draftQuestion) {
-        setAnswers((items) => (items[attempt.draftQuestion!.question_id] ?? "") === attempt.draftAnswerSnapshot
-          ? { ...items, [attempt.draftQuestion!.question_id]: response.message.content }
-          : items);
-      }
-      setDraftQuestion(null);
-    } catch (cause) {
-      const deterministicClientError = cause instanceof ApiError
-        && cause.status >= 400 && cause.status < 500
-        && cause.status !== 409 && !cause.retryable;
-      setFailedChat(deterministicClientError ? null : attempt);
-      if (deterministicClientError && attempt.draftQuestion && restoredDraftContext.current) {
-        submittedDDLContext.current = null;
-        restoredDraftContext.current = false;
-        setDraftQuestion(null);
-      }
-      setError(formatApiError(cause, deterministicClientError
-        ? "AI 请求校验失败，请修正输入后重新发送"
-        : "AI 回复生成失败，请重试上一轮"));
-    }
-    finally { setBusy(null); }
-  };
-
   const handleChat = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const content = chatInput.trim();
-    if (!content || !source.trim() || !ddl.trim() || busy !== null || failedChat) return;
-    const ddlContext = draftQuestion ? submittedDDLContext.current : null;
-    if (draftQuestion && !ddlContext) {
-      setError("当前任务缺少已提交的 DDL 上下文，无法起草澄清答案。");
-      setDraftQuestion(null);
-      return;
-    }
-    void sendChatAttempt({
-      turnUid: randomId(), content, draftQuestion,
-      draftAnswerSnapshot: draftQuestion ? (answers[draftQuestion.question_id] ?? "") : null,
-      ddlContext: ddlContext ?? { source: source.trim(), dialect: "mysql", ddl },
-    }, true);
-  };
-
-  const askToDraft = (question: MetricQuestion) => {
-    if (!submittedDDLContext.current && restoredJob.current) {
-      if (!job || source.trim() !== job.source || !ddl.trim()) {
-        setDraftQuestion(null);
-        setError("请先重新载入当前任务的原始 DDL，再让 AI 起草澄清答案。");
-        return;
-      }
-      submittedDDLContext.current = { source: source.trim(), dialect: "mysql", ddl };
-      restoredDraftContext.current = true;
-    }
-    setDraftQuestion(question);
-    setChatInput(`请根据当前 DDL 起草这个问题的回答：${question.prompt}`);
+    void sendChat();
   };
 
   return (
     <div className="workbench-page">
-      <aside className="ddl-panel" aria-labelledby="ddl-title">
+      <aside className="ddl-panel" aria-labelledby="ddl-title" aria-busy={restoringJob || busy === "preview" || busy === "submit"}>
         <div className="panel-kicker">DDL / SCHEMA</div><h1 id="ddl-title">把物理结构织成语义</h1>
         <label htmlFor="source">数据源</label>
         <input id="source" name="source" value={source} onChange={(event) => setSource(event.target.value)} maxLength={MAX_SOURCE_CHARS} pattern="[\\w.-]+" autoComplete="off" spellCheck={false} aria-describedby="source-help" disabled={restoringJob} required />
@@ -499,13 +344,13 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
         <div className="chat-log" role="log" aria-live="polite">
           {chatMessages.map((message) => <div key={message.id} className={`chat-message ${message.role}`}><strong>{message.role === "assistant" ? "AI" : "你"}</strong><p>{message.content}</p></div>)}
         </div>
-        <form className="chat-form" onSubmit={(event) => void handleChat(event)}>
+        <form className="chat-form" onSubmit={(event) => void handleChat(event)} aria-busy={busy === "chat"}>
           <label htmlFor="chat-input">补充业务背景或询问当前 DDL</label>
           <textarea id="chat-input" name="chat_content" rows={4} value={chatInput} onChange={(event) => setChatInput(event.target.value)} autoComplete="off" disabled={restoringJob || !ddl.trim() || busy !== null || Boolean(failedChat)} />
           <button className="primary-action" type="submit" disabled={restoringJob || !chatInput.trim() || busy !== null || Boolean(failedChat)}>{busy === "chat" ? "生成中…" : "发送 →"}</button>
         </form>
         {failedChat && (
-          <button className="secondary-action chat-retry" type="button" disabled={busy !== null} onClick={() => void sendChatAttempt(failedChat, false)}>
+          <button className="secondary-action chat-retry" type="button" disabled={busy !== null} onClick={() => void retryChat()}>
             重试上一轮 AI 回复
           </button>
         )}
@@ -513,7 +358,7 @@ export function WorkbenchPage({ onUnsavedChange, onNavigationBlockChange }: Work
 
       <TraceDock
         job={job} currentStage={stage} reachedStages={reachedStages} connection={connection} error={error}
-        answers={answers} interactionBusy={busy !== null} submittingAnswers={busy === "answers"} onAnswerChange={(questionId, answer) => setAnswers((items) => ({ ...items, [questionId]: answer }))}
+        answers={answers} interactionBusy={busy !== null} submittingAnswers={busy === "answers"} onAnswerChange={setAnswer}
         onSubmitAnswers={(event) => void handleAnswers(event)} onDraftQuestion={askToDraft}
       />
     </div>

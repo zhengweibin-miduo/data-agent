@@ -21,6 +21,10 @@ independent job using `frontend/package-lock.json`.
 - Test DDL byte counting, authoritative waiting-input refresh, native SSE
   reconnect semantics, polling fallback, stable chat retry IDs, safe server-only
   LLM access, API-only startup, CORS, and the legacy switch.
+- API adapter tests own EventSource reconnect, polling fallback, malformed-event,
+  and close-race mechanisms. Workbench hook tests own restore/subscription/chat
+  lifecycle decisions; page tests assert rendered user-observable outcomes and
+  must not invoke callbacks through mocked adapter call history.
 - Check 360px, 768px, and desktop layouts; keyboard-only operation; visible
   focus; 200% zoom; and `prefers-reduced-motion`.
 - Review API errors by stable `code`, `stage`, and `retryable` fields. Do not

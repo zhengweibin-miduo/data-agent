@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useEffect, useRef, type FormEvent } from "react";
 
 import type { JobRecord, JobStage, MetricQuestion } from "../api/types";
 
@@ -61,10 +61,18 @@ export function TraceDock({
   onSubmitAnswers,
   onDraftQuestion,
 }: TraceDockProps) {
+  const errorRef = useRef<HTMLDivElement>(null);
   const questions = job?.status === "waiting_input" && job.question_set_id ? job.questions ?? [] : [];
   const visibleStages = STAGES.filter(([stage]) => reachedStages.has(stage) || stage === currentStage);
+  useEffect(() => {
+    const active = document.activeElement;
+    const editing = active instanceof HTMLInputElement
+      || active instanceof HTMLTextAreaElement
+      || active instanceof HTMLSelectElement;
+    if (error && !editing) errorRef.current?.focus();
+  }, [error]);
   return (
-    <section className="trace-dock" aria-labelledby="trace-title">
+    <section className="trace-dock" aria-labelledby="trace-title" aria-busy={interactionBusy}>
       <header className="trace-header">
         <div><span>PUBLIC STAGES</span><h2 id="trace-title">Schema Trace</h2></div>
         <div className="task-coordinate">
@@ -87,7 +95,7 @@ export function TraceDock({
         ))}
       </ol>
       {questions.length > 0 && (
-        <form className="clarification" onSubmit={onSubmitAnswers}>
+        <form className="clarification" onSubmit={onSubmitAnswers} aria-busy={submittingAnswers}>
           <h3>需要你确认的业务含义</h3>
           {questions.map((question) => (
             <div key={question.question_id} className="question-card">
@@ -132,7 +140,7 @@ export function TraceDock({
           <p>{job.error?.retryable ? "可检查本机服务后重新提交这份 DDL。" : "请修正 DDL 或业务输入后重新提交。"}</p>
         </div>
       )}
-      {error && <div className="error-summary" role="alert" tabIndex={-1}>{error}</div>}
+      {error && <div ref={errorRef} className="error-summary" role="alert" tabIndex={-1}>{error}</div>}
     </section>
   );
 }
