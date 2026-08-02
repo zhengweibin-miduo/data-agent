@@ -3,7 +3,7 @@
   "name": "align-project-structure-tests",
   "title": "按架构规则重构项目结构与测试",
   "description": "协调四个纵向子任务，使 DDD 边界、Meta Projection、Data Sync、Workbench 与测试 seam 符合项目规则。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": "repository-wide",
   "package": null,
