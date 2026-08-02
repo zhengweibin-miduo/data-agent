@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Check final application/adapter boundaries and composition ownership."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check turn, user deletion, extraction, Memory history, tombstone, and outbox atomicity."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Check search degradation, index adapters, timeouts, mappings, and retry semantics."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check cancellation, retry, original exception, and safe response behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check static analysis, focused/integration tests, and completion evidence."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/import-graph-audit.md","reason":"Verify recorded concrete dependency paths are removed without new structural cycles."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/memory-conversation-flow.md","reason":"Verify authority and transaction flows remain behaviorally equivalent."}
+{"file":".trellis/tasks/08-02-align-project-structure-tests/research/test-seam-map.md","reason":"Verify public seam tests replace rather than duplicate collaborator tests."}

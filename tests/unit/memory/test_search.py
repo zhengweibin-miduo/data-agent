@@ -1,17 +1,16 @@
-"""记忆搜索服务的单元契约测试。"""
+"""Long-term Memory 搜索 public seam 契约测试。"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
-from types import TracebackType
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from data_agent.memory.application import search as search_module
+from data_agent.memory.application.contracts import MemorySearchConfig
 from data_agent.memory.application.search import MemorySearchService
 from data_agent.memory.domain.payloads import memory_content_hash
-from data_agent.memory.versions import search_category_versions
+from data_agent.memory.versions import category_content_version
 from data_agent.models.memory import (
     BuiltinMemoryCategory,
     MemoryDetail,
@@ -22,62 +21,93 @@ from data_agent.models.memory import (
     SemanticDecisionContent,
 )
 from data_agent.models.semantic import SemanticTable, TableRole
-from data_agent.settings import app_config
-from tests.helpers.checks import check_equal
 
 
-class _FakeSession:
-    """测试用异步 Session 占位符。"""
+def _detail(uid: str = "memory-1") -> MemoryDetail:
+    """构造一条当前且可验证的权威记忆。"""
+    content = SemanticDecisionContent(
+        table=SemanticTable(
+            table_id="orders",
+            role=TableRole.FACT,
+            description="订单事实表",
+            confidence=0.9,
+        )
+    )
+    now = datetime.now(UTC).replace(tzinfo=None)
+    category = BuiltinMemoryCategory.DDL_SEMANTIC.value
+    return MemoryDetail(
+        uid=uid,
+        source="dw",
+        category=category,
+        memory_key="orders",
+        content_schema="semantic.v1",
+        memory_text="订单事实表",
+        content=content,
+        content_hash=memory_content_hash(content),
+        trust=MemoryTrust.MODEL_VALIDATED,
+        status=MemoryStatus.ACTIVE,
+        importance_score=0.5,
+        lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
+        record_version=1,
+        access_count=0,
+        content_version=category_content_version(category),
+        projection_version="older-projection",
+        created_at=now,
+        updated_at=now,
+    )
 
 
-class _FakeSessionContext:
-    """模拟 MySQL 会话上下文。"""
+class _SearchStore:
+    """搜索 seam 的内存权威 store。"""
 
-    async def __aenter__(self) -> _FakeSession:
-        """返回测试 Session。"""
-        return _FakeSession()
+    def __init__(self, memories: list[MemoryDetail]) -> None:
+        """保存权威记录及可配置的投影状态。"""
+        self.memories = memories
+        self.pending: dict[str, set[MemoryIndexTarget]] = {}
+        self.access_error: BaseException | None = None
 
-    async def __aexit__(
+    async def find_exact(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
+        source: str,
+        query: str,
+        categories: set[str] | None,
+        *,
+        user_id: str | None,
+        limit: int,
+    ) -> list[str]:
+        """返回第一条权威记忆作为精确基线。"""
+        del source, query, categories, user_id, limit
+        return [self.memories[0].uid] if self.memories else []
+
+    async def load_authority(
+        self, uids: set[str], *, user_id: str | None
+    ) -> list[MemoryDetail]:
+        """返回由输入 UID 选中的权威记录。"""
+        del user_id
+        return [memory for memory in self.memories if memory.uid in uids]
+
+    async def pending_targets(
+        self, uids: set[str]
+    ) -> dict[str, set[MemoryIndexTarget]]:
+        """返回测试配置的未收敛目标。"""
+        del uids
+        return self.pending
+
+    async def record_access(
+        self, uids: set[str], *, source: str, user_id: str | None
     ) -> None:
-        """不处理上下文异常。"""
+        """按需模拟非关键访问统计失败。"""
+        del uids, source, user_id
+        if self.access_error is not None:
+            raise self.access_error
 
 
-class _FakeMySQLDatabase:
-    """提供可替换的 MySQL 会话工厂。"""
+class _LexicalIndex:
+    """可配置的词法索引边界。"""
 
-    @classmethod
-    def session(cls) -> _FakeSessionContext:
-        """创建测试会话上下文。"""
-        return _FakeSessionContext()
-
-
-class _FakeTEIClient:
-    """返回固定查询向量。"""
-
-    async def aembed_query(self, query: str) -> list[float]:
-        """忽略查询并返回固定向量。"""
-        return [0.1, 0.2]
-
-
-class _FakeClientProvider:
-    """模拟基础设施客户端提供者。"""
-
-    @classmethod
-    def get_client(cls) -> object:
-        """返回可传给索引封装的客户端。"""
-        return _FakeTEIClient()
-
-
-class _FakeElasticsearchIndex:
-    """模拟 Elasticsearch 召回。"""
-
-    def __init__(self, client: object) -> None:
-        """记录初始化客户端。"""
-        self._client = client
+    def __init__(self, result: list[str] | BaseException) -> None:
+        """保存候选或边界异常。"""
+        self.result = result
 
     async def search(
         self,
@@ -88,12 +118,19 @@ class _FakeElasticsearchIndex:
         *,
         user_id: str | None,
     ) -> list[str]:
-        """不返回派生索引候选。"""
-        return []
+        """返回候选或抛出远程失败。"""
+        del query, source, categories, limit, user_id
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
 
 
-class _FakeQdrantIndex(_FakeElasticsearchIndex):
-    """模拟 Qdrant 召回。"""
+class _VectorIndex:
+    """可配置的向量索引边界。"""
+
+    def __init__(self, result: list[str] | BaseException) -> None:
+        """保存候选或边界异常。"""
+        self.result = result
 
     async def search(
         self,
@@ -104,249 +141,109 @@ class _FakeQdrantIndex(_FakeElasticsearchIndex):
         *,
         user_id: str | None,
     ) -> list[str]:
-        """不返回派生索引候选。"""
-        return []
+        """返回候选或抛出远程失败。"""
+        del vector, source, categories, limit, user_id
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
 
 
-class _FakeMemoryIndexOutboxRepository:
-    """模拟索引 outbox 仓储。"""
+class _Embeddings:
+    """返回固定查询向量的边界替身。"""
 
-    def __init__(self, session: _FakeSession) -> None:
-        """记录测试 Session。"""
-        self._session = session
-
-    async def pending_targets(
-        self,
-        candidate_uids: set[str],
-    ) -> dict[str, set[MemoryIndexTarget]]:
-        """返回无待处理投影目标。"""
-        return {}
+    async def embed_query(self, query: str) -> list[float]:
+        """返回固定二维向量。"""
+        del query
+        return [0.1, 0.2]
 
 
-def test_search_versions_preserve_category_version_pairs() -> None:
-    """混合类别检索不得把旧 DDL 版本与 DDL 类别错误组合。"""
-    versions = search_category_versions(
-        {
-            BuiltinMemoryCategory.DDL_SEMANTIC.value,
-            BuiltinMemoryCategory.USER_PREFERENCE.value,
-        }
-    )
-
-    check_equal(
-        "DDL 语义使用独立契约版本",
-        versions[BuiltinMemoryCategory.DDL_SEMANTIC.value],
-        app_config.memory.ddl_semantic_content_version,
-    )
-    check_equal(
-        "用户偏好保持全局契约版本",
-        versions[BuiltinMemoryCategory.USER_PREFERENCE.value],
-        app_config.memory.content_version,
+def _service(
+    store: _SearchStore,
+    lexical: list[str] | BaseException | None = None,
+    vector: list[str] | BaseException | None = None,
+) -> MemorySearchService:
+    """从 public ports 构造搜索用例。"""
+    return MemorySearchService(
+        store,
+        _LexicalIndex([] if lexical is None else lexical),
+        _VectorIndex([] if vector is None else vector),
+        _Embeddings(),
+        MemorySearchConfig(10, 20, 20, 1.0, 60),
     )
 
 
 @pytest.mark.asyncio
-async def test_search_returns_items_when_record_access_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """访问统计失败不能中断已经完成权威回查的搜索结果。"""
-    content = SemanticDecisionContent(
-        table=SemanticTable(
-            table_id="orders",
-            role=TableRole.FACT,
-            description="订单事实表",
-            confidence=0.9,
-        )
-    )
-    detail = MemoryDetail(
-        uid="memory-1",
-        source="dw",
-        category=BuiltinMemoryCategory.DDL_SEMANTIC.value,
-        memory_key="orders",
-        content_schema="semantic.v1",
-        memory_text="订单事实表",
-        content=content,
-        content_hash=memory_content_hash(content),
-        trust=MemoryTrust.MODEL_VALIDATED,
-        status=MemoryStatus.ACTIVE,
-        importance_score=0.5,
-        lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
-        record_version=1,
-        access_count=0,
-        content_version=app_config.memory.ddl_semantic_content_version,
-        projection_version=app_config.memory.projection_version,
-        created_at=datetime.now(UTC).replace(tzinfo=None),
-        updated_at=datetime.now(UTC).replace(tzinfo=None),
-    )
+async def test_exact_baseline_survives_both_remote_failures() -> None:
+    """两个远程路径失败时仍返回经权威复核的 MySQL 精确基线。"""
+    detail = _detail()
+    response = await _service(
+        _SearchStore([detail]), TimeoutError(), ConnectionError()
+    ).search("订单", "dw")
 
-    class FakeMemoryRepository:
-        """模拟权威记忆仓储，并让访问统计失败。"""
-
-        def __init__(self, session: _FakeSession) -> None:
-            """记录测试 Session。"""
-            self._session = session
-
-        async def find_exact_query(
-            self,
-            source: str,
-            query: str,
-            categories: set[str] | None,
-            *,
-            user_id: str | None,
-            limit: int,
-        ) -> list[str]:
-            """返回基线精确候选。"""
-            return [detail.uid]
-
-        async def get_many_active(
-            self,
-            uids: list[str],
-            *,
-            user_id: str | None,
-        ) -> list[object]:
-            """返回 MySQL 权威复核结果。"""
-
-            class Row:
-                """模拟仓储返回对象。"""
-
-                def __init__(self, memory_detail: MemoryDetail) -> None:
-                    """保存详情。"""
-                    self.detail = memory_detail
-
-            return [Row(detail)]
-
-        async def record_access(
-            self,
-            uids: set[str],
-            *,
-            source: str,
-            user_id: str | None,
-        ) -> None:
-            """模拟非关键访问统计写入失败。"""
-            raise TimeoutError("lock wait timeout")
-
-    monkeypatch.setattr(search_module, "MySQLDatabase", _FakeMySQLDatabase)
-    monkeypatch.setattr(search_module, "MemoryRepository", FakeMemoryRepository)
-    monkeypatch.setattr(
-        search_module,
-        "MemoryIndexOutboxRepository",
-        _FakeMemoryIndexOutboxRepository,
-    )
-    monkeypatch.setattr(search_module, "ElasticsearchClient", _FakeClientProvider)
-    monkeypatch.setattr(search_module, "QdrantClient", _FakeClientProvider)
-    monkeypatch.setattr(search_module, "TEIEmbeddingClient", _FakeClientProvider)
-    monkeypatch.setattr(
-        search_module, "MemoryElasticsearchIndex", _FakeElasticsearchIndex
-    )
-    monkeypatch.setattr(search_module, "MemoryQdrantIndex", _FakeQdrantIndex)
-
-    response = await MemorySearchService().search("订单", "dw")
-
-    check_equal("访问统计失败后仍返回搜索结果数量", len(response.items), 1)
-    check_equal(
-        "访问统计失败后返回原始记忆 UID", response.items[0].memory.uid, detail.uid
-    )
+    assert [item.memory.uid for item in response.items] == [detail.uid]
+    assert set(response.degraded_targets) == {
+        MemoryIndexTarget.ELASTICSEARCH,
+        MemoryIndexTarget.QDRANT,
+    }
 
 
 @pytest.mark.asyncio
-async def test_search_returns_baseline_hit_with_stale_projection_version(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_pending_target_filters_only_its_remote_signal() -> None:
+    """未收敛目标只移除自身排名信号，不移除另一目标候选。"""
+    detail = _detail()
+    store = _SearchStore([detail])
+    store.pending = {detail.uid: {MemoryIndexTarget.ELASTICSEARCH}}
+    response = await _service(store, [detail.uid], [detail.uid]).search(
+        "其他查询", "dw", exact_uids=["missing"]
+    )
+
+    assert [item.memory.uid for item in response.items] == [detail.uid]
+    assert response.items[0].signals == ["qdrant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"source": "other"},
+        {"status": MemoryStatus.DELETED},
+        {"content_hash": "0" * 64},
+        {"content_version": "stale"},
+        {"expires_at": datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1)},
+    ],
+)
+async def test_authority_guards_reject_stale_candidates(
+    changed: dict[str, object],
 ) -> None:
-    """投影版本落后不得否决 MySQL 权威回查结果。"""
-    content = SemanticDecisionContent(
-        table=SemanticTable(
-            table_id="orders",
-            role=TableRole.FACT,
-            description="订单事实表",
-            confidence=0.9,
-        )
+    """来源、状态、哈希、内容版本与过期守卫拒绝陈旧候选。"""
+    detail = _detail().model_copy(update=changed)
+    response = await _service(_SearchStore([detail])).search("订单", "dw")
+
+    assert response.items == []
+
+
+@pytest.mark.asyncio
+async def test_tenant_and_object_guards_reject_candidates() -> None:
+    """租户不匹配和对象白名单不兼容时不返回候选。"""
+    detail = _detail().model_copy(update={"user_id": "another-user"})
+    tenant_response = await _service(_SearchStore([detail])).search(
+        "订单", "dw", user_id="expected-user"
     )
-    # 权威行仍是当前内容版本，但投影版本落后于配置——重建任务尚未给它打上新版本。
-    detail = MemoryDetail(
-        uid="memory-stale-projection",
-        source="dw",
-        category=BuiltinMemoryCategory.DDL_SEMANTIC.value,
-        memory_key="orders",
-        content_schema="semantic.v1",
-        memory_text="订单事实表",
-        content=content,
-        content_hash=memory_content_hash(content),
-        trust=MemoryTrust.MODEL_VALIDATED,
-        status=MemoryStatus.ACTIVE,
-        importance_score=0.5,
-        lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
-        record_version=1,
-        access_count=0,
-        content_version=app_config.memory.ddl_semantic_content_version,
-        projection_version="stale-projection-version",
-        created_at=datetime.now(UTC).replace(tzinfo=None),
-        updated_at=datetime.now(UTC).replace(tzinfo=None),
+    object_response = await _service(_SearchStore([_detail()])).search(
+        "订单", "dw", allowed_object_ids={"customers"}
     )
 
-    class FakeMemoryRepository:
-        """只提供精确基线命中的权威仓储替身。"""
+    assert tenant_response.items == []
+    assert object_response.items == []
 
-        def __init__(self, session: _FakeSession) -> None:
-            """记录测试 Session。"""
-            self._session = session
 
-        async def find_exact_query(
-            self,
-            source: str,
-            query: str,
-            categories: set[str] | None,
-            *,
-            user_id: str | None,
-            limit: int,
-        ) -> list[str]:
-            """返回基线精确候选。"""
-            return [detail.uid]
+@pytest.mark.asyncio
+async def test_access_record_failure_does_not_hide_results() -> None:
+    """访问统计失败不能撤销已完成的权威搜索结果。"""
+    detail = _detail()
+    store = _SearchStore([detail])
+    store.access_error = TimeoutError("lock wait timeout")
 
-        async def get_many_active(
-            self,
-            uids: list[str],
-            *,
-            user_id: str | None,
-        ) -> list[object]:
-            """返回 MySQL 权威复核结果。"""
+    response = await _service(store).search("订单", "dw")
 
-            class Row:
-                """模拟仓储返回对象。"""
-
-                def __init__(self, memory_detail: MemoryDetail) -> None:
-                    """保存详情。"""
-                    self.detail = memory_detail
-
-            return [Row(detail)]
-
-        async def record_access(
-            self,
-            uids: set[str],
-            *,
-            source: str,
-            user_id: str | None,
-        ) -> None:
-            """访问统计成功但不产生可观察副作用。"""
-
-    monkeypatch.setattr(search_module, "MySQLDatabase", _FakeMySQLDatabase)
-    monkeypatch.setattr(search_module, "MemoryRepository", FakeMemoryRepository)
-    monkeypatch.setattr(
-        search_module,
-        "MemoryIndexOutboxRepository",
-        _FakeMemoryIndexOutboxRepository,
-    )
-    monkeypatch.setattr(search_module, "ElasticsearchClient", _FakeClientProvider)
-    monkeypatch.setattr(search_module, "QdrantClient", _FakeClientProvider)
-    monkeypatch.setattr(search_module, "TEIEmbeddingClient", _FakeClientProvider)
-    monkeypatch.setattr(
-        search_module, "MemoryElasticsearchIndex", _FakeElasticsearchIndex
-    )
-    monkeypatch.setattr(search_module, "MemoryQdrantIndex", _FakeQdrantIndex)
-
-    response = await MemorySearchService().search("订单", "dw")
-
-    check_equal("投影版本落后仍返回基线命中数量", len(response.items), 1)
-    check_equal(
-        "投影版本落后仍返回原始记忆 UID",
-        response.items[0].memory.uid,
-        detail.uid,
-    )
+    assert [item.memory.uid for item in response.items] == [detail.uid]

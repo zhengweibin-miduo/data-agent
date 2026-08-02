@@ -10,11 +10,16 @@ from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.errors import DataAgentError
 from data_agent.identifiers import memory_uid, scope_fingerprint
 from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.memory.application.service import (
-    MemoryMutationLeaseProvider,
+from data_agent.memory.adapters.mysql import (
     MemoryReferenceValidator,
-    MemoryService,
+    MySQLMemoryStore,
 )
+from data_agent.memory.application.contracts import (
+    MemoryMutationLeaseProvider,
+    MemoryServiceConfig,
+)
+from data_agent.memory.application.search import MemorySearchService
+from data_agent.memory.application.service import MemoryService
 from data_agent.memory.domain.candidates import (
     MemoryVersions,
     build_accepted_memories,
@@ -272,8 +277,10 @@ async def test_update_to_deleted_content_returns_conflict() -> None:
             if active_b is None:
                 raise RuntimeError("当前用户记忆必须存在")
         service = MemoryService(
+            MySQLMemoryStore(cast(MemoryReferenceValidator, object())),
+            cast(MemorySearchService, object()),
             cast(MemoryMutationLeaseProvider, object()),
-            cast(MemoryReferenceValidator, object()),
+            MemoryServiceConfig(projection_version="v2"),
         )
         with pytest.raises(DataAgentError) as exc_info:
             await service.update(

@@ -14,8 +14,13 @@ from data_agent.answer_readiness.classifier import AnswerReadinessClassifier
 from data_agent.answer_readiness.service import AnswerReadinessService
 from data_agent.chat.api import router as chat_router
 from data_agent.chat.service import ChatService
+from data_agent.conversation.adapters.long_term_memory import (
+    MemorySearchLongTermMemoryReader,
+)
+from data_agent.conversation.adapters.mysql.store import MySQLConversationStore
+from data_agent.conversation.adapters.mysql.user_data import MySQLUserDataEraser
 from data_agent.conversation.api import router as conversation_router
-from data_agent.conversation.service import ConversationService
+from data_agent.conversation.application.service import ConversationService
 from data_agent.ddl_metadata.api.router import router as ddl_metadata_router
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.persistence.memory_references import (
@@ -34,7 +39,7 @@ from data_agent.logging import (
     logging_boundary,
     setup_logging,
 )
-from data_agent.memory.application.service import MemoryService
+from data_agent.memory.adapters.composition import build_memory_runtime
 from data_agent.settings import app_config
 
 _LEGACY_FRONTEND_ENV = "ENABLE_LEGACY_FRONTEND"
@@ -51,9 +56,9 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     # 步骤二：按依赖顺序初始化共享外部资源，全部就绪后才允许装配业务服务。
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
-    ElasticsearchClient.initialize()
-    QdrantClient.initialize()
-    TEIEmbeddingClient.initialize()
+    elasticsearch = ElasticsearchClient.initialize()
+    qdrant = QdrantClient.initialize()
+    embeddings = TEIEmbeddingClient.initialize()
     model = LLMClient.initialize()
     # 步骤三：构造 arq 队列客户端，使受理路径能立即调度激活而不必等待 worker 的
     # dispatch 周期；dispatch outbox 仍是崩溃兜底，入队失败时自动退回周期调度。
@@ -69,8 +74,23 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     # 步骤四：把已就绪资源依赖的业务服务集中挂载到应用状态，供路由复用。
     jobs = DDLJobStore(redis, queue)
     app.state.jobs = jobs
-    app.state.memories = MemoryService(jobs, MetadataMemoryReferenceValidator())
-    conversations = ConversationService()
+    memory_runtime = build_memory_runtime(
+        jobs,
+        MetadataMemoryReferenceValidator(),
+        elasticsearch=elasticsearch,
+        qdrant=qdrant,
+        embeddings=embeddings,
+    )
+    app.state.memories = memory_runtime.service
+    conversations = ConversationService(
+        MySQLConversationStore(),
+        MemorySearchLongTermMemoryReader(memory_runtime.search),
+        MySQLUserDataEraser(),
+        context_message_limit=app_config.conversation.context_message_limit,
+        context_max_chars=app_config.conversation.context_max_chars,
+        summary_max_chars=app_config.conversation.summary_max_chars,
+        memory_search_limit=app_config.memory.search_limit,
+    )
     app.state.conversations = conversations
     app.state.chat = ChatService(
         conversations,

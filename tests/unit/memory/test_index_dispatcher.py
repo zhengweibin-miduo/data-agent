@@ -1,15 +1,17 @@
-"""记忆索引调度器的事务边界与收敛语义测试。"""
+"""Long-term Memory 投影调度应用 seam 测试。"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from types import TracebackType
 
 import pytest
 
-from data_agent.memory.indexing import dispatcher as dispatcher_module
-from data_agent.memory.indexing.dispatcher import MemoryIndexDispatcher
+from data_agent.memory.application.contracts import (
+    MemoryProjectionDispatchConfig,
+    PreparedMemoryProjection,
+)
+from data_agent.memory.application.index_dispatcher import MemoryIndexDispatcher
 from data_agent.models.memory import (
     BuiltinMemoryCategory,
     MemoryIndexOperation,
@@ -20,66 +22,13 @@ from data_agent.models.memory import (
     MemoryStatus,
     MemoryTrust,
 )
-from data_agent.settings import app_config
-from tests.helpers.checks import check_condition, check_equal
 
 
-class _Recorder:
-    """按发生顺序记录事务与外部调用事件。"""
-
-    def __init__(self) -> None:
-        """初始化事件序列与事务深度轨迹。"""
-        self.events: list[str] = []
-        self.depth = 0
-        self.external_depths: list[int] = []
-        self.event_depths: list[tuple[str, int]] = []
-
-    def record(self, event: str) -> None:
-        """登记一个普通事件及其发生时的事务深度。"""
-        self.events.append(event)
-        self.event_depths.append((event, self.depth))
-
-    def record_external(self, event: str) -> None:
-        """登记一次外部调用及其发生时的事务深度。"""
-        self.events.append(event)
-        self.event_depths.append((event, self.depth))
-        self.external_depths.append(self.depth)
-
-    def depths_for(self, event: str) -> list[int]:
-        """返回指定事件每次发生时的事务深度。"""
-        return [depth for name, depth in self.event_depths if name == event]
-
-
-class _FakeSession:
-    """测试用异步 Session 占位符。"""
-
-
-class _FakeSessionContext:
-    """记录事务开启与提交顺序的会话上下文。"""
-
-    def __init__(self, recorder: _Recorder) -> None:
-        """绑定共享事件记录器。"""
-        self._recorder = recorder
-
-    async def __aenter__(self) -> _FakeSession:
-        """进入事务并加深事务层级。"""
-        self._recorder.depth += 1
-        self._recorder.record("session_open")
-        return _FakeSession()
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        """离开事务并恢复事务层级。"""
-        self._recorder.depth -= 1
-        self._recorder.record("session_close")
-
-
-def _projection(uid: str, status: MemoryStatus) -> MemoryProjection:
-    """构造指定状态的权威投影。"""
+def _projection(
+    uid: str,
+    status: MemoryStatus = MemoryStatus.ACTIVE,
+) -> MemoryProjection:
+    """构造可观察的权威投影。"""
     moment = datetime.now(UTC).replace(tzinfo=None)
     return MemoryProjection(
         memory_uid=uid,
@@ -95,477 +44,215 @@ def _projection(uid: str, status: MemoryStatus) -> MemoryProjection:
         importance_score=0.5,
         lifecycle_policy=MemoryLifecyclePolicy.FINGERPRINT_BOUND,
         record_version=1,
-        content_version=app_config.memory.content_version,
-        projection_version=app_config.memory.projection_version,
+        content_version="v1",
+        projection_version="v1",
         created_at=moment,
         updated_at=moment,
     )
 
 
-def _items(uid: str, operation: MemoryIndexOperation) -> list[MemoryOutboxItem]:
-    """构造同一 UID 的双目标期望状态。"""
-    return [
-        MemoryOutboxItem(
-            memory_uid=uid,
-            target=target,
-            operation=operation,
-            projection_version=app_config.memory.projection_version,
-            attempts=0,
-            lease_token="lease-1",
+def _item(uid: str, target: MemoryIndexTarget) -> MemoryOutboxItem:
+    """构造一个已领取的目标期望状态。"""
+    return MemoryOutboxItem(
+        memory_uid=uid,
+        target=target,
+        operation=MemoryIndexOperation.UPSERT,
+        projection_version="v1",
+        attempts=0,
+        lease_token="lease-1",
+    )
+
+
+class InMemoryProjectionWorkStore:
+    """以可观察持久状态实现调度 work port。"""
+
+    def __init__(
+        self,
+        items: Sequence[MemoryOutboxItem],
+        projections: dict[str, MemoryProjection | None],
+    ) -> None:
+        """初始化领取队列与权威投影。"""
+        self.items = list(items)
+        self.projections = projections
+        self.lost: set[tuple[str, MemoryIndexTarget]] = set()
+        self.superseded: set[tuple[str, MemoryIndexTarget]] = set()
+        self.acknowledged: set[tuple[str, MemoryIndexTarget]] = set()
+        self.pending: set[tuple[str, MemoryIndexTarget]] = set()
+        self.retried: dict[tuple[str, MemoryIndexTarget], str] = {}
+        self.dead_letters = 0
+
+    async def claim(self, limit: int) -> list[MemoryOutboxItem]:
+        """领取有界批次。"""
+        return self.items[:limit]
+
+    async def prepare(self, item: MemoryOutboxItem) -> PreparedMemoryProjection:
+        """复核领取代次并返回权威投影。"""
+        key = (item.memory_uid, item.target)
+        return PreparedMemoryProjection(
+            authority_held=key not in self.lost,
+            projection=self.projections.get(item.memory_uid),
         )
-        for target in MemoryIndexTarget
-    ]
+
+    async def settle_success(
+        self,
+        item: MemoryOutboxItem,
+        *,
+        content_hash: str | None,
+    ) -> bool:
+        """确认当前 authority，或登记可重放的收敛请求。"""
+        del content_hash
+        key = (item.memory_uid, item.target)
+        if key in self.superseded:
+            self.pending.add(key)
+            return False
+        self.acknowledged.add(key)
+        return True
+
+    async def settle_failure(
+        self,
+        item: MemoryOutboxItem,
+        *,
+        error_type: str,
+        max_backoff_seconds: int,
+    ) -> None:
+        """记录目标独立退避。"""
+        del max_backoff_seconds
+        self.retried[(item.memory_uid, item.target)] = error_type
+
+    async def dead_letter_count(self) -> int:
+        """返回停止重试的期望状态数量。"""
+        return self.dead_letters
 
 
-def _install(
-    monkeypatch: pytest.MonkeyPatch,
-    recorder: _Recorder,
+class InMemoryProjectionIndex:
+    """记录单个派生目标的最终可观察内容。"""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        """初始化派生文档集合。"""
+        self.documents: dict[str, MemoryProjection] = {}
+        self.fail = fail
+
+    async def apply(
+        self,
+        memory_uid: str,
+        projection: MemoryProjection | None,
+    ) -> None:
+        """幂等写入或删除一个派生文档。"""
+        if self.fail:
+            raise TimeoutError("projection timeout")
+        if projection is None:
+            self.documents.pop(memory_uid, None)
+        else:
+            self.documents[memory_uid] = projection
+
+
+def _dispatcher(
+    work: InMemoryProjectionWorkStore,
     *,
-    items: list[MemoryOutboxItem],
-    projections: dict[str, MemoryProjection | None],
-    failing: set[MemoryIndexTarget] | None = None,
-    superseded: bool = False,
-    acknowledged_hashes: list[str | None] | None = None,
-    converged_out: list[tuple[str, str]] | None = None,
-    broken_projections: set[str] | None = None,
-    lost_claims: set[str] | None = None,
-) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """安装记录型替身并返回确认与退避轨迹。"""
-    acknowledged: list[tuple[str, str]] = []
-    retried: list[tuple[str, str]] = []
-    converged = converged_out if converged_out is not None else []
-    acknowledged_hashes = acknowledged_hashes if acknowledged_hashes is not None else []
-    broken = failing or set()
-
-    class FakeMySQLDatabase:
-        """提供记录型 MySQL 会话工厂。"""
-
-        @classmethod
-        def session(cls) -> _FakeSessionContext:
-            """创建记录事务边界的会话上下文。"""
-            return _FakeSessionContext(recorder)
-
-    class FakeOutboxRepository:
-        """模拟期望状态仓储并记录事务内调用。"""
-
-        def __init__(self, session: _FakeSession) -> None:
-            """记录测试 Session。"""
-            self._session = session
-
-        async def claim_outbox(self, limit: int) -> list[MemoryOutboxItem]:
-            """返回预置的已领取期望状态。"""
-            recorder.record("claim")
-            return items
-
-        async def renew_claim(self, item: MemoryOutboxItem) -> bool:
-            """记录逐项续租，并按预置结果决定是否仍持有领取代次。"""
-            recorder.record("renew")
-            return item.memory_uid not in (lost_claims or set())
-
-        async def projection(self, uid: str) -> MemoryProjection | None:
-            """返回预置的权威投影；指定 UID 模拟确定性解码失败。"""
-            recorder.record("projection")
-            if uid in (broken_projections or set()):
-                raise ValueError(f"无法解码历史内容: {uid}")
-            return projections.get(uid)
-
-        async def dead_letter_count(self) -> int:
-            """本用例不构造死信积压。"""
-            return 0
-
-        async def acknowledge_outbox(
-            self,
-            item: MemoryOutboxItem,
-            *,
-            content_hash: str | None,
-        ) -> bool:
-            """记录被确认的期望状态与本次写入的内容哈希。"""
-            recorder.record("acknowledge")
-            if superseded:
-                return False
-            acknowledged.append((item.memory_uid, item.target.value))
-            acknowledged_hashes.append(content_hash)
-            return True
-
-        async def enqueue_convergence(
-            self,
-            memory_uid: str,
-            target: MemoryIndexTarget,
-        ) -> None:
-            """记录确认失败后重建的收敛请求。"""
-            recorder.record("converge")
-            converged.append((memory_uid, target.value))
-
-        async def retry_outbox(
-            self,
-            item: MemoryOutboxItem,
-            error_type: str,
-            max_backoff_seconds: int,
-        ) -> None:
-            """记录被退避的期望状态。"""
-            recorder.record("retry")
-            retried.append((item.memory_uid, item.target.value))
-
-    class FakeElasticsearchIndex:
-        """记录 Elasticsearch 外部写入。"""
-
-        def __init__(self, client: object) -> None:
-            """记录初始化客户端。"""
-            self._client = client
-
-        async def upsert(self, projection: MemoryProjection) -> None:
-            """记录一次全文写入。"""
-            recorder.record_external("es_upsert")
-            if MemoryIndexTarget.ELASTICSEARCH in broken:
-                raise TimeoutError("elasticsearch timeout")
-
-        async def delete(self, uid: str) -> None:
-            """记录一次全文删除。"""
-            recorder.record_external("es_delete")
-
-    class FakeQdrantIndex:
-        """记录 Qdrant 外部写入。"""
-
-        def __init__(self, client: object) -> None:
-            """记录初始化客户端。"""
-            self._client = client
-
-        async def upsert(
-            self,
-            projection: MemoryProjection,
-            vector: Sequence[float],
-        ) -> None:
-            """记录一次向量写入。"""
-            recorder.record_external("qdrant_upsert")
-            if MemoryIndexTarget.QDRANT in broken:
-                raise TimeoutError("qdrant timeout")
-
-        async def delete(self, uid: str) -> None:
-            """记录一次向量删除。"""
-            recorder.record_external("qdrant_delete")
-
-    class FakeEmbeddings:
-        """记录 TEI 向量化调用。"""
-
-        async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-            """返回固定向量。"""
-            recorder.record_external("tei_embed")
-            return [[0.1, 0.2]]
-
-    class FakeClientProvider:
-        """模拟基础设施客户端提供者。"""
-
-        @classmethod
-        def get_client(cls) -> object:
-            """返回可传给索引封装的客户端。"""
-            return FakeEmbeddings()
-
-    monkeypatch.setattr(dispatcher_module, "MySQLDatabase", FakeMySQLDatabase)
-    monkeypatch.setattr(
-        dispatcher_module,
-        "MemoryIndexOutboxRepository",
-        FakeOutboxRepository,
+    elasticsearch: InMemoryProjectionIndex | None = None,
+    qdrant: InMemoryProjectionIndex | None = None,
+) -> MemoryIndexDispatcher:
+    """构造只依赖公开 ports 的调度用例。"""
+    return MemoryIndexDispatcher(
+        work,
+        {
+            MemoryIndexTarget.ELASTICSEARCH: elasticsearch
+            or InMemoryProjectionIndex(),
+            MemoryIndexTarget.QDRANT: qdrant or InMemoryProjectionIndex(),
+        },
+        MemoryProjectionDispatchConfig(batch_size=10, max_backoff_seconds=300),
     )
-    monkeypatch.setattr(dispatcher_module, "ElasticsearchClient", FakeClientProvider)
-    monkeypatch.setattr(dispatcher_module, "QdrantClient", FakeClientProvider)
-    monkeypatch.setattr(dispatcher_module, "TEIEmbeddingClient", FakeClientProvider)
-    monkeypatch.setattr(
-        dispatcher_module,
-        "MemoryElasticsearchIndex",
-        FakeElasticsearchIndex,
-    )
-    monkeypatch.setattr(dispatcher_module, "MemoryQdrantIndex", FakeQdrantIndex)
-    return acknowledged, retried
 
 
-async def test_dispatch_keeps_external_calls_outside_transaction(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_dispatch_claims_writes_and_settles_active_authority() -> None:
+    """活动权威投影经领取、远程写入后独立确认。"""
+    item = _item("memory-1", MemoryIndexTarget.ELASTICSEARCH)
+    projection = _projection(item.memory_uid)
+    work = InMemoryProjectionWorkStore([item], {item.memory_uid: projection})
+    index = InMemoryProjectionIndex()
+
+    processed = await _dispatcher(work, elasticsearch=index).dispatch()
+
+    assert processed == 1
+    assert index.documents == {item.memory_uid: projection}
+    assert work.acknowledged == {(item.memory_uid, item.target)}
+
+
+@pytest.mark.parametrize(
+    ("operation", "projection"),
+    [
+        (MemoryIndexOperation.DELETE, _projection("memory-2")),
+        (MemoryIndexOperation.UPSERT, _projection("memory-2", MemoryStatus.DELETED)),
+        (MemoryIndexOperation.UPSERT, None),
+    ],
+)
+async def test_dispatch_converges_delete_and_non_active_authority(
+    operation: MemoryIndexOperation,
+    projection: MemoryProjection | None,
 ) -> None:
-    """外部写入不得发生在持有 MySQL 行锁的事务内。"""
-    recorder = _Recorder()
-    hashes: list[str | None] = []
-    projection = _projection("memory-1", MemoryStatus.ACTIVE)
-    acknowledged, retried = _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-1", MemoryIndexOperation.UPSERT),
-        projections={"memory-1": projection},
-        acknowledged_hashes=hashes,
+    """删除、非活动或缺失 authority 均收敛为派生删除。"""
+    item = _item("memory-2", MemoryIndexTarget.ELASTICSEARCH).model_copy(
+        update={"operation": operation}
     )
+    work = InMemoryProjectionWorkStore([item], {item.memory_uid: projection})
+    index = InMemoryProjectionIndex()
+    index.documents[item.memory_uid] = _projection(item.memory_uid)
 
-    processed = await MemoryIndexDispatcher().dispatch()
+    assert await _dispatcher(work, elasticsearch=index).dispatch() == 1
+    assert item.memory_uid not in index.documents
 
-    check_equal("已处理项数", processed, 2)
-    check_equal(
-        "外部调用发生时的事务深度",
-        recorder.external_depths,
-        [0, 0, 0],
+
+async def test_dispatch_does_not_write_or_settle_after_authority_loss() -> None:
+    """领取 authority 丢失后不执行远程写入、确认或失败退避。"""
+    item = _item("memory-3", MemoryIndexTarget.ELASTICSEARCH)
+    work = InMemoryProjectionWorkStore(
+        [item],
+        {item.memory_uid: _projection(item.memory_uid)},
     )
-    check_equal("领取仍在事务内完成", recorder.depths_for("claim"), [1])
-    check_equal("确认仍在事务内完成", recorder.depths_for("acknowledge"), [1, 1])
-    check_condition(
-        "领取事务在首次外部调用前已提交",
-        recorder.events.index("session_close") < recorder.events.index("es_upsert"),
-        actual=str(recorder.events),
-        expected="session_close 先于 es_upsert",
-    )
-    check_equal(
-        "两个目标各自独立确认",
-        sorted(acknowledged),
-        [
-            ("memory-1", MemoryIndexTarget.ELASTICSEARCH.value),
-            ("memory-1", MemoryIndexTarget.QDRANT.value),
-        ],
-    )
-    check_equal(
-        "确认时携带本次写入的内容哈希",
-        hashes,
-        [projection.content_hash, projection.content_hash],
-    )
-    check_equal("成功路径不产生退避", retried, [])
+    work.lost.add((item.memory_uid, item.target))
+    index = InMemoryProjectionIndex()
+
+    assert await _dispatcher(work, elasticsearch=index).dispatch() == 0
+    assert index.documents == {}
+    assert work.acknowledged == set()
+    assert work.retried == {}
 
 
-async def test_dispatch_converges_upsert_for_inactive_projection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """权威行非 ACTIVE 时 UPSERT 必须收敛为派生索引删除。"""
-    recorder = _Recorder()
-    acknowledged, _ = _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-2", MemoryIndexOperation.UPSERT),
-        projections={"memory-2": _projection("memory-2", MemoryStatus.DELETED)},
-    )
+async def test_dispatch_isolates_failure_to_one_projection_target() -> None:
+    """单目标失败仅退避自身，另一目标仍可收敛。"""
+    items = [_item("memory-4", target) for target in MemoryIndexTarget]
+    projection = _projection("memory-4")
+    work = InMemoryProjectionWorkStore(items, {"memory-4": projection})
+    es = InMemoryProjectionIndex(fail=True)
+    qdrant = InMemoryProjectionIndex()
 
-    processed = await MemoryIndexDispatcher().dispatch()
+    processed = await _dispatcher(work, elasticsearch=es, qdrant=qdrant).dispatch()
 
-    check_equal("已处理项数", processed, 2)
-    check_equal(
-        "失效行收敛为双目标删除",
-        [event for event in recorder.events if event.endswith(("upsert", "delete"))],
-        ["es_delete", "qdrant_delete"],
-    )
-    check_equal("收敛后仍确认期望状态", len(acknowledged), 2)
+    assert processed == 1
+    assert work.retried == {
+        ("memory-4", MemoryIndexTarget.ELASTICSEARCH): "TimeoutError"
+    }
+    assert qdrant.documents == {"memory-4": projection}
+    assert work.acknowledged == {("memory-4", MemoryIndexTarget.QDRANT)}
 
 
-async def test_dispatch_converges_upsert_for_missing_projection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """权威行已被物理清理时 UPSERT 不得空确认。"""
-    recorder = _Recorder()
-    acknowledged, _ = _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-3", MemoryIndexOperation.UPSERT),
-        projections={"memory-3": None},
-    )
+async def test_dispatch_registers_durable_convergence_when_authority_changes() -> None:
+    """远程写期间 authority 变化后留下可重放期望状态，不确认迟到写入。"""
+    item = _item("memory-5", MemoryIndexTarget.ELASTICSEARCH)
+    projection = _projection(item.memory_uid)
+    work = InMemoryProjectionWorkStore([item], {item.memory_uid: projection})
+    work.superseded.add((item.memory_uid, item.target))
+    index = InMemoryProjectionIndex()
 
-    await MemoryIndexDispatcher().dispatch()
-
-    check_equal(
-        "缺失权威行收敛为双目标删除",
-        [event for event in recorder.events if event.endswith(("upsert", "delete"))],
-        ["es_delete", "qdrant_delete"],
-    )
-    check_equal("删除路径不调用向量化", "tei_embed" in recorder.events, False)
-    check_equal("收敛后仍确认期望状态", len(acknowledged), 2)
+    assert await _dispatcher(work, elasticsearch=index).dispatch() == 0
+    assert index.documents == {item.memory_uid: projection}
+    assert work.acknowledged == set()
+    assert work.pending == {(item.memory_uid, item.target)}
 
 
-async def test_dispatch_isolates_single_target_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """单目标失败只退避自身，另一目标仍完成确认。"""
-    recorder = _Recorder()
-    acknowledged, retried = _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-4", MemoryIndexOperation.UPSERT),
-        projections={"memory-4": _projection("memory-4", MemoryStatus.ACTIVE)},
-        failing={MemoryIndexTarget.ELASTICSEARCH},
-    )
+async def test_report_dead_letters_exposes_stopped_work() -> None:
+    """死信报告公开达到失败上限、已停止领取的积压数。"""
+    work = InMemoryProjectionWorkStore([], {})
+    work.dead_letters = 3
 
-    processed = await MemoryIndexDispatcher().dispatch()
-
-    check_equal("失败目标不计入已处理", processed, 1)
-    check_equal(
-        "仅失败目标进入退避",
-        retried,
-        [("memory-4", MemoryIndexTarget.ELASTICSEARCH.value)],
-    )
-    check_equal(
-        "成功目标仍完成确认",
-        acknowledged,
-        [("memory-4", MemoryIndexTarget.QDRANT.value)],
-    )
-    check_equal("退避在独立短事务内完成", recorder.depths_for("retry"), [1])
-    check_equal("确认在独立短事务内完成", recorder.depths_for("acknowledge"), [1])
-    check_condition(
-        "退避与确认使用彼此独立的事务",
-        recorder.events.index("retry")
-        < recorder.events.index("session_open", recorder.events.index("retry")),
-        actual=str(recorder.events),
-        expected="retry 之后重新开启事务再确认",
-    )
-
-
-async def test_dispatch_does_not_acknowledge_superseded_content(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """权威内容在写入期间再次变更时不得确认期望状态。"""
-    recorder = _Recorder()
-    acknowledged, retried = _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-5", MemoryIndexOperation.UPSERT),
-        projections={"memory-5": _projection("memory-5", MemoryStatus.ACTIVE)},
-        superseded=True,
-    )
-
-    processed = await MemoryIndexDispatcher().dispatch()
-
-    check_equal("未确认的同步不计入已处理", processed, 0)
-    check_equal("被取代的期望状态保持未确认", acknowledged, [])
-    check_equal("被取代不等于失败，不进入退避", retried, [])
-
-
-async def test_dispatch_rebuilds_convergence_when_acknowledge_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """确认失败必须按当前权威状态重建收敛请求，否则迟到写入会永久残留。"""
-    recorder = _Recorder()
-    converged: list[tuple[str, str]] = []
-    _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-6", MemoryIndexOperation.UPSERT),
-        projections={"memory-6": _projection("memory-6", MemoryStatus.ACTIVE)},
-        superseded=True,
-        converged_out=converged,
-    )
-
-    await MemoryIndexDispatcher().dispatch()
-
-    check_equal(
-        "为两个目标各自重建收敛请求",
-        sorted(converged),
-        [
-            ("memory-6", MemoryIndexTarget.ELASTICSEARCH.value),
-            ("memory-6", MemoryIndexTarget.QDRANT.value),
-        ],
-    )
-    check_equal("重建仍在确认所在事务内完成", recorder.depths_for("converge"), [1, 1])
-
-
-async def test_dispatch_isolates_projection_decode_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """单条权威行解码失败只退避该项，不得中止整批。"""
-    recorder = _Recorder()
-    items = [
-        *_items("memory-broken", MemoryIndexOperation.UPSERT),
-        *_items("memory-ok", MemoryIndexOperation.UPSERT),
-    ]
-    acknowledged, retried = _install(
-        monkeypatch,
-        recorder,
-        items=items,
-        projections={"memory-ok": _projection("memory-ok", MemoryStatus.ACTIVE)},
-        broken_projections={"memory-broken"},
-    )
-
-    processed = await MemoryIndexDispatcher().dispatch()
-
-    check_equal("正常项目仍被处理", processed, 2)
-    check_equal(
-        "解码失败项目进入退避并累计尝试次数",
-        sorted(retried),
-        [
-            ("memory-broken", MemoryIndexTarget.ELASTICSEARCH.value),
-            ("memory-broken", MemoryIndexTarget.QDRANT.value),
-        ],
-    )
-    check_equal(
-        "同批正常项目仍完成确认",
-        sorted(acknowledged),
-        [
-            ("memory-ok", MemoryIndexTarget.ELASTICSEARCH.value),
-            ("memory-ok", MemoryIndexTarget.QDRANT.value),
-        ],
-    )
-
-
-async def test_dispatch_registers_durable_convergence_after_purge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """权威行已被 purge 时仍登记持久收敛请求，而不是做一次性远程补偿。"""
-    # 交错：慢 UPSERT 领取后阻塞 → 并发 DELETE 被另一 worker 确认并清空 outbox →
-    # purge 删除权威行 → 本次迟到写入完成。outbox 不设外键，收敛请求因此仍可登记，
-    # 由后续周期重试直至成功；一次性远程删除失败后则无任何待办可重放。
-    recorder = _Recorder()
-    converged: list[tuple[str, str]] = []
-    _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-7", MemoryIndexOperation.UPSERT),
-        projections={"memory-7": _projection("memory-7", MemoryStatus.ACTIVE)},
-        superseded=True,
-        converged_out=converged,
-    )
-
-    processed = await MemoryIndexDispatcher().dispatch()
-
-    check_equal("未确认的同步不计入已处理", processed, 0)
-    check_equal(
-        "为两个目标各自登记持久收敛请求",
-        sorted(converged),
-        [
-            ("memory-7", MemoryIndexTarget.ELASTICSEARCH.value),
-            ("memory-7", MemoryIndexTarget.QDRANT.value),
-        ],
-    )
-    check_equal("不再执行一次性远程补偿删除", recorder.events.count("es_delete"), 0)
-
-
-async def test_dispatch_renews_claim_before_processing_each_item(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """每项在处理前续租，使租约覆盖它自己的处理窗口。"""
-    # 整批共用一个到期时间时，靠前项目的累计耗时会让尾部行在尚未处理前重新可领取，
-    # 后续 cron 会与本 dispatcher 重复调用外部服务。
-    recorder = _Recorder()
-    _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-8", MemoryIndexOperation.UPSERT),
-        projections={"memory-8": _projection("memory-8", MemoryStatus.ACTIVE)},
-    )
-
-    await MemoryIndexDispatcher().dispatch()
-
-    check_equal("两个目标各自续租一次", recorder.depths_for("renew"), [1, 1])
-    check_condition(
-        "续租发生在外部写入之前",
-        recorder.events.index("renew") < recorder.events.index("es_upsert"),
-        actual=str(recorder.events),
-        expected="renew 先于首次外部调用",
-    )
-
-
-async def test_dispatch_skips_item_whose_claim_was_lost(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """领取代次已失效的项目必须放弃，不得再执行外部写入。"""
-    recorder = _Recorder()
-    acknowledged, retried = _install(
-        monkeypatch,
-        recorder,
-        items=_items("memory-9", MemoryIndexOperation.UPSERT),
-        projections={"memory-9": _projection("memory-9", MemoryStatus.ACTIVE)},
-        lost_claims={"memory-9"},
-    )
-
-    processed = await MemoryIndexDispatcher().dispatch()
-
-    check_equal("代次失效不计入已处理", processed, 0)
-    check_equal("不执行任何外部写入", recorder.external_depths, [])
-    check_equal("不确认也不退避", (acknowledged, retried), ([], []))
+    assert await _dispatcher(work).report_dead_letters() == 3

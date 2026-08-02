@@ -6,7 +6,9 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from data_agent.conversation.api import router
-from data_agent.conversation.extraction import _validated_candidates
+from data_agent.conversation.application.extraction import (
+    validate_extraction_candidates,
+)
 from data_agent.conversation.models import (
     ClaimedExtraction,
     ExtractionCandidate,
@@ -163,7 +165,7 @@ def test_extraction_requires_exact_user_quote() -> None:
             ),
         ],
     )
-    accepted = _validated_candidates(claim, result)
+    accepted = validate_extraction_candidates(claim, result)
     check_equal("精确用户原文候选数量", len(accepted), 1)
     check_equal("精确用户原文候选键", accepted[0].memory_key, "unit_system")
     check_equal("精确用户原文候选类别", accepted[0].category, "user.preference")
@@ -184,7 +186,7 @@ def test_extraction_rejects_value_not_supported_by_quote() -> None:
             )
         ],
     )
-    check_equal("原文不支持候选值", _validated_candidates(claim, result), [])
+    check_equal("原文不支持候选值", validate_extraction_candidates(claim, result), [])
 
 
 def test_extraction_rejects_assistant_guess_and_ambiguous_confirmation() -> None:
@@ -211,7 +213,7 @@ def test_extraction_rejects_assistant_guess_and_ambiguous_confirmation() -> None
     )
     check_equal(
         "模糊确认候选",
-        _validated_candidates(claim, result),
+        validate_extraction_candidates(claim, result),
         [],
     )
 
@@ -238,7 +240,7 @@ def test_extraction_accepts_explicit_later_confirmation() -> None:
             )
         ],
     )
-    accepted = _validated_candidates(claim, result)
+    accepted = validate_extraction_candidates(claim, result)
     check_equal("明确确认候选数量", len(accepted), 1)
     content = accepted[0].content
     check_equal(
@@ -274,7 +276,11 @@ def test_extraction_rejects_unrelated_later_statement() -> None:
             )
         ],
     )
-    check_equal("无关后续陈述候选", _validated_candidates(claim, result), [])
+    check_equal(
+        "无关后续陈述候选",
+        validate_extraction_candidates(claim, result),
+        [],
+    )
 
 
 def test_user_memory_uid_includes_tenant_scope() -> None:
@@ -292,11 +298,11 @@ def test_user_memory_uid_includes_tenant_scope() -> None:
             )
         ],
     )
-    first = _validated_candidates(
+    first = validate_extraction_candidates(
         _claim_for_user("user-a", [message]),
         result,
     )[0]
-    second = _validated_candidates(
+    second = validate_extraction_candidates(
         _claim_for_user("user-b", [message]),
         result,
     )[0]
@@ -325,7 +331,7 @@ def test_extraction_keeps_one_value_per_user_scope() -> None:
             ),
         ],
     )
-    accepted = _validated_candidates(claim, result)
+    accepted = validate_extraction_candidates(claim, result)
     check_equal("同作用域候选数量", len(accepted), 1)
     content = accepted[0].content
     check_equal(

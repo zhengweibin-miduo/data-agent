@@ -6,12 +6,11 @@ from arq.connections import ArqRedis
 from loguru import logger
 from redis.exceptions import RedisError
 
-from data_agent.conversation.extraction import ConversationMemoryExtractor
+from data_agent.conversation.application.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.infrastructure.checkpoint_store import CheckpointStore
-from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.memory.indexing.dispatcher import MemoryIndexDispatcher
-from data_agent.memory.mysql.repository import MemoryRepository
+from data_agent.memory.application.index_dispatcher import MemoryIndexDispatcher
+from data_agent.memory.application.maintenance import MemoryMaintenance
 from data_agent.metadata_indexing.dispatcher import MetadataIndexDispatcher
 
 
@@ -70,14 +69,14 @@ async def cleanup_checkpoints(ctx: dict[Any, Any]) -> None:
 
 async def dispatch_memory_index_outbox(ctx: dict[Any, Any]) -> None:
     """周期性同步可重建 ES/Qdrant 记忆投影。"""
-    del ctx
-    await MemoryIndexDispatcher().dispatch()
+    dispatcher = cast(MemoryIndexDispatcher, ctx["memory_dispatcher"])
+    await dispatcher.dispatch()
 
 
 async def report_memory_index_dead_letters(ctx: dict[Any, Any]) -> None:
     """周期性暴露已停止重试的记忆索引期望状态积压。"""
-    del ctx
-    await MemoryIndexDispatcher().report_dead_letters()
+    dispatcher = cast(MemoryIndexDispatcher, ctx["memory_dispatcher"])
+    await dispatcher.report_dead_letters()
 
 
 async def dispatch_metadata_index_outbox(ctx: dict[Any, Any]) -> None:
@@ -103,13 +102,11 @@ async def extract_conversation_memory(ctx: dict[Any, Any]) -> None:
 
 async def purge_user_memories(ctx: dict[Any, Any]) -> None:
     """物理清理派生索引已确认删除的用户记忆。"""
-    del ctx
-    async with MySQLDatabase.session() as session:
-        await MemoryRepository(session).purge_ready_user_memories()
+    maintenance = cast(MemoryMaintenance, ctx["memory_maintenance"])
+    await maintenance.purge_ready_user_memories()
 
 
 async def expire_memories(ctx: dict[Any, Any]) -> None:
     """周期性失效到期记忆并投递索引删除。"""
-    del ctx
-    async with MySQLDatabase.session() as session:
-        await MemoryRepository(session).expire_due()
+    maintenance = cast(MemoryMaintenance, ctx["memory_maintenance"])
+    await maintenance.expire_due()

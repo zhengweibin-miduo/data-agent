@@ -7,7 +7,12 @@ from arq.connections import ArqRedis, RedisSettings
 from loguru import logger
 from redis.exceptions import RedisError
 
-from data_agent.conversation.extraction import ConversationMemoryExtractor
+from data_agent.conversation.adapters.extraction_model import StructuredExtractionModel
+from data_agent.conversation.adapters.mysql.extraction import (
+    MySQLExtractionClaimStore,
+    MySQLExtractionCommitter,
+)
+from data_agent.conversation.application.extraction import ConversationMemoryExtractor
 from data_agent.ddl_metadata.jobs.store import DDLJobStore
 from data_agent.ddl_metadata.persistence.snapshots import (
     MetadataSnapshotService,
@@ -31,6 +36,7 @@ from data_agent.infrastructure.qdrant import QdrantClient
 from data_agent.infrastructure.redis import RedisClient
 from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
 from data_agent.logging import setup_logging
+from data_agent.memory.adapters.composition import build_memory_worker_runtime
 from data_agent.memory.indexing.elasticsearch import (
     MemoryElasticsearchIndex,
 )
@@ -98,7 +104,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
     MySQLDatabase.initialize()
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
-    TEIEmbeddingClient.initialize()
+    embeddings = TEIEmbeddingClient.initialize()
     # 步骤二：Meta 索引结构必须先成功创建或严格校验，才允许处理 Meta/DW 业务数据。
     for setup in (
         MetadataValueElasticsearchIndex(elasticsearch).setup,
@@ -116,7 +122,15 @@ async def startup(ctx: dict[Any, Any]) -> None:
             if is_fatal_index_error(error):
                 raise
             logger.warning("记忆索引初始化失败，本次启动继续运行并将在后续启动时重试")
-    # 步骤四：模型能力探测与 checkpoint 初始化成功后，才装配任务门面和工作流。
+    # 步骤四：索引客户端就绪后一次构造长生命周期 Memory worker 用例并注入 ctx。
+    memory_runtime = build_memory_worker_runtime(
+        elasticsearch_client=elasticsearch,
+        qdrant_client=qdrant,
+        embeddings=embeddings,
+    )
+    ctx["memory_dispatcher"] = memory_runtime.dispatcher
+    ctx["memory_maintenance"] = memory_runtime.maintenance
+    # 步骤五：模型能力探测与 checkpoint 初始化成功后，才装配任务门面和工作流。
     model = LLMClient.initialize()
     await LLMClient.check_structured_output_capability()
     checkpointer = await CheckpointStore.initialize()
@@ -127,7 +141,23 @@ async def startup(ctx: dict[Any, Any]) -> None:
     if backfilled:
         logger.info("已把遗留非终态任务补录进活动索引，停滞巡检将覆盖它们")
     ctx["jobs"] = jobs
-    ctx["conversation_extractor"] = ConversationMemoryExtractor(model)
+    ctx["conversation_extractor"] = ConversationMemoryExtractor(
+        StructuredExtractionModel(
+            model,
+            method=app_config.llm.structured_output_method,
+        ),
+        MySQLExtractionClaimStore(
+            max_backoff_seconds=app_config.memory.outbox_max_backoff_seconds
+        ),
+        MySQLExtractionCommitter(),
+        batch_size=app_config.conversation.extraction_batch_size,
+        max_concurrency=app_config.llm.max_concurrency,
+        lease_seconds=app_config.conversation.extraction_lease_seconds,
+        message_limit=app_config.conversation.context_message_limit,
+        summary_max_chars=app_config.conversation.summary_max_chars,
+        content_version=app_config.memory.content_version,
+        projection_version=app_config.memory.projection_version,
+    )
     ctx["graph"] = build_ddl_metadata_graph(
         DDLGraphDependencies(
             model=LLMMetadataGenerator(),
@@ -136,7 +166,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
         ),
         checkpointer,
     )
-    # 步骤五：服务就绪前先重放 dispatch 与 checkpoint 清理 outbox，再报告启动完成。
+    # 步骤六：服务就绪前先重放 dispatch 与 checkpoint 清理 outbox，再报告启动完成。
     await dispatch_pending(ctx)
     await cleanup_checkpoints(ctx)
     logger.info("DDL 元数据 worker 已启动，任务执行与周期维护资源均已就绪")

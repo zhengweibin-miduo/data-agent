@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Query, Request
 
+from data_agent.conversation.application.service import ConversationService
 from data_agent.conversation.models import (
     CompleteTurnRequest,
     CompleteTurnResponse,
@@ -14,7 +15,6 @@ from data_agent.conversation.models import (
     StartTurnRequest,
     StartTurnResponse,
 )
-from data_agent.conversation.service import ConversationService
 from data_agent.memory.application.service import MemoryService
 from data_agent.models.memory import (
     MemoryDeleteResponse,

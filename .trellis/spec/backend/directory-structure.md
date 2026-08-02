@@ -29,7 +29,15 @@ src/data_agent/
 ├── persistence/
 │   └── schema.py
 ├── memory/
+│   ├── adapters/
+│   │   ├── composition.py
+│   │   ├── mysql.py
+│   │   ├── projection_indexes.py
+│   │   └── search_indexes.py
 │   ├── application/
+│   │   ├── contracts.py
+│   │   ├── index_dispatcher.py
+│   │   ├── maintenance.py
 │   │   ├── search.py
 │   │   └── service.py
 │   ├── domain/
@@ -57,11 +65,20 @@ src/data_agent/
 │   └── tei_embeddings.py
 ├── conversation/
 │   ├── api.py
-│   ├── extraction.py
+│   ├── application/
+│   │   ├── contracts.py
+│   │   ├── extraction.py
+│   │   └── service.py
+│   ├── adapters/
+│   │   ├── extraction_model.py
+│   │   ├── long_term_memory.py
+│   │   └── mysql/
+│   │       ├── extraction.py
+│   │       ├── store.py
+│   │       └── user_data.py
 │   ├── models.py
 │   ├── mysql_tables.py
-│   ├── repository.py
-│   └── service.py
+│   └── repository.py
 ├── answer_readiness/
 │   ├── classifier.py
 │   ├── models.py
@@ -152,10 +169,13 @@ under `docs/docker/`.
 - `memory.domain` contains deterministic transformations only. It
   must not import FastAPI, arq, initialized clients, SQLAlchemy sessions, Redis,
   Elasticsearch, Qdrant, or TEI.
-- `memory.application` owns memory use cases and transaction boundaries. It
-  composes domain behavior, MySQL repositories, index adapters, and injected
-  DDL lease/reference interfaces without importing the DDL package or defining
-  SQL and external payload formats.
+- `memory.application` owns memory use cases and explicit ports. It depends on
+  domain values and stable contracts only; it does not import MySQL repositories,
+  SQLAlchemy, infrastructure clients, external SDKs, or global settings.
+- `memory.adapters` implements the MySQL, search-index, projection-index, and
+  composition roles. MySQL adapters own short use-case transactions; the API and
+  worker composition roots inject initialized external clients and explicit
+  budgets into long-lived application instances.
 - `memory.mysql.MemoryRepository` owns authoritative records,
   history, links, browser mutations, and exact reads.
   `MemoryIndexOutboxRepository` separately owns desired index state, claims,
@@ -199,7 +219,17 @@ workflow/nodes
   -> memory/domain + parsing + validation + models
 
 memory/application
-  -> memory/domain + memory/mysql + memory/indexing
+  -> memory/domain + models
+
+memory/adapters
+  -> memory/application + memory/mysql + memory/indexing + infrastructure
+
+conversation/application
+  -> conversation/models + memory/domain values + models
+
+conversation/adapters
+  -> conversation/application + conversation/repository + memory/application
+     + memory/mysql + infrastructure
 
 jobs/store
   -> jobs/redis
@@ -256,8 +286,13 @@ configuration, and current specs; archived Trellis artifacts remain historical.
 
 ### 3. Contracts
 
-- `data_agent.memory` may depend on root models, identifiers, errors,
-  persistence, settings outside the domain layer, and infrastructure adapters.
+- `data_agent.memory.application` may depend on root models, identifiers, errors,
+  and memory domain values. Concrete persistence, settings, and infrastructure
+  dependencies remain in `data_agent.memory.adapters` or composition roots.
+- `data_agent.conversation.application` collaborates with Long-term Memory only
+  through its application interface. The two intentional atomic cross-context
+  transactions live in outer MySQL integration adapters for user-data erasure and
+  extraction completion.
 - `data_agent.memory` and `data_agent.conversation` must not import
   `data_agent.ddl_metadata`.
 - DDL-specific snapshot context and reference validation remain in

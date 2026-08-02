@@ -302,8 +302,10 @@ Contracts:
   become audited `NOOP` decisions instead of in-place content updates.
 - Repository methods accept and return typed application contracts or bounded
   row projections; JSON is decoded through the central memory parser.
-- Service code owns the transaction boundary. Repositories can share one
-  Session when Meta rows and trusted memories must commit atomically.
+- A use-case MySQL adapter owns each short transaction boundary. Repositories can
+  share one caller-owned Session inside an outer integration adapter when Meta
+  rows and trusted memories, Conversation erasure and Memory tombstones, or
+  extraction completion and Memory candidates must commit atomically.
 - Do not create a second engine or Session for the application memory
   database. Static schema-qualified memory tables keep the cross-database
   transaction on one MySQL connection.

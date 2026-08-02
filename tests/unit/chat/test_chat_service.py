@@ -19,6 +19,7 @@ from data_agent.answer_readiness.service import AnswerReadinessService
 from data_agent.chat.api import router
 from data_agent.chat.models import ChatTurnRequest
 from data_agent.chat.service import ChatService
+from data_agent.conversation.application.service import ConversationService
 from data_agent.conversation.models import (
     CompleteTurnResponse,
     ContextMessage,
@@ -27,7 +28,6 @@ from data_agent.conversation.models import (
     MessageRole,
     StartTurnResponse,
 )
-from data_agent.conversation.service import ConversationService
 from data_agent.errors import DataAgentError
 from data_agent.models.jobs import DDLJobRequest
 from data_agent.settings import app_config

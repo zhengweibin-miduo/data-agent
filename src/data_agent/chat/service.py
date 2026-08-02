@@ -23,8 +23,8 @@ from data_agent.answer_readiness.service import (
     AnswerReadinessService,
 )
 from data_agent.chat.models import ChatTurnRequest, ChatTurnResponse
+from data_agent.conversation.application.service import ConversationService
 from data_agent.conversation.models import ConversationContext, MessageRole
-from data_agent.conversation.service import ConversationService
 from data_agent.ddl_metadata.parsing import parse_ddl
 from data_agent.errors import DataAgentError
 from data_agent.settings import app_config

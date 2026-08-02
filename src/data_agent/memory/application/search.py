@@ -1,4 +1,4 @@
-"""MySQL 权威回查的 ES/Qdrant 混合记忆检索。"""
+"""基于权威回查的 Long-term Memory 混合检索用例。"""
 
 from __future__ import annotations
 
@@ -8,24 +8,16 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
-from data_agent.infrastructure.elasticsearch import ElasticsearchClient
-from data_agent.infrastructure.mysql import MySQLDatabase
-from data_agent.infrastructure.qdrant import QdrantClient
-from data_agent.infrastructure.tei_embeddings import TEIEmbeddingClient
-from data_agent.memory.domain.payloads import (
-    content_object_ids,
-    memory_content_hash,
+from data_agent.memory.application.contracts import (
+    EmbeddingProvider,
+    LexicalMemoryIndex,
+    MemorySearchConfig,
+    MemorySearchStore,
+    VectorMemoryIndex,
 )
+from data_agent.memory.domain.payloads import content_object_ids, memory_content_hash
 from data_agent.memory.domain.policies import category_policy
 from data_agent.memory.domain.ranking import reciprocal_rank_fusion
-from data_agent.memory.indexing.elasticsearch import (
-    MemoryElasticsearchIndex,
-)
-from data_agent.memory.indexing.qdrant import MemoryQdrantIndex
-from data_agent.memory.mysql.index_outbox import (
-    MemoryIndexOutboxRepository,
-)
-from data_agent.memory.mysql.repository import MemoryRepository
 from data_agent.memory.versions import category_content_version
 from data_agent.models.memory import (
     MemoryIndexTarget,
@@ -33,22 +25,31 @@ from data_agent.models.memory import (
     MemorySearchResponse,
     MemoryStatus,
 )
-from data_agent.settings import app_config
 
 
-def _log_degraded_index(
-    error: BaseException,
-    target: MemoryIndexTarget,
-) -> None:
-    """记录一次派生索引降级，并由边界从异常参数补充原因类型。"""
+def _log_degraded_index(error: BaseException, target: MemoryIndexTarget) -> None:
+    """记录派生索引降级，不暴露外部异常内容。"""
     del error
-    logger.warning(
-        f"{target.value} 记忆索引检索失败，本次查询已降级为其余可用信号"
-    )
+    logger.warning(f"{target.value} 记忆索引检索失败，本次查询已降级为其余可用信号")
 
 
 class MemorySearchService:
-    """并发检索派生索引并仅返回复核后的 MySQL 权威内容。"""
+    """并发检索派生信号并仅返回 MySQL 复核后的权威内容。"""
+
+    def __init__(
+        self,
+        store: MemorySearchStore,
+        lexical_index: LexicalMemoryIndex,
+        vector_index: VectorMemoryIndex,
+        embeddings: EmbeddingProvider,
+        config: MemorySearchConfig,
+    ) -> None:
+        """绑定权威 store、可降级索引端口与显式预算。"""
+        self._store = store
+        self._lexical_index = lexical_index
+        self._vector_index = vector_index
+        self._embeddings = embeddings
+        self._config = config
 
     async def search(
         self,
@@ -61,61 +62,51 @@ class MemorySearchService:
         exact_uids: Sequence[str] = (),
         allowed_object_ids: set[str] | None = None,
     ) -> MemorySearchResponse:
-        """执行稳定 RRF，并在索引失败时安全降级。"""
+        """执行稳定 RRF，并在各远程路径失败时独立降级。"""
         bounded_limit = min(
-            limit or app_config.memory.search_limit,
-            app_config.memory.search_limit,
+            limit or self._config.search_limit,
+            self._config.search_limit,
         )
-        # 步骤一：优先采用调用方给出的精确 UID；未提供时再查询 MySQL，
-        # 使两个派生索引都失败时仍保留可验证的精确基线。
-        rankings: list[tuple[str, Sequence[str]]] = []
-        degraded: list[MemoryIndexTarget] = []
-        if exact_uids:
-            baseline_uids = list(exact_uids)
-        else:
-            async with MySQLDatabase.session() as session:
-                baseline_uids = await MemoryRepository(session).find_exact_query(
-                    source,
-                    query,
-                    categories,
-                    user_id=user_id,
-                    limit=bounded_limit,
-                )
+        # 步骤一：保留调用方精确候选；否则读取 MySQL 精确基线。
+        baseline_uids = (
+            list(exact_uids)
+            if exact_uids
+            else await self._store.find_exact(
+                source,
+                query,
+                categories,
+                user_id=user_id,
+                limit=bounded_limit,
+            )
+        )
 
-        # 步骤二：BM25 与向量路径并发且各自限时，
-        # 单个异常只移除对应信号，不影响另一索引和基线。
-        async def es_search() -> list[str]:
-            index = MemoryElasticsearchIndex(ElasticsearchClient.get_client())
-            return await index.search(
+        # 步骤二：词法和向量路径并发且分别限时，一个失败不取消另一个信号。
+        async def lexical_search() -> list[str]:
+            return await self._lexical_index.search(
                 query,
                 source,
                 categories,
-                app_config.elasticsearch.top_k,
+                self._config.lexical_top_k,
                 user_id=user_id,
             )
 
         async def vector_search() -> list[str]:
-            vector = await TEIEmbeddingClient.get_client().aembed_query(query)
-            index = MemoryQdrantIndex(QdrantClient.get_client())
-            return await index.search(
+            vector = await self._embeddings.embed_query(query)
+            return await self._vector_index.search(
                 vector,
                 source,
                 categories,
-                app_config.qdrant.top_k,
+                self._config.vector_top_k,
                 user_id=user_id,
             )
 
         results = await asyncio.gather(
-            asyncio.wait_for(
-                es_search(),
-                timeout=app_config.memory.retrieval_timeout_seconds,
-            ),
-            asyncio.wait_for(
-                vector_search(),
-                timeout=app_config.memory.retrieval_timeout_seconds,
-            ),
+            asyncio.wait_for(lexical_search(), timeout=self._config.timeout_seconds),
+            asyncio.wait_for(vector_search(), timeout=self._config.timeout_seconds),
             return_exceptions=True,
         )
+        rankings: list[tuple[str, Sequence[str]]] = []
+        degraded: list[MemoryIndexTarget] = []
         for target, signal, result in (
             (MemoryIndexTarget.ELASTICSEARCH, "elasticsearch", results[0]),
             (MemoryIndexTarget.QDRANT, "qdrant", results[1]),
@@ -126,33 +117,22 @@ class MemorySearchService:
             else:
                 rankings.append((signal, result))
 
-        # 步骤三：索引只提供候选 UID；
-        # 统一回到同租户 MySQL 权威行，并读取各目标尚未收敛的 outbox 状态。
+        # 步骤三：索引只贡献 UID；统一回查同租户权威内容及未收敛目标。
         candidate_uids = {
             *baseline_uids,
             *(uid for _signal, uids in rankings for uid in uids),
         }
         if not candidate_uids:
-            return MemorySearchResponse(
-                items=[],
-                degraded_targets=degraded,
-            )
-        async with MySQLDatabase.session() as session:
-            repository = MemoryRepository(session)
-            memories = await repository.get_many_active(
-                sorted(candidate_uids),
-                user_id=user_id,
-            )
-            pending_targets = await MemoryIndexOutboxRepository(
-                session
-            ).pending_targets(candidate_uids)
-        by_uid = {memory.detail.uid: memory.detail for memory in memories}
+            return MemorySearchResponse(items=[], degraded_targets=degraded)
+        memories = await self._store.load_authority(candidate_uids, user_id=user_id)
+        pending_targets = await self._store.pending_targets(candidate_uids)
+        by_uid = {memory.uid: memory for memory in memories}
+
+        # 步骤四：只剔除该目标仍待收敛的排名信号。
         target_by_signal = {
             "elasticsearch": MemoryIndexTarget.ELASTICSEARCH,
             "qdrant": MemoryIndexTarget.QDRANT,
         }
-        # 步骤四：某目标仍有待处理的 desired state 时，其命中可能是旧投影，
-        # 只剔除该目标的排名信号。
         confirmed_rankings = [
             (
                 signal,
@@ -164,37 +144,28 @@ class MemorySearchService:
             )
             for signal, uids in rankings
         ]
-        # 步骤五：将精确基线与已确认信号做稳定 RRF；
-        # 融合分数只决定候选顺序，不赋予内容权威性。
         fused = reciprocal_rank_fusion(
             [("mysql_exact", baseline_uids), *confirmed_rankings],
-            constant=app_config.memory.rrf_constant,
+            constant=self._config.rrf_constant,
             exact_uids=set(baseline_uids),
         )
-        # 步骤六：返回前连续校验租户、状态、版本、内容哈希、有效期
-        # 和对象白名单，拒绝所有陈旧命中。
+
+        # 步骤五：按租户、来源、类别、状态、内容版本/哈希、有效期与对象范围复核。
         items: list[MemorySearchHit] = []
+        now = datetime.now(UTC).replace(tzinfo=None)
         for uid, score, signals in fused:
             detail = by_uid.get(uid)
             if detail is None:
                 continue
-            # projection_version 描述派生索引结构，不描述权威内容是否可信。派生
-            # 索引是否已按当前结构收敛，已由 pending_targets 逐信号剔除；在这里
-            # 再按行否决会连 MySQL 精确基线命中一起丢掉，使升级 projection_version
-            # 后、重建任务打上新版本号前的窗口内检索全量返回空。
             if (
                 detail.source != source
                 or detail.user_id != user_id
                 or detail.status != MemoryStatus.ACTIVE
                 or detail.content_version != category_content_version(detail.category)
                 or memory_content_hash(detail.content) != detail.content_hash
+                or (categories and detail.category not in categories)
+                or (detail.expires_at is not None and detail.expires_at <= now)
             ):
-                continue
-            if categories and detail.category not in categories:
-                continue
-            if detail.expires_at is not None and detail.expires_at <= datetime.now(
-                UTC
-            ).replace(tzinfo=None):
                 continue
             object_ids = set(content_object_ids(detail.content))
             if (
@@ -215,15 +186,15 @@ class MemorySearchService:
             )
         items.sort(key=lambda item: (-item.score, item.memory.uid))
         items = items[:bounded_limit]
-        # 步骤七：以尽力而为方式记录访问热度，统计失败不得撤销权威过滤结果。
+
+        # 步骤六：访问统计是尽力写入，失败不得撤销已完成的权威过滤结果。
         if items:
             try:
-                async with MySQLDatabase.session() as session:
-                    await MemoryRepository(session).record_access(
-                        {item.memory.uid for item in items},
-                        source=source,
-                        user_id=user_id,
-                    )
+                await self._store.record_access(
+                    {item.memory.uid for item in items},
+                    source=source,
+                    user_id=user_id,
+                )
             except Exception:  # noqa: BLE001
                 logger.warning("记忆访问统计写入失败，搜索结果已按尽力而为返回")
         return MemorySearchResponse(items=items, degraded_targets=degraded)
