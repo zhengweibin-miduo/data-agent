@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "核验后端当前入口、进程与模块所有权"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "核验独立前端、HTTP 与 SSE 传输边界"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "保持知识页端到端数据流一致"}
+{"file": ".trellis/tasks/08-03-update-agent-knowledge/research/current-agent-map.md", "reason": "当前 Agent 主流程与旧页面漂移结论"}
