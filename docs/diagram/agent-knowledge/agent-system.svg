@@ -106,7 +106,7 @@
   <text class="edge-label" x="1228" y="328">Binlog</text>
   <path class="edge-orange" d="M1210 485V530"/>
   <path class="edge-orange" d="M1280 570H1370V505"/>
-  <text class="edge-label" x="1325" y="560">DW apply</text>
+  <text class="edge-label" x="1325" y="560">DW apply + values frequency</text>
   <path class="edge-orange" d="M1370 290H1280V245"/>
   <text class="edge-label" x="1325" y="280">source rows</text>
   <path class="edge" d="M1370 480H1325V425H1280"/>
@@ -213,8 +213,8 @@
   <rect x="1140" y="530" width="140" height="80" rx="8" fill="#0f172a"/>
   <rect class="box" x="1140" y="530" width="140" height="80" rx="8" fill="rgba(251,146,60,.28)" stroke="#fb923c"/>
   <text class="name" x="1210" y="561">DW apply</text>
-  <text class="sub" x="1210" y="580">schema · backfill</text>
-  <text class="sub" x="1210" y="597">replay · streaming</text>
+  <text class="sub" x="1210" y="580">schema · backfill · replay</text>
+  <text class="sub" x="1210" y="597">同事务写 Meta Values desired</text>
 
   <!-- storage boxes -->
   <rect x="1370" y="145" width="210" height="75" rx="8" fill="#0f172a"/>
