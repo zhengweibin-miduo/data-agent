@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 760" role="img" aria-labelledby="title desc">
+  <title id="title">一次 Chat 请求的完整时序</title>
+  <desc id="desc">Workbench 通过普通 HTTP 调用 Chat。Conversation 建立可幂等的 turn 后，Readiness classifier 先调用模型分类；分类失败返回 502，需要数据时再检查 Data Sync。data_preparing 与 intent_unresolved 跳过回答生成，只有 proceed 才调用 DDL Copilot，最后原子完成 turn。</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width=".5"/></pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
+    <marker id="return" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polyline points="0 0,10 3.5,0 7" fill="none" stroke="#64748b" stroke-width="1.5"/></marker>
+    <style>
+      text{font-family:"Cascadia Code","SFMono-Regular","Noto Sans SC","PingFang SC",sans-serif}.title{font-size:20px;font-weight:700;fill:#f8fafc}.sub{font-size:10px;fill:#94a3b8}.actor{font-size:11px;font-weight:700;fill:#f8fafc}.msg{font-size:10px;fill:#e2e8f0}.note{font-size:9px;fill:#cbd5e1}.tiny{font-size:8px;fill:#94a3b8}.line{stroke:#334155;stroke-dasharray:6 4}.sync{stroke:#94a3b8;stroke-width:1.5;marker-end:url(#arrow)}.ret{stroke:#64748b;stroke-width:1.2;stroke-dasharray:6 3;marker-end:url(#return)}
+    </style>
+  </defs>
+  <rect width="1160" height="760" fill="#0f172a"/><rect width="1160" height="760" fill="url(#grid)"/>
+  <text x="30" y="38" class="title">一次 Chat 请求：分类模型在门禁内，回答模型在 proceed 后</text>
+  <text x="30" y="58" class="sub">实线 = 同步调用 · 虚线 = 返回 · Chat 是一次普通 HTTP 长请求，不是 SSE/token streaming</text>
+  <!-- lifelines -->
+  <g>
+    <line x1="115" y1="132" x2="115" y2="690" class="line"/><line x1="305" y1="132" x2="305" y2="690" class="line"/>
+    <line x1="495" y1="132" x2="495" y2="690" class="line"/><line x1="685" y1="132" x2="685" y2="690" class="line"/>
+    <line x1="875" y1="132" x2="875" y2="690" class="line"/><line x1="1065" y1="132" x2="1065" y2="690" class="line"/>
+  </g>
+  <!-- actors -->
+  <g text-anchor="middle">
+    <g><rect x="45" y="82" width="140" height="50" rx="7" fill="#0f172a"/><rect x="45" y="82" width="140" height="50" rx="7" fill="rgba(8,51,68,.5)" stroke="#22d3ee" stroke-width="1.5"/><text x="115" y="106" class="actor">Workbench</text><text x="115" y="121" class="tiny">Browser</text></g>
+    <g><rect x="235" y="82" width="140" height="50" rx="7" fill="#0f172a"/><rect x="235" y="82" width="140" height="50" rx="7" fill="rgba(6,78,59,.5)" stroke="#34d399" stroke-width="1.5"/><text x="305" y="106" class="actor">Chat API / Service</text><text x="305" y="121" class="tiny">HTTP use case</text></g>
+    <g><rect x="425" y="82" width="140" height="50" rx="7" fill="#0f172a"/><rect x="425" y="82" width="140" height="50" rx="7" fill="rgba(6,78,59,.5)" stroke="#34d399" stroke-width="1.5"/><text x="495" y="106" class="actor">Conversation</text><text x="495" y="121" class="tiny">turn lease + context</text></g>
+    <g><rect x="615" y="82" width="140" height="50" rx="7" fill="#0f172a"/><rect x="615" y="82" width="140" height="50" rx="7" fill="rgba(120,53,15,.4)" stroke="#fbbf24" stroke-width="1.5"/><text x="685" y="106" class="actor">Readiness</text><text x="685" y="121" class="tiny">read-only gate</text></g>
+    <g><rect x="805" y="82" width="140" height="50" rx="7" fill="#0f172a"/><rect x="805" y="82" width="140" height="50" rx="7" fill="rgba(76,29,149,.5)" stroke="#a78bfa" stroke-width="1.5"/><text x="875" y="106" class="actor">MySQL / Data Sync</text><text x="875" y="121" class="tiny">authority + phase</text></g>
+    <g><rect x="995" y="82" width="140" height="50" rx="7" fill="#0f172a"/><rect x="995" y="82" width="140" height="50" rx="7" fill="rgba(30,41,59,.7)" stroke="#94a3b8" stroke-width="1.5"/><text x="1065" y="106" class="actor">Model service</text><text x="1065" y="121" class="tiny">classifier + DDL Copilot</text></g>
+  </g>
+  <!-- messages -->
+  <g>
+    <line x1="115" y1="175" x2="305" y2="175" class="sync"/><text x="210" y="164" class="msg" text-anchor="middle">1 POST /chat-turns + turn_uid + DDL</text>
+    <path d="M305 205h45v30h-45" fill="none" class="sync"/><text x="365" y="218" class="msg">2 parse_ddl：大小、来源、真实表名</text>
+    <line x1="305" y1="270" x2="495" y2="270" class="sync"/><text x="400" y="259" class="msg" text-anchor="middle">3 start_or_replay(turn_uid)</text>
+    <line x1="495" y1="310" x2="875" y2="310" class="sync"/><text x="685" y="299" class="msg" text-anchor="middle">保存用户消息；取得 turn lease</text>
+    <line x1="875" y1="345" x2="495" y2="345" class="ret"/><text x="685" y="335" class="tiny" text-anchor="middle">started / completed replay / conflict</text>
+    <line x1="305" y1="375" x2="685" y2="375" class="sync"/><text x="495" y="364" class="msg" text-anchor="middle">4 evaluate(question, table refs)</text>
+    <line x1="685" y1="405" x2="1065" y2="405" class="sync"/><text x="875" y="394" class="msg" text-anchor="middle">Readiness classifier：结构化模型调用</text>
+    <line x1="1065" y1="435" x2="685" y2="435" class="ret"/><text x="875" y="425" class="tiny" text-anchor="middle">intent；模型故障 → chat_model_failed 502</text>
+    <line x1="685" y1="465" x2="875" y2="465" class="sync"/><text x="780" y="454" class="msg" text-anchor="middle">依赖 DW 时：只读 phase + heartbeat</text>
+    <line x1="875" y1="495" x2="685" y2="495" class="ret"/><text x="780" y="485" class="tiny" text-anchor="middle">streaming + fresh → proceed；否则 data_preparing</text>
+    <rect x="275" y="510" width="830" height="96" rx="6" fill="none" stroke="#64748b" stroke-dasharray="5 4"/><rect x="275" y="510" width="68" height="20" rx="5" fill="#1e293b" stroke="#64748b"/><text x="309" y="524" class="tiny" text-anchor="middle">alt</text>
+    <text x="353" y="524" class="tiny">[proceed；data_preparing / intent_unresolved 均跳过]</text>
+    <line x1="305" y1="555" x2="1065" y2="555" class="sync"/><text x="685" y="544" class="msg" text-anchor="middle">5 DDL Copilot：summary + messages + memory + normalized DDL</text>
+    <line x1="1065" y1="585" x2="305" y2="585" class="ret"/><text x="685" y="575" class="tiny" text-anchor="middle">完整回答</text>
+    <line x1="305" y1="625" x2="495" y2="625" class="sync"/><text x="400" y="614" class="msg" text-anchor="middle">6 complete：assistant message + extraction outbox</text>
+    <line x1="495" y1="660" x2="875" y2="660" class="sync"/><text x="685" y="649" class="msg" text-anchor="middle">同一 MySQL 事务；释放 turn lease</text>
+    <line x1="305" y1="704" x2="115" y2="704" class="ret"/><text x="210" y="694" class="msg" text-anchor="middle">完整 HTTP 响应</text>
+  </g>
+  <rect x="30" y="718" width="1100" height="28" rx="6" fill="rgba(136,19,55,.32)" stroke="#fb7185"/><text x="580" y="737" class="note" text-anchor="middle">边界：所有新 turn 都先调用分类模型；无需 DW 仅跳过同步读取，仍需 proceed 后的 DDL Copilot；Chat 没有 DW 行查询或 SQL 工具。</text>
+</svg>

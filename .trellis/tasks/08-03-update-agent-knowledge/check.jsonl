@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "检查后端路径与运行边界"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "检查前端传输与独立部署边界"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查跨层流程是否闭合"}
+{"file": ".trellis/tasks/08-03-update-agent-knowledge/research/current-agent-map.md", "reason": "检查页面是否覆盖已核验漂移"}

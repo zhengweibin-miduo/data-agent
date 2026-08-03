@@ -1,0 +1,29 @@
+{
+  "id": "update-agent-knowledge",
+  "name": "update-agent-knowledge",
+  "title": "更新 Agent Knowledge 页面",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-03",
+  "completedAt": null,
+  "branch": "docs/update-agent-knowledge-20260803",
+  "base_branch": "master",
+  "worktree_path": "D:\\worktrees\\data-agent\\data-agent-repo\\.trellis\\worktrees\\08-03-update-agent-knowledge",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}
