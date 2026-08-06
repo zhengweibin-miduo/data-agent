@@ -57,6 +57,7 @@ class MySQLQueryExecutor:
             read_url,
             pool_pre_ping=True,
             pool_recycle=3600,
+            connect_args={"init_command": "SET time_zone = '+00:00'"},
         )
         self._timeout_seconds = timeout_seconds
         self._fetch_batch_rows = fetch_batch_rows

@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from decimal import Decimal
 from typing import Literal
 
 import pytest
@@ -178,6 +179,93 @@ async def test_filter_uses_typed_normalized_value() -> None:
     assert result.validated is not None
 
 
+async def test_detail_requires_bound_projection_and_decimal_stays_exact() -> None:
+    """明细必须绑定结果列，高精度 DECIMAL 参数不得转为 float。"""
+    context = _context().model_copy(update={"bindings": {"金额": "column-amount"}})
+    intent = QueryIntent(
+        query_type=QueryType.DETAIL,
+        measure_quotes=["金额"],
+        filters=[
+            FilterIntent(
+                column_quote="金额",
+                operator="gt",
+                value_quotes=["12345678901234567890.12"],
+            )
+        ],
+    )
+    result = await validate_query(
+        _draft(
+            "SELECT o.amount FROM dw.orders o WHERE o.amount > :minimum",
+            params={"minimum": Decimal("12345678901234567890.12")},
+        ),
+        context,
+        intent,
+        dw_database="dw",
+    )
+    assert result.validated is not None
+
+    unbound = await validate_query(
+        QueryDraft(
+            sql="SELECT o.id FROM dw.orders o WHERE o.amount > :minimum",
+            params={"minimum": 10},
+            table_ids=["table-orders"],
+            column_ids=["column-id", "column-amount"],
+        ),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            filters=[
+                FilterIntent(column_quote="金额", operator="gt", value_quotes=["10"])
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert unbound.issues[0].code == "projection_mismatch"
+
+
+async def test_rejects_partition_unbound_group_and_wrong_aggregate_sort() -> None:
+    """分区、未绑定分组及不同聚合排序均不得通过。"""
+    context = _context().model_copy(
+        update={"bindings": {"地区": "column-id", "金额": "column-amount"}}
+    )
+    intent = QueryIntent(
+        query_type=QueryType.COMPARISON,
+        aggregation="sum",
+        aggregation_quote="总和",
+        measure_quotes=["金额"],
+        dimension_quotes=["地区"],
+        sorts=[SortIntent(quote="金额", direction="desc", direction_quote="最高")],
+    )
+    cases = [
+        QueryDraft(
+            sql="SELECT SUM(o.amount) FROM dw.orders PARTITION (p1) o",
+            table_ids=["table-orders"],
+            column_ids=["column-amount"],
+        ),
+        QueryDraft(
+            sql=(
+                "SELECT o.id, YEAR(o.created_at), SUM(o.amount) FROM dw.orders o "
+                "GROUP BY o.id, YEAR(o.created_at) ORDER BY SUM(o.amount) DESC"
+            ),
+            table_ids=["table-orders"],
+            column_ids=["column-id", "column-created-at", "column-amount"],
+        ),
+        QueryDraft(
+            sql=(
+                "SELECT o.id, SUM(o.amount) FROM dw.orders o GROUP BY o.id "
+                "ORDER BY MAX(o.amount) DESC"
+            ),
+            table_ids=["table-orders"],
+            column_ids=["column-id", "column-amount"],
+        ),
+    ]
+    issues = []
+    for draft in cases:
+        result = await validate_query(draft, context, intent, dw_database="dw")
+        issues.append(result.issues[0].code)
+    assert issues == ["table_modifier_forbidden", "group_mismatch", "sort_mismatch"]
+
+
 async def test_count_star_is_not_projection_star() -> None:
     """COUNT(*) 保留标准聚合语义而普通 SELECT 星号仍被拒绝。"""
     draft = QueryDraft(
@@ -322,7 +410,7 @@ async def test_cte_validates_physical_column_but_allows_outer_projection() -> No
             "WITH scoped AS (SELECT o.amount FROM dw.orders AS o) "
             "SELECT amount FROM scoped"
         ),
-        _context(),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
         QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
         dw_database="dw",
     )
@@ -807,6 +895,59 @@ async def test_join_rejects_every_unauthorized_condition(sql: str) -> None:
     assert result.issues[0].code == "join_unsupported"
 
 
+async def test_join_cannot_merge_two_independent_foreign_keys() -> None:
+    """单个 JOIN 必须精确匹配一个外键约束，而非合并两个约束。"""
+    schema = _context().physical_schema.model_copy(
+        update={
+            "relationships": [
+                PhysicalRelationship(
+                    source_table_id="table-orders",
+                    source_column_id="column-id",
+                    target_table="CUSTOMERS",
+                    target_column="ID",
+                    constraint_id="fk-created",
+                ),
+                PhysicalRelationship(
+                    source_table_id="table-orders",
+                    source_column_id="column-amount",
+                    target_table="customers",
+                    target_column="id",
+                    constraint_id="fk-approved",
+                ),
+            ]
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT o.amount FROM dw.orders o JOIN dw.customers c "
+                "ON o.id = c.id AND o.amount = c.id"
+            ),
+            table_ids=["table-orders", "table-customers"],
+            column_ids=["column-amount", "column-id", "column-customer-id"],
+        ),
+        QueryContext(physical_schema=schema),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_unsupported"
+
+    valid = await validate_query(
+        QueryDraft(
+            sql="SELECT o.amount FROM dw.orders o JOIN dw.customers c ON o.id = c.id",
+            table_ids=["table-orders", "table-customers"],
+            column_ids=["column-amount", "column-id", "column-customer-id"],
+        ),
+        QueryContext(
+            physical_schema=schema,
+            bindings={"金额": "column-amount", "客户表": "table-customers"},
+        ),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert valid.validated is not None
+
+
 @pytest.mark.parametrize(
     ("sql", "sorts"),
     [
@@ -852,7 +993,7 @@ async def test_sqlglot_validation_does_not_block_event_loop(
     validation = asyncio.create_task(
         validate_query(
             _draft("SELECT o.amount FROM dw.orders AS o"),
-            _context(),
+            _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
             QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
             dw_database="dw",
         )

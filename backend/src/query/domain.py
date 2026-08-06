@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import InitVar, dataclass
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Literal
 
@@ -358,7 +359,7 @@ class QueryIntent(ContractModel):
             raise ValueError("查询形态必须与用户证据槽位确定性一致")
 
 
-QueryParameter = str | int | float | bool | None
+QueryParameter = str | int | float | Decimal | bool | None
 
 
 class QueryDraft(ContractModel):
@@ -518,7 +519,10 @@ def _normalized_filter_values(item: FilterIntent) -> list[QueryParameter]:
             values.append(int(compact))
             continue
         if re.fullmatch(r"[-+]?(?:\d+\.\d*|\d*\.\d+)", compact):
-            values.append(float(compact))
+            try:
+                values.append(Decimal(compact))
+            except InvalidOperation:
+                values.append(quote)
             continue
         date_match = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日", quote)
         if date_match:
@@ -660,6 +664,8 @@ def _validate_query_sync(
     ):
         return _failed("table_binding_mismatch")
     for table_node in physical_tables:
+        if table_node.args.get("partition") is not None:
+            return _failed("table_modifier_forbidden", table_node.name)
         if table_node.db != dw_database:
             return _failed("schema_forbidden", table_node.db or table_node.name)
         if table_node.name not in tables_by_name:
@@ -778,18 +784,19 @@ def _validate_query_sync(
     fk_edges: set[frozenset[str]] = set()
     fk_constraints: dict[str, set[frozenset[str]]] = {}
     table_by_qualified = {
-        table.qualified_name: table for table in context.physical_schema.tables
+        key.casefold(): table
+        for table in context.physical_schema.tables
+        for key in (table.qualified_name, table.name)
     }
-    table_by_qualified.update(tables_by_name)
     for relation in context.physical_schema.relationships:
-        target_table = table_by_qualified.get(relation.target_table)
+        target_table = table_by_qualified.get(relation.target_table.casefold())
         if target_table is None:
             continue
         target_column = next(
             (
                 column
                 for column in target_table.columns
-                if column.name == relation.target_column
+                if column.name.casefold() == relation.target_column.casefold()
             ),
             None,
         )
@@ -848,12 +855,7 @@ def _validate_query_sync(
             )
         ):
             return _failed("join_unsupported")
-        matching_constraints = [
-            edges for edges in fk_constraints.values() if edges & join_pairs
-        ]
-        if not matching_constraints or not any(
-            edges <= join_pairs for edges in matching_constraints
-        ):
+        if not any(edges == join_pairs for edges in fk_constraints.values()):
             return _failed("join_unsupported")
 
     # 步骤八：模型声明必须与 AST 实际引用以及当前权威指标完全一致。
@@ -1036,12 +1038,24 @@ def _validate_query_sync(
             expression = (
                 projection.this if isinstance(projection, exp.Alias) else projection
             )
-            actual_projection_ids.append(
+            projection_id = (
                 _column_id(expression, columns_by_coordinate)
                 if isinstance(expression, exp.Column)
                 else None
             )
-        if expected_projection_ids and (
+            if projection_id is None and isinstance(expression, exp.Column):
+                direct_lineage_ids = {
+                    column.id
+                    for table in context.physical_schema.tables
+                    for column in table.columns
+                    if column.name == expression.name
+                    and column.id in referenced_columns
+                }
+                projection_id = (
+                    direct_lineage_ids.pop() if len(direct_lineage_ids) == 1 else None
+                )
+            actual_projection_ids.append(projection_id)
+        if not expected_projection_ids or (
             any(item is None for item in actual_projection_ids)
             or len(actual_projection_ids) != len(set(actual_projection_ids))
             or set(actual_projection_ids) != expected_projection_ids
@@ -1094,6 +1108,9 @@ def _validate_query_sync(
         if projection.alias
     }
     actual_sorts: list[tuple[str | None, str]] = []
+    aggregate_sql = {
+        aggregate.sql(dialect="mysql"): aggregate for aggregate in top_level_aggregates
+    }
     order = root.args.get("order")
     if isinstance(order, exp.Order):
         for ordered in order.expressions:
@@ -1119,6 +1136,7 @@ def _validate_query_sync(
                 if isinstance(expression, exp.Column)
                 else _column_id(expression.this, columns_by_coordinate)
                 if isinstance(expression, exp.AggFunc)
+                and expression.sql(dialect="mysql") in aggregate_sql
                 and isinstance(expression.this, exp.Column)
                 else None
             )
@@ -1141,6 +1159,10 @@ def _validate_query_sync(
         if context.bindings.get(quote) is not None
     }
     if intent.query_type in (QueryType.COMPARISON, QueryType.RANKING):
+        if any(
+            not isinstance(expression, exp.Column) for expression in group_expressions
+        ):
+            return _failed("group_mismatch")
         actual_group_ids = {
             _column_id(expression, columns_by_coordinate)
             for expression in group_expressions
