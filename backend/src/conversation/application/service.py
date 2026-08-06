@@ -121,13 +121,18 @@ class ConversationService:
                 semantic_fingerprint=semantic_fingerprint,
             )
         # 步骤二：提交完成后再召回消息与长期记忆，模型或索引延迟不持有行锁。
-        context = await self._context(
-            user_id,
-            started.conversation_id,
-            started.summary,
-            started.summary_through_message_id,
-            content,
-        )
+        try:
+            context = await self._context(
+                user_id,
+                started.conversation_id,
+                started.summary,
+                started.summary_through_message_id,
+                content,
+            )
+        except BaseException:
+            if started.execution_owner:
+                await self._store.abandon_turn(user_id, conversation_uid, turn_uid)
+            raise
         return StartTurnResponse(
             message=started.message,
             context=context,

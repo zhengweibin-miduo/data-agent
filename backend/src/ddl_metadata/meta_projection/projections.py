@@ -547,6 +547,10 @@ class MetadataProjectionRepository:
             (MetadataObjectKind(str(kind)), str(object_id))
             for kind, object_id in pending_rows
         }
+        # 唯一绑定只能建立在完整收敛的作用域上。只要本次完整身份召回中存在
+        # pending/retry/dead-letter 对象，就不能用剩余候选证明唯一。
+        if pending:
+            return []
         active_hits = [
             hit for hit in identities if (hit.kind, hit.object_id) not in pending
         ]

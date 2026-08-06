@@ -1095,6 +1095,37 @@ def test_intent_requires_sort_and_grain_evidence() -> None:
         ).validate_evidence(["按月查看日期大于等于2025年"])
 
 
+def test_intent_normalizes_or_equal_and_requires_time_clause_evidence() -> None:
+    """或等于边界必须规范化，时间完整子句也必须逐字存在。"""
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        measure_quotes=["金额"],
+        filters=[
+            FilterIntent(
+                column_quote="金额",
+                operator="gte",
+                operator_quote="大于或等于",
+                value_quotes=["10"],
+            )
+        ],
+    ).validate_evidence(["金额大于或等于10"])
+    with pytest.raises(ValueError, match="逐字"):
+        QueryIntent(
+            query_type=QueryType.TREND,
+            time_quote="今年",
+            time_column_quote="日期",
+            time_filter=FilterIntent(
+                column_quote="日期",
+                operator="gte",
+                operator_quote="大于等于",
+                value_quotes=["2026-01-01"],
+                clause_quote="日期大于等于2026-01-01",
+            ),
+            grain="month",
+            grain_quote="按月",
+        ).validate_evidence(["今年按月查看日期"])
+
+
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:
     """未建模否定词和与槽位矛盾的结果形态必须失败关闭。"""
     with pytest.raises(ValueError, match="否定语义"):

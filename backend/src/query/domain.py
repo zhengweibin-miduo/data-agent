@@ -188,6 +188,11 @@ class QueryIntent(ContractModel):
                 if self.time_filter and self.time_filter.operator_quote
                 else []
             ),
+            *(
+                [self.time_filter.clause_quote]
+                if self.time_filter and self.time_filter.clause_quote
+                else []
+            ),
             *(item.quote for item in self.sorts),
             *(item.direction_quote for item in self.sorts if item.direction_quote),
             *(item.quote for item in self.ambiguities),
@@ -211,6 +216,10 @@ class QueryIntent(ContractModel):
         }
         unsupported_negations = ("不包含", "不含", "不在", "not in", "not like")
         normalized_inequalities = {
+            "大于等于": "gte",
+            "大于或等于": "gte",
+            "小于等于": "lte",
+            "小于或等于": "lte",
             "不低于": "gte",
             "不少于": "gte",
             "不小于": "gte",
@@ -241,6 +250,9 @@ class QueryIntent(ContractModel):
                 ),
                 reverse=True,
             )
+            marker_operators = {operator for _, operator in marker_matches}
+            if evidenced_operator is None and len(marker_operators) > 1:
+                raise ValueError("过滤操作原文不能同时映射到多个操作符")
             evidenced_operator = evidenced_operator or (
                 marker_matches[0][1] if marker_matches else None
             )
@@ -320,13 +332,13 @@ class QueryIntent(ContractModel):
             "quarter": ("季度", "季", "quarter"),
             "year": ("年", "year"),
         }
-        if self.grain and (
-            self.grain_quote is None
-            or not any(
-                marker in self.grain_quote.casefold()
-                for marker in grain_markers[self.grain]
-            )
-        ):
+        grain_matches = {
+            grain
+            for grain, markers in grain_markers.items()
+            if self.grain_quote is not None
+            and any(marker in self.grain_quote.casefold() for marker in markers)
+        }
+        if self.grain and grain_matches != {self.grain}:
             raise ValueError("时间粒度必须携带与枚举一致的用户原文证据")
         shape_markers = {
             QueryType.DETAIL: ("列出", "每笔", "明细", "记录"),
@@ -641,6 +653,10 @@ def _validate_query_sync(
                 )
                 if not isinstance(expression, exp.Column):
                     return _failed("derived_lineage_unsupported")
+                # 派生输出名称必须保持源字段名称。没有逐 scope 的显式血缘契约
+                # 时，允许改名会令外层同名字段被误映射到另一物理列。
+                if projection.alias and projection.alias != expression.name:
+                    return _failed("derived_lineage_unsupported")
 
     # 步骤二：真实物理表必须显式位于 DW schema，并来自当前 DDL allowlist。
     tables_by_name = {table.name: table for table in context.physical_schema.tables}
@@ -879,6 +895,36 @@ def _validate_query_sync(
     for candidate in context.candidates:
         if candidate.object_id in required_metric_ids:
             required_column_ids.update(candidate.related_column_ids)
+    if list(root.find_all(exp.Join)):
+        referenced_side_tables = {
+            target.id
+            for relation in context.physical_schema.relationships
+            if (
+                target := table_by_qualified.get(relation.target_table.casefold())
+            ) is not None
+        }
+        result_column_ids = {
+            context.bindings[quote]
+            for quote in (*intent.measure_quotes, *intent.dimension_quotes)
+            if context.bindings.get(quote) is not None
+        }
+        measure_owner_tables = {
+            column_owner
+            for column_id in result_column_ids
+            if (
+                column_owner := next(
+                    (
+                        table.id
+                        for table in context.physical_schema.tables
+                        for column in table.columns
+                        if column.id == column_id
+                    ),
+                    None,
+                )
+            ) is not None
+        }
+        if measure_owner_tables & referenced_side_tables:
+            return _failed("join_cardinality_unsupported")
     if not required_metric_ids.issubset(draft.metric_ids):
         return _failed("binding_missing")
     if not required_table_ids.issubset(referenced_tables):
@@ -1090,6 +1136,26 @@ def _validate_query_sync(
             len(operands) != 1 or not operands.issubset(required_measure_columns)
         ):
             return _failed("aggregation_operand_mismatch")
+        if isinstance(operand, exp.Column):
+            operand_id = _column_id(operand, columns_by_coordinate)
+            operand_column = next(
+                (
+                    column
+                    for table in context.physical_schema.tables
+                    for column in table.columns
+                    if column.id == operand_id
+                ),
+                None,
+            )
+            numeric_type = bool(
+                operand_column
+                and re.match(
+                    r"^(TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL)\b",
+                    operand_column.data_type.upper(),
+                )
+            )
+            if isinstance(aggregate, (exp.Sum, exp.Avg)) and not numeric_type:
+                return _failed("aggregation_type_mismatch")
     actual_aggregate_operands = [
         _column_id(node.this, columns_by_coordinate)
         for node in top_level_aggregates
@@ -1233,13 +1299,24 @@ def _validate_query_sync(
             expression.sql(dialect="mysql") for expression in group_expressions
         } | {aggregate.sql(dialect="mysql") for aggregate in top_level_aggregates}
         if intent.query_type == QueryType.RANKING and not group_expressions:
+            expected_ranking_ids = {
+                context.bindings[quote]
+                for quote in (*intent.measure_quotes, *intent.dimension_quotes)
+                if context.bindings.get(quote) in referenced_columns
+            }
             required_projection_sql.update(
                 projection.sql(dialect="mysql")
                 for projection in root.expressions
                 if isinstance(projection, exp.Column)
                 and _column_id(projection, columns_by_coordinate)
-                in required_column_ids
+                in expected_ranking_ids
             )
+            if {
+                _column_id(projection, columns_by_coordinate)
+                for projection in root.expressions
+                if isinstance(projection, exp.Column)
+            } != expected_ranking_ids:
+                return _failed("projection_mismatch")
         actual_projection_sql = []
         for projection in root.expressions:
             expression = (

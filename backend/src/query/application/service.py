@@ -80,11 +80,18 @@ class QueryApplication:
                 ).encode()
             ).hexdigest(),
         )
-        existing = await self._conversations.assistant_message(
-            request.user_id,
-            request.conversation_uid,
-            request.turn_uid,
-        )
+        try:
+            existing = await self._conversations.assistant_message(
+                request.user_id,
+                request.conversation_uid,
+                request.turn_uid,
+            )
+        except BaseException:
+            if started.execution_owner:
+                await self._conversations.abandon_turn(
+                    request.user_id, request.conversation_uid, request.turn_uid
+                )
+            raise
         if existing is not None:
             yield QueryEvent(
                 kind=(
@@ -151,7 +158,7 @@ class QueryApplication:
                 return
             context = context_or_clarification
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
-            validated = await self._plan(context, intent)
+            validated = await self._plan(request, context, intent)
             if validated is None:
                 await self._complete(request, DATA_PREPARING_MESSAGE)
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
@@ -251,6 +258,7 @@ class QueryApplication:
 
     async def _plan(
         self,
+        request: QueryRequest,
         context: QueryContext,
         intent: QueryIntent,
     ) -> ValidatedQuery | None:
@@ -265,13 +273,61 @@ class QueryApplication:
             )
             issues = result.issues
             if result.validated is not None:
+                audit_identity = {
+                    "user_id": request.user_id,
+                    "conversation_uid": request.conversation_uid,
+                    "turn_uid": request.turn_uid,
+                    "sql_hash": hashlib.sha256(
+                        result.validated.sql.encode()
+                    ).hexdigest(),
+                    "table_ids": list(result.validated.table_ids),
+                }
+                structured_log(
+                    "INFO",
+                    "只读查询预检已开始",
+                    **audit_identity,
+                    outcome="started",
+                    row_count=0,
+                )
                 if not await self._readiness.ready(result.validated.target_tables):
+                    structured_log(
+                        "INFO",
+                        "只读查询预检未执行",
+                        **audit_identity,
+                        outcome="not_ready",
+                        row_count=0,
+                    )
                     return None
                 try:
                     await self._executor.explain(result.validated)
                 except QueryExplainRejected as error:
+                    structured_log(
+                        "WARNING",
+                        "只读查询预检未通过",
+                        **audit_identity,
+                        outcome="explain_rejected",
+                        row_count=0,
+                        error_type=type(error).__name__,
+                    )
                     issues = (error.issue,)
+                except BaseException as error:
+                    structured_log(
+                        "WARNING",
+                        "只读查询预检失败",
+                        **audit_identity,
+                        outcome="failed",
+                        row_count=0,
+                        error_type=type(error).__name__,
+                    )
+                    raise
                 else:
+                    structured_log(
+                        "INFO",
+                        "只读查询预检通过",
+                        **audit_identity,
+                        outcome="explain_passed",
+                        row_count=0,
+                    )
                     return result.validated
             if attempt == 0:
                 draft = await self._planner.repair(

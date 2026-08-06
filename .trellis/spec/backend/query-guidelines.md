@@ -92,6 +92,14 @@
 - The final readiness check, `EXPLAIN`, and streamed read hold the same ordered
   generation locks used by schema/reset work, so a ready generation cannot be
   replaced between validation and execution.
+- Evidence normalization must reject ambiguous operator or grain phrases and
+  must validate a time filter's complete clause quote just like ordinary filters.
+- Derived output aliases cannot inherit an unrelated physical-column identity;
+  numeric-only aggregates must validate the authoritative physical column type,
+  and detail ranking projections must exactly cover their bound result fields.
+- Scoped Meta candidates cannot prove uniqueness while any recalled semantic
+  projection is pending convergence. Conversation context-read failures after a
+  turn claim must release execution ownership immediately.
 
 ### 5. Good/Base/Bad Cases
 
