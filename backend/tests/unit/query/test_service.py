@@ -127,6 +127,37 @@ class _IntentParser:
         )
 
 
+class _RecordingIntentParser(_IntentParser):
+    """记录意图端口实际收到的证据链。"""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def parse(self, question: str, user_messages: list[str]) -> QueryIntent:
+        self.messages = user_messages
+        return await super().parse(question, user_messages)
+
+
+class _IndependentQueryConversations(_Conversations):
+    """返回一个已完成旧查询和当前独立请求。"""
+
+    async def start_turn(
+        self, *_args: object, semantic_fingerprint: str | None = None
+    ) -> StartTurnResponse:
+        del semantic_fingerprint
+        return StartTurnResponse(
+            message=_message(MessageRole.USER, "查询销售额总和"),
+            context=ConversationContext(
+                messages=[
+                    ContextMessage(role=MessageRole.USER, content="按月查看销售额趋势"),
+                    ContextMessage(role=MessageRole.ASSISTANT, content="旧查询已完成"),
+                    ContextMessage(role=MessageRole.USER, content="查询销售额总和"),
+                ],
+                memories=[],
+            ),
+        )
+
+
 class _Metadata:
     """模拟权威 Meta 对象仍有两个候选。"""
 
@@ -204,6 +235,34 @@ async def test_stream_completes_only_one_authoritative_clarification() -> None:
     assert [event.kind for event in events] == ["clarification"]
     assert events[0].message == "“销售额”是下单金额还是支付金额？"
     assert conversations.completed == ["“销售额”是下单金额还是支付金额？"]
+
+
+async def test_independent_query_does_not_reuse_completed_history_as_evidence() -> None:
+    """新独立问题不能被旧趋势轮次的显式槽位污染。"""
+    parser = _RecordingIntentParser()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _IndependentQueryConversations()),
+        intents=cast(QueryIntentPort, parser),
+        metadata=cast(QueryMetadataPort, _Metadata()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额总和",
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    await anext(application.stream(request))
+
+    assert parser.messages == ["user: 查询销售额总和"]
 
 
 async def test_completed_turn_replays_without_duplicate_query_work() -> None:

@@ -100,6 +100,12 @@
 - Scoped Meta candidates cannot prove uniqueness while any recalled semantic
   projection is pending convergence. Conversation context-read failures after a
   turn claim must release execution ownership immediately.
+- JOIN authorization requires the request schema fingerprint to match the
+  authoritative accepted physical-schema snapshot; request DDL alone never
+  authorizes relationships. Intent evidence is limited to the current request
+  plus an explicitly pending clarification chain, not arbitrary completed turns.
+- Explicit distinct semantics fail closed until modeled, and every time bucket
+  operand must be an authoritative temporal physical type.
 
 ### 5. Good/Base/Bad Cases
 

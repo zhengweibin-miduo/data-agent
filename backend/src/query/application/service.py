@@ -113,14 +113,45 @@ class QueryApplication:
         generation_guard: AbstractAsyncContextManager[None] | None = None
         try:
             # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
+            messages = started.context.messages
+            clarification_indexes = [
+                index
+                for index, message in enumerate(messages)
+                if message.role == MessageRole.ASSISTANT
+                and message.semantic_fingerprint == "query:clarification"
+            ]
+            if clarification_indexes:
+                clarification_index = clarification_indexes[-1]
+                prior_user_indexes = [
+                    index
+                    for index in range(clarification_index)
+                    if messages[index].role == MessageRole.USER
+                ]
+                chain_start = (
+                    prior_user_indexes[-1]
+                    if prior_user_indexes
+                    else clarification_index
+                )
+                evidence_chain = messages[chain_start:]
+            else:
+                current_user_indexes = [
+                    index
+                    for index, message in enumerate(messages)
+                    if message.role == MessageRole.USER
+                ]
+                evidence_chain = (
+                    messages[current_user_indexes[-1] :]
+                    if current_user_indexes
+                    else messages
+                )
             user_messages = [
                 message.content
-                for message in started.context.messages
+                for message in evidence_chain
                 if message.role == MessageRole.USER
             ]
             intent_context = [
                 f"{message.role.value}: {message.content}"
-                for message in started.context.messages
+                for message in evidence_chain
             ]
             intent = await self._intents.parse(request.question, intent_context)
             intent.validate_evidence(user_messages)

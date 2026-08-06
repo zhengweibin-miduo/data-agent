@@ -64,6 +64,18 @@ class MetadataSearchService:
             raise ValueError("检索 limit 必须为正整数")
         return min(limit or self._search_limit, self._search_limit)
 
+    async def schema_is_authoritative(
+        self,
+        source: str,
+        schema_fingerprint: str,
+        *,
+        table_ids: set[str],
+        column_ids: set[str],
+    ) -> bool:
+        """核验完整关系授权版本；对象范围参数保持 Query 端口有界。"""
+        del table_ids, column_ids
+        return await self._reader.schema_is_authoritative(source, schema_fingerprint)
+
     async def search_metadata(
         self,
         query: str,

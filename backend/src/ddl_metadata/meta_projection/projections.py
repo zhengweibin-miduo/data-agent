@@ -161,6 +161,19 @@ class MetadataProjectionRepository:
         """绑定只读或调用方事务 Session。"""
         self._session = session
 
+    async def schema_is_authoritative(
+        self, source: str, schema_fingerprint: str
+    ) -> bool:
+        """确认请求结构与最近一次 accepted snapshot 完全一致。"""
+        from ddl_metadata.persistence.tables import physical_schema_authority
+
+        current = await self._session.scalar(
+            select(physical_schema_authority.c.schema_fingerprint).where(
+                physical_schema_authority.c.source == source
+            )
+        )
+        return current == schema_fingerprint
+
     async def semantic_projection(
         self,
         kind: MetadataObjectKind,

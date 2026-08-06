@@ -217,7 +217,13 @@ class ConversationService:
             if remaining <= 0:
                 break
             text = message.content[-remaining:]
-            bounded.append(ContextMessage(role=message.role, content=text))
+            bounded.append(
+                ContextMessage(
+                    role=message.role,
+                    content=text,
+                    semantic_fingerprint=message.semantic_fingerprint,
+                )
+            )
             remaining -= len(text)
         bounded.reverse()
         # 步骤四：摘要、近期消息和 Long-term Memory 保持独立预算。

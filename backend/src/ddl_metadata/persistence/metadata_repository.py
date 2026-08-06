@@ -10,6 +10,7 @@ from ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
     metric_info,
+    physical_schema_authority,
     table_info,
 )
 from models.physical import PhysicalSchema
@@ -82,6 +83,17 @@ class MetadataRepository:
                     )
                 ).all()
             )
+
+        await self._upsert(
+            physical_schema_authority,
+            [
+                {
+                    "source": schema.source,
+                    "schema_fingerprint": schema.schema_fingerprint,
+                }
+            ],
+            ("schema_fingerprint",),
+        )
 
         # 步骤二：依次 upsert 当前表、列和指标内容，保留静态表定义与绑定参数。
         await self._upsert(

@@ -80,6 +80,9 @@ class ContextMessage(ContractModel):
 
     role: MessageRole = Field(description="对象角色。")
     content: str = Field(description="对象内容。")
+    semantic_fingerprint: str | None = Field(
+        default=None, exclude=True, description="内部轮次语义或终态指纹。"
+    )
 
 
 class ConversationContext(ContractModel):

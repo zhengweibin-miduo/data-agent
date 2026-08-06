@@ -55,6 +55,22 @@ class _Search:
             complete=False,
         )
 
+    async def schema_is_authoritative(
+        self,
+        source: str,
+        schema_fingerprint: str,
+        *,
+        table_ids: set[str],
+        column_ids: set[str],
+    ) -> bool:
+        """确认请求模式与权威 Meta 版本一致。"""
+        return (
+            source == "erp"
+            and schema_fingerprint == "schema"
+            and table_ids == {"table-orders"}
+            and column_ids == {"column-amount", "column-region"}
+        )
+
 
 def _schema() -> PhysicalSchema:
     """构造当前来源的表字段 allowlist。"""
@@ -208,3 +224,17 @@ async def test_empty_semantic_intent_fails_closed_before_planning() -> None:
     assert isinstance(result, QueryClarification)
     assert result.slot == "measure"
     assert search.calls == ["metadata"]
+
+
+async def test_context_marks_verified_schema_relationships_authoritative() -> None:
+    """Meta seam 核验完整结构指纹后才可授权关系。"""
+    search = _Search(
+        [_candidate(MetadataObjectKind.COLUMN, "column-amount", "金额")]
+    )
+    result = await QueryMetadataAdapter(search).build_context(
+        "查询金额",
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        _schema(),
+    )
+    assert not isinstance(result, QueryClarification)
+    assert result.relationships_authoritative is True

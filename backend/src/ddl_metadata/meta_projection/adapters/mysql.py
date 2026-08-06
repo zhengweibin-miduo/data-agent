@@ -132,6 +132,15 @@ class MySQLProjectionReader:
         async with MySQLDatabase.session() as session:
             return await MetadataProjectionRepository(session).eligible_table_ids()
 
+    async def schema_is_authoritative(
+        self, source: str, schema_fingerprint: str
+    ) -> bool:
+        """短事务核验完整 accepted schema 指纹。"""
+        async with MySQLDatabase.session() as session:
+            return await MetadataProjectionRepository(session).schema_is_authoritative(
+                source, schema_fingerprint
+            )
+
     async def authoritative_candidates(
         self,
         identities: list[MetadataSemanticHit],

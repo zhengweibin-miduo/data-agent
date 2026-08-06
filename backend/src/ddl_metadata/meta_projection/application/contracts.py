@@ -89,6 +89,12 @@ class ProjectionReader(Protocol):
         """读取当前需要字段值投影的表身份。"""
         ...
 
+    async def schema_is_authoritative(
+        self, source: str, schema_fingerprint: str
+    ) -> bool:
+        """确认完整物理模式指纹仍是该来源的权威快照。"""
+        ...
+
     async def authoritative_candidates(
         self,
         identities: list[MetadataSemanticHit],

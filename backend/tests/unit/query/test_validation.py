@@ -727,6 +727,45 @@ async def test_distinct_requires_explicit_intent_contract(sql: str) -> None:
     assert result.issues[0].code == "distinct_forbidden"
 
 
+def test_distinct_user_intent_cannot_degrade_to_plain_count() -> None:
+    """显式去重语义在尚无契约时必须在规划前失败关闭。"""
+    with pytest.raises(ValueError, match="去重"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["客户"],
+        ).validate_evidence(["查询不同客户的数量"])
+
+
+async def test_time_bucket_requires_temporal_physical_column() -> None:
+    """文本日期字段不能依赖 MySQL 隐式转换参与趋势分桶。"""
+    context = _context().model_copy(deep=True)
+    context.physical_schema.tables[0].columns[2].data_type = "VARCHAR(64)"
+    context.bindings = {"金额": "column-amount", "日期": "column-created-at"}
+    result = await validate_query(
+        QueryDraft(
+            sql=("SELECT DATE(o.created_at), SUM(o.amount) FROM dw.orders o "
+                 "GROUP BY DATE(o.created_at)"),
+            table_ids=["table-orders"],
+            column_ids=["column-created-at", "column-amount"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.TREND,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+            time_column_quote="日期",
+            grain="day",
+            grain_quote="按日",
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "time_type_mismatch"
+
+
 @pytest.mark.parametrize("value", ["foo", "foo%", "%foo", "%foo%%"])
 async def test_contains_requires_exact_both_sided_pattern(value: str) -> None:
     """Contains 只接受受控的双侧通配模式。"""

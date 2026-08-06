@@ -270,6 +270,8 @@ class QueryIntent(ContractModel):
                 raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
         user_text = " ".join(user_messages).casefold()
+        if any(marker in user_text for marker in ("不同", "去重", "唯一", "distinct")):
+            raise ValueError("去重语义尚未建模，必须先澄清")
         if len(all_filters) > 1 and any(
             marker in user_text for marker in ("或", "或者", " or ")
         ):
@@ -1403,6 +1405,19 @@ def _validate_query_sync(
 
     if intent.grain is not None:
         time_column_id = context.bindings.get(intent.time_column_quote or "")
+        time_column = next(
+            (
+                column
+                for table in context.physical_schema.tables
+                for column in table.columns
+                if column.id == time_column_id
+            ),
+            None,
+        )
+        if time_column is None or not time_column.data_type.upper().startswith(
+            ("DATE", "DATETIME", "TIMESTAMP")
+        ):
+            return _failed("time_type_mismatch")
 
         def bucket_matches(expression: exp.Expression, grain: str) -> bool:
             operand: exp.Expression | None = None

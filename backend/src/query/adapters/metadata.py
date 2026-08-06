@@ -39,6 +39,17 @@ class MetadataSearchPort(Protocol):
         """在确定字段范围后召回值提示。"""
         ...
 
+    async def schema_is_authoritative(
+        self,
+        source: str,
+        schema_fingerprint: str,
+        *,
+        table_ids: set[str],
+        column_ids: set[str],
+    ) -> bool:
+        """确认请求 DDL 的完整结构指纹来自 accepted snapshot。"""
+        ...
+
 
 _SLOT_LABELS = {
     "measure": "指标口径",
@@ -68,6 +79,12 @@ class QueryMetadataAdapter:
         column_ids = {column.id for table in schema.tables for column in table.columns}
         recalled = await self._search.search_metadata(
             question, table_ids=table_ids, column_ids=column_ids
+        )
+        relationships_authoritative = await self._search.schema_is_authoritative(
+            schema.source,
+            schema.schema_fingerprint,
+            table_ids=table_ids,
+            column_ids=column_ids,
         )
         candidates = [
             candidate
@@ -177,7 +194,7 @@ class QueryMetadataAdapter:
             value_result = MetadataValueSearchResult(values=[], complete=False)
         return QueryContext(
             physical_schema=schema,
-            relationships_authoritative=False,
+            relationships_authoritative=relationships_authoritative,
             candidates=[self._candidate(candidate) for candidate in retained.values()],
             values=[
                 QueryMetadataValue(
