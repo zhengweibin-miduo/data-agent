@@ -38,6 +38,11 @@ def _message(row: RowMapping) -> MessageRecord:
         turn_uid=str(row["turn_uid"]),
         role=MessageRole(str(row["role"])),
         content=str(row["content"]),
+        semantic_fingerprint=(
+            str(row["semantic_fingerprint"])
+            if row.get("semantic_fingerprint") is not None
+            else None
+        ),
         created_at=row["created_at"],
     )
 
@@ -392,6 +397,8 @@ class ConversationRepository:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
         """原子持久化助手消息、提炼任务并清除门禁。"""
         # 步骤一：锁定会话并读取该 turn 的已持久化消息，使启动状态、幂等回放
@@ -465,6 +472,7 @@ class ConversationRepository:
                 turn_uid=turn_uid,
                 role=MessageRole.ASSISTANT.value,
                 content=content,
+                semantic_fingerprint=semantic_fingerprint,
             )
         )
         assistant_id = _inserted_id(result, "助手消息")

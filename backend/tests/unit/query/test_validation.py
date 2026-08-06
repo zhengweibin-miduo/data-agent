@@ -93,7 +93,12 @@ async def test_valid_aggregate_keeps_complete_result_without_forced_limit() -> N
     result = await validate_query(
         _draft("SELECT SUM(o.amount) AS total FROM dw.orders AS o"),
         _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
-        QueryIntent(query_type=QueryType.AGGREGATE, measure_quotes=["金额"]),
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+        ),
         dw_database="dw",
     )
 
@@ -112,7 +117,12 @@ async def test_count_star_is_not_projection_star() -> None:
     result = await validate_query(
         draft,
         _context(),
-        QueryIntent(query_type=QueryType.AGGREGATE, measure_quotes=["数量"]),
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["数量"],
+        ),
         dw_database="dw",
     )
 
@@ -328,6 +338,51 @@ async def test_predicates_must_exactly_match_filter_intent(
     assert result.issues[0].code == "predicate_mismatch"
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT o.amount FROM dw.orders o WHERE NOT (o.amount > :minimum)",
+        "SELECT o.amount FROM dw.orders o WHERE o.amount NOT IN (:minimum)",
+        "SELECT o.amount FROM dw.orders o WHERE o.amount NOT LIKE :minimum",
+    ],
+)
+async def test_negated_predicates_fail_closed(sql: str) -> None:
+    """过滤谓词被 NOT 包裹后不得冒充未取反的可信意图。"""
+    result = await validate_query(
+        _draft(sql, params={"minimum": 10}),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="金额", operator="gt", value_quotes=["10"]
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "predicate_mismatch"
+
+
+async def test_aggregate_function_must_match_evidenced_operation() -> None:
+    """用户要求平均值时不能由 SUM 等其他聚合函数替代。"""
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        aggregation="avg",
+        aggregation_quote="平均",
+        measure_quotes=["金额"],
+    )
+    intent.validate_evidence(["平均金额"])
+    result = await validate_query(
+        _draft("SELECT SUM(o.amount) FROM dw.orders o"),
+        _context(),
+        intent,
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "aggregation_mismatch"
+
+
 async def test_explicit_top_n_is_preserved_exactly() -> None:
     """用户明确的 Top-N 数量原样通过，不被执行层改写。"""
     result = await validate_query(
@@ -356,6 +411,8 @@ async def test_order_by_projection_alias_keeps_physical_validation() -> None:
         _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
         QueryIntent(
             query_type=QueryType.RANKING,
+            aggregation="sum",
+            aggregation_quote="总和",
             measure_quotes=["金额"],
             sorts=[SortIntent(quote="金额", direction="desc")],
             limit=10,
@@ -373,6 +430,8 @@ async def test_trend_requires_bound_time_predicate_and_group() -> None:
     )
     intent = QueryIntent(
         query_type=QueryType.TREND,
+        aggregation="sum",
+        aggregation_quote="总和",
         measure_quotes=["金额"],
         time_quote="2026-08-01",
         time_column_quote="日期",
@@ -394,6 +453,36 @@ async def test_trend_requires_bound_time_predicate_and_group() -> None:
     result = await validate_query(draft, context, intent, dw_database="dw")
 
     assert result.validated is not None
+
+
+async def test_quarter_grain_requires_year_coordinate() -> None:
+    """季度趋势必须保留年份坐标，避免跨年同季度合并。"""
+    context = _context().model_copy(
+        update={"bindings": {"日期": "column-created-at", "金额": "column-amount"}}
+    )
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        aggregation="sum",
+        aggregation_quote="总和",
+        measure_quotes=["金额"],
+        time_quote="2024到2025",
+        time_column_quote="日期",
+        time_filter=FilterIntent(
+            column_quote="日期", operator="gte", value_quotes=["2024-01-01"]
+        ),
+        grain="quarter",
+    )
+    draft = QueryDraft(
+        sql=(
+            "SELECT QUARTER(o.created_at), SUM(o.amount) FROM dw.orders o "
+            "WHERE o.created_at >= :start GROUP BY QUARTER(o.created_at)"
+        ),
+        params={"start": "2024-01-01"},
+        table_ids=["table-orders"],
+        column_ids=["column-created-at", "column-amount"],
+    )
+    result = await validate_query(draft, context, intent, dw_database="dw")
+    assert result.issues[0].code == "time_grain_mismatch"
 
 
 @pytest.mark.parametrize(

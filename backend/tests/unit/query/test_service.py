@@ -69,7 +69,7 @@ class _Conversations:
     ) -> StartTurnResponse:
         """返回包含当前用户原文的已开始轮次。"""
         self.semantic_fingerprints.append(semantic_fingerprint)
-        content = "查询销售额"
+        content = "查询销售额总和"
         return StartTurnResponse(
             message=_message(MessageRole.USER, content),
             context=ConversationContext(
@@ -82,9 +82,12 @@ class _Conversations:
         """表示当前轮次尚未完成。"""
         return None
 
-    async def complete_turn(self, *_args: object) -> CompleteTurnResponse:
+    async def complete_turn(
+        self, *_args: object, semantic_fingerprint: str | None = None
+    ) -> CompleteTurnResponse:
         """记录澄清文本并完成轮次。"""
         content = str(_args[-1])
+        del semantic_fingerprint
         self.completed.append(content)
         return CompleteTurnResponse(message=_message(MessageRole.ASSISTANT, content))
 
@@ -101,12 +104,26 @@ class _ReplayConversations(_Conversations):
         return _message(MessageRole.ASSISTANT, "查询完成，共返回 3 行。")
 
 
+class _ClarificationReplayConversations(_Conversations):
+    """返回已经持久化为澄清终态的助手消息。"""
+
+    async def assistant_message(self, *_args: object) -> MessageRecord | None:
+        return _message(MessageRole.ASSISTANT, "请明确指标").model_copy(
+            update={"semantic_fingerprint": "query:clarification"}
+        )
+
+
 class _IntentParser:
     """返回带精确用户原文证据的查询意图。"""
 
     async def parse(self, _question: str, _user_messages: list[str]) -> QueryIntent:
         """返回一个聚合指标意图。"""
-        return QueryIntent(query_type=QueryType.AGGREGATE, measure_quotes=["销售额"])
+        return QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["销售额"],
+        )
 
 
 class _Metadata:
@@ -214,6 +231,34 @@ async def test_completed_turn_replays_without_duplicate_query_work() -> None:
 
     assert [event.kind for event in events] == ["complete"]
     assert events[0].message == "查询完成，共返回 3 行。"
+
+
+async def test_clarification_replay_preserves_terminal_event_kind() -> None:
+    """同轮次澄清回放保持 clarification，不能伪装为查询完成。"""
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _ClarificationReplayConversations()),
+        intents=cast(QueryIntentPort, _MustNotRun()),
+        metadata=cast(QueryMetadataPort, _MustNotRun()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    events = [
+        event
+        async for event in application.stream(
+            QueryRequest(
+                user_id="user-1",
+                conversation_uid="conversation-1",
+                turn_uid="turn-1",
+                question="查询销售额",
+                ddl_context=DDLJobRequest(
+                    source="erp", ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY)"
+                ),
+            )
+        )
+    ]
+    assert [event.kind for event in events] == ["clarification"]
 
 
 class _GroundedMetadata:

@@ -78,6 +78,8 @@ class ConversationStore(Protocol):
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
         """原子写入助手消息、outbox 并释放轮次门禁。"""
         ...

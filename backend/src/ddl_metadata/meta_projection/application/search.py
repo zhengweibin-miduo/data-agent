@@ -69,17 +69,27 @@ class MetadataSearchService:
         query: str,
         kinds: set[MetadataObjectKind] | None = None,
         limit: int | None = None,
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataCandidate]:
         """从语义索引取有界身份，再回读 Meta 权威候选。"""
         if not query.strip():
             raise ValueError("Meta 检索 query 不能为空")
         bounded_limit = self._bounded_limit(limit)
         # 步骤一：派生索引仅提供身份、分数与写入指纹。
-        identities = await self._semantic_index.search(
-            query,
-            kinds,
-            self._search_limit,
-        )
+        if table_ids is None and column_ids is None:
+            identities = await self._semantic_index.search(
+                query, kinds, self._search_limit
+            )
+        else:
+            identities = await self._semantic_index.search(
+                query,
+                kinds,
+                self._search_limit,
+                table_ids=table_ids,
+                column_ids=column_ids,
+            )
         # 步骤二：权威 reader 剔除删除、pending 或指纹过期的对象。
         candidates = await self._reader.authoritative_candidates(identities)
         return candidates[:bounded_limit]

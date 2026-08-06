@@ -83,7 +83,14 @@ class QueryApplication:
             request.turn_uid,
         )
         if existing is not None:
-            yield QueryEvent(kind="complete", message=existing.content)
+            yield QueryEvent(
+                kind=(
+                    "clarification"
+                    if existing.semantic_fingerprint == "query:clarification"
+                    else "complete"
+                ),
+                message=existing.content,
+            )
             return
         if not started.execution_owner:
             raise DataAgentError(
@@ -116,7 +123,11 @@ class QueryApplication:
             )
             # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
             if isinstance(context_or_clarification, QueryClarification):
-                await self._complete(request, context_or_clarification.question)
+                await self._complete(
+                    request,
+                    context_or_clarification.question,
+                    semantic_fingerprint="query:clarification",
+                )
                 yield QueryEvent(
                     kind="clarification", message=context_or_clarification.question
                 )
@@ -246,11 +257,18 @@ class QueryApplication:
             )
         raise AssertionError("查询修复循环必须返回或抛出")
 
-    async def _complete(self, request: QueryRequest, content: str) -> None:
+    async def _complete(
+        self,
+        request: QueryRequest,
+        content: str,
+        *,
+        semantic_fingerprint: str | None = None,
+    ) -> None:
         """复用 Conversation 原子完成语义持久化助手文本。"""
         await self._conversations.complete_turn(
             request.user_id,
             request.conversation_uid,
             request.turn_uid,
             content,
+            semantic_fingerprint=semantic_fingerprint,
         )

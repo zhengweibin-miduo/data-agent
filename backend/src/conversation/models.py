@@ -50,6 +50,9 @@ class MessageRecord(ContractModel):
     turn_uid: str = Field(description="轮次唯一标识。")
     role: MessageRole = Field(description="对象角色。")
     content: str = Field(description="对象内容。")
+    semantic_fingerprint: str | None = Field(
+        default=None, exclude=True, description="内部幂等或终态指纹。"
+    )
     created_at: datetime = Field(description="创建时间。")
 
 

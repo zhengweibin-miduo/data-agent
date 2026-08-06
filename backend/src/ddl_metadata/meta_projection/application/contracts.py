@@ -138,6 +138,9 @@ class SemanticIndex(Protocol):
         query: str,
         kinds: set[MetadataObjectKind] | None,
         limit: int,
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataSemanticHit]:
         """返回有界语义候选身份。"""
         ...

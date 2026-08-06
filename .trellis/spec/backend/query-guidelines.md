@@ -31,6 +31,8 @@
 - Query turn idempotency covers the question, source, and parsed schema
   fingerprint. Reusing a `turn_uid` with different query semantics is a
   conflict, not a completed-result replay.
+- Persist the Query terminal event kind with the assistant turn so idempotent
+  replay preserves `clarification` instead of converting it to `complete`.
 - Results use NDJSON events: one `metadata`, zero or more `rows`, then
   `complete`; post-start failures emit one safe `stream_error`.
 - The `metadata` event declares `result_scope="all_sources"`; request
@@ -51,6 +53,9 @@
   predicates, time grain, sort objects and directions, Top-N, and absence of
   pagination offsets. Every `JOIN ON` condition must be an allowlisted FK edge;
   one valid edge never authorizes additional boolean conditions.
+- Reject negated predicates unless the trusted intent explicitly models the
+  negation. Aggregate functions require an exact user-evidenced operation, and
+  quarter buckets must retain a year coordinate.
 - `EXPLAIN` semantic rejection -> one repair; timeout, connection, permission,
   readiness, or execution failures -> no model repair.
 - Any target table not ready -> exactly `数据准备中，请稍后重试`.

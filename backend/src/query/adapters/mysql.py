@@ -100,9 +100,18 @@ class MySQLQueryExecutor:
         connection = self._engine.connect()
         connected = False
         result = None
+        deadline_task: asyncio.Task[None] | None = None
+
+        async def expire_connection() -> None:
+            """即使生成器停在 yield，也在壁钟截止点主动释放池连接。"""
+            await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
+            if connected:
+                await connection.invalidate()
+
         try:
             await _before_deadline(connection.start(), deadline)
             connected = True
+            deadline_task = asyncio.create_task(expire_connection())
             await _before_deadline(
                 connection.exec_driver_sql("SET TRANSACTION READ ONLY"), deadline
             )
@@ -165,6 +174,12 @@ class MySQLQueryExecutor:
                 http_status=502,
             ) from error
         finally:
+            if deadline_task is not None:
+                deadline_task.cancel()
+                try:
+                    await deadline_task
+                except (Exception, asyncio.CancelledError):
+                    pass
             try:
                 if result is not None:
                     try:

@@ -140,6 +140,8 @@ class ConversationService:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> CompleteTurnResponse:
         """提交助手消息和提炼 outbox 后才报告完成。"""
         message = await self._store.complete_turn(
@@ -147,6 +149,7 @@ class ConversationService:
             conversation_uid,
             turn_uid,
             content,
+            semantic_fingerprint=semantic_fingerprint,
         )
         return CompleteTurnResponse(message=message)
 

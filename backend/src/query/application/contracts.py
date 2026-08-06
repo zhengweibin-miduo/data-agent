@@ -122,6 +122,8 @@ class ConversationPort(Protocol):
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> CompleteTurnResponse:
         """原子完成助手消息与提炼 outbox。"""
         ...

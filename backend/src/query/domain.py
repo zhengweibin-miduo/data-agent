@@ -94,6 +94,12 @@ class QueryIntent(ContractModel):
     """仅由用户原文证据组成的结构化查询意图。"""
 
     query_type: QueryType = Field(description="用户请求的查询形态。")
+    aggregation: Literal["count", "sum", "avg", "min", "max"] | None = Field(
+        default=None, description="用户明确表达的聚合运算。"
+    )
+    aggregation_quote: str | None = Field(
+        default=None, max_length=256, description="聚合运算的用户原文证据。"
+    )
     measure_quotes: list[str] = Field(
         default_factory=list, max_length=20, description="指标或度量原文。"
     )
@@ -136,6 +142,7 @@ class QueryIntent(ContractModel):
         """确认每个关键短语都逐字来自同租户用户消息。"""
         quotes = [
             *self.measure_quotes,
+            *([self.aggregation_quote] if self.aggregation_quote else []),
             *self.dimension_quotes,
             *([self.time_quote] if self.time_quote else []),
             *([self.time_column_quote] if self.time_column_quote else []),
@@ -165,6 +172,23 @@ class QueryIntent(ContractModel):
             and (len(limit_numbers) != 1 or limit_numbers[0] != self.limit)
         ):
             raise ValueError("Top-N 数量必须有包含同值的用户原文证据")
+        if (self.aggregation is None) != (self.aggregation_quote is None):
+            raise ValueError("聚合运算必须携带用户原文证据")
+        if self.aggregation_quote is not None:
+            markers = {
+                "count": ("数量", "个数", "count"),
+                "sum": ("总和", "合计", "sum"),
+                "avg": ("平均", "均值", "avg"),
+                "min": ("最小", "最低", "min"),
+                "max": ("最大", "最高", "max"),
+            }
+            matched = {
+                operation
+                for operation, words in markers.items()
+                if any(word in self.aggregation_quote.casefold() for word in words)
+            }
+            if matched != {self.aggregation}:
+                raise ValueError("聚合运算必须与用户原文精确一致")
         if self.time_quote and self.time_filter is None:
             raise ValueError("时间范围必须提供可验证的过滤契约")
         if self.grain and (self.time_column_quote is None or self.time_filter is None):
@@ -612,6 +636,11 @@ def _validate_query_sync(
         _predicate_contract(node, columns_by_coordinate, draft.params)
         for node in predicate_nodes
     ]
+    if any(
+        clause.this.find(exp.Not) is not None
+        for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
+    ):
+        return _failed("predicate_mismatch")
     expected_filters = [*intent.filters]
     if intent.time_filter is not None:
         expected_filters.append(intent.time_filter)
@@ -647,6 +676,12 @@ def _validate_query_sync(
     }[intent.query_type]
     if not shape_valid:
         return _failed("query_shape_mismatch")
+    aggregate_functions = [node.key.lower() for node in root.find_all(exp.AggFunc)]
+    if aggregate_functions and (
+        intent.aggregation is None
+        or set(aggregate_functions) != {intent.aggregation}
+    ):
+        return _failed("aggregation_mismatch")
 
     projection_aliases = {
         projection.alias: next(projection.find_all(exp.Column), None)
@@ -701,6 +736,7 @@ def _validate_query_sync(
             time_column_id is None
             or time_column_id not in grouped_column_ids
             or grain_markers[intent.grain] not in group_sql
+            or (intent.grain == "quarter" and "YEAR(" not in group_sql)
         ):
             return _failed("time_grain_mismatch")
     validated = ValidatedQuery(

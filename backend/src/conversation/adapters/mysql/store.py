@@ -93,11 +93,17 @@ class MySQLConversationStore:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
         """原子写入助手消息、outbox 并释放轮次门禁。"""
         async with MySQLDatabase.session() as session:
             return await ConversationRepository(session).complete_turn(
-                user_id, conversation_uid, turn_uid, content
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
             )
 
     async def abandon_turn(

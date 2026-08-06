@@ -21,7 +21,13 @@ from query.domain import (
 class MetadataSearchPort(Protocol):
     """Query 需要的现有 Meta Projection 最小搜索面。"""
 
-    async def search_metadata(self, query: str) -> list[MetadataCandidate]:
+    async def search_metadata(
+        self,
+        query: str,
+        *,
+        table_ids: set[str],
+        column_ids: set[str],
+    ) -> list[MetadataCandidate]:
         """执行一次表、字段和指标混合召回。"""
         ...
 
@@ -58,9 +64,11 @@ class QueryMetadataAdapter:
     ) -> QueryContext | QueryClarification:
         """按当前 DDL allowlist 绑定槽位并构建有界查询上下文。"""
         # 步骤一：完整问题只触发一次既有 table/column/metric 混合召回。
-        recalled = await self._search.search_metadata(question)
         table_ids = {table.id for table in schema.tables}
         column_ids = {column.id for table in schema.tables for column in table.columns}
+        recalled = await self._search.search_metadata(
+            question, table_ids=table_ids, column_ids=column_ids
+        )
         candidates = [
             candidate
             for candidate in recalled

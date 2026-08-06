@@ -20,9 +20,17 @@ class _Search:
         self.calls: list[str] = []
         self.column_ids: set[str] = set()
 
-    async def search_metadata(self, query: str) -> list[MetadataCandidate]:
+    async def search_metadata(
+        self,
+        query: str,
+        *,
+        table_ids: set[str],
+        column_ids: set[str],
+    ) -> list[MetadataCandidate]:
         """返回预置的权威候选。"""
         del query
+        assert table_ids == {"table-orders"}
+        assert column_ids == {"column-amount", "column-region"}
         self.calls.append("metadata")
         return self.candidates
 

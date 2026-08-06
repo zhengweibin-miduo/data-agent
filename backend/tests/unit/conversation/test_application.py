@@ -78,7 +78,10 @@ class _ConversationStore:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartedConversationTurn:
+        del semantic_fingerprint
         self.turn_committed = True
         return StartedConversationTurn(
             message=_message(2, MessageRole.USER, content),
@@ -93,7 +96,14 @@ class _ConversationStore:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
+        raise NotImplementedError
+
+    async def abandon_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> None:
         raise NotImplementedError
 
     async def assistant_message(
