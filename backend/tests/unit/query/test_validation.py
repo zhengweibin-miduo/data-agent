@@ -1126,6 +1126,18 @@ def test_intent_normalizes_or_equal_and_requires_time_clause_evidence() -> None:
         ).validate_evidence(["今年按月查看日期"])
 
 
+def test_intent_rejects_ambiguous_grain_evidence() -> None:
+    """范围单位和分组单位同时出现时不得由模型任选一个粒度。"""
+    with pytest.raises(ValueError, match="时间粒度"):
+        QueryIntent(
+            query_type=QueryType.TREND,
+            measure_quotes=["金额"],
+            time_column_quote="日期",
+            grain="day",
+            grain_quote="最近7天按月",
+        ).validate_evidence(["最近7天按月查看日期和金额"])
+
+
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:
     """未建模否定词和与槽位矛盾的结果形态必须失败关闭。"""
     with pytest.raises(ValueError, match="否定语义"):
@@ -1226,3 +1238,43 @@ async def test_time_bucket_requires_exact_ast_shape() -> None:
         dw_database="dw",
     )
     assert result.issues[0].code == "time_grain_mismatch"
+
+
+async def test_numeric_aggregate_rejects_text_measure() -> None:
+    """SUM 与 AVG 不得依赖 MySQL 对文本字段的隐式数值转换。"""
+    context = _context()
+    orders = context.physical_schema.tables[0]
+    text_orders = orders.model_copy(
+        update={
+            "columns": [
+                column.model_copy(update={"data_type": "VARCHAR(64)"})
+                if column.id == "column-amount"
+                else column
+                for column in orders.columns
+            ]
+        }
+    )
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [text_orders, *context.physical_schema.tables[1:]]
+                }
+            ),
+            "bindings": {"金额": "column-amount"},
+        }
+    )
+
+    result = await validate_query(
+        _draft("SELECT SUM(o.amount) FROM dw.orders o"),
+        context,
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "aggregation_type_mismatch"
