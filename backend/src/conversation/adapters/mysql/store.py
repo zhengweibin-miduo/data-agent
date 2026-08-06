@@ -57,12 +57,20 @@ class MySQLConversationStore:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartedConversationTurn:
         """原子写入用户消息并占用轮次门禁。"""
         async with MySQLDatabase.session() as session:
             message, conversation, execution_owner = await ConversationRepository(
                 session
-            ).start_turn(user_id, conversation_uid, turn_uid, content)
+            ).start_turn(
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
+            )
         return StartedConversationTurn(
             message=message,
             conversation_id=int(conversation["id"]),

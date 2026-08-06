@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import cast
 
+import pytest
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
 
 from conversation.models import MessageRole
 from conversation.repository import ConversationRepository
+from errors import DataAgentError
 from settings import app_config
 from tests.helpers.checks import check_condition, check_equal
 
@@ -168,6 +170,35 @@ async def test_idempotent_replay_renews_turn_lease() -> None:
         actual=rendered,
         expected="UPDATE 同时设置 active_turn_uid 与 updated_at=now()",
     )
+
+
+async def test_query_replay_rejects_changed_semantic_fingerprint() -> None:
+    """相同问题但不同 DDL 语义指纹不得回放旧查询结果。"""
+    moment = datetime.now(UTC)
+    conversation = {"id": 1, "active_turn_uid": None, "updated_at": moment}
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "查询销售额",
+        "semantic_fingerprint": "a" * 64,
+        "created_at": moment,
+    }
+    repository = ConversationRepository(
+        cast(AsyncSession, _ReplaySession(conversation, message))
+    )
+
+    with pytest.raises(DataAgentError) as caught:
+        await repository.start_turn(
+            "user-1",
+            "conv-1",
+            "turn-1",
+            "查询销售额",
+            semantic_fingerprint="b" * 64,
+        )
+
+    assert caught.value.code == "idempotency_conflict"
 
 
 async def test_completed_turn_replay_does_not_revive_gate() -> None:

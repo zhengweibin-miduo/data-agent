@@ -57,6 +57,7 @@ agent_message = Table(
     Column("turn_uid", String(64), nullable=False),
     Column("role", String(16), nullable=False),
     Column("content", MEDIUMTEXT, nullable=False),
+    Column("semantic_fingerprint", String(64), nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     UniqueConstraint(
         "conversation_id",

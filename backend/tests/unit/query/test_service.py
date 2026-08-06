@@ -1,9 +1,12 @@
 """自然语言查询应用 seam 的行为测试。"""
 
+import json
 from datetime import UTC, datetime
 from typing import cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from conversation.models import (
     CompleteTurnResponse,
@@ -16,6 +19,7 @@ from conversation.models import (
 from errors import DataAgentError
 from models.jobs import DDLJobRequest
 from models.physical import PhysicalSchema
+from query.adapters.llm import QueryLLMAdapter
 from query.application.contracts import (
     ConversationPort,
     QueryBatch,
@@ -56,9 +60,15 @@ class _Conversations:
     def __init__(self) -> None:
         self.completed: list[str] = []
         self.abandoned = 0
+        self.semantic_fingerprints: list[str | None] = []
 
-    async def start_turn(self, *_args: object) -> StartTurnResponse:
+    async def start_turn(
+        self,
+        *_args: object,
+        semantic_fingerprint: str | None = None,
+    ) -> StartTurnResponse:
         """返回包含当前用户原文的已开始轮次。"""
+        self.semantic_fingerprints.append(semantic_fingerprint)
         content = "查询销售额"
         return StartTurnResponse(
             message=_message(MessageRole.USER, content),
@@ -117,6 +127,35 @@ class _MustNotRun:
     def __getattr__(self, name: str) -> object:
         """拒绝任何未预期的后续调用。"""
         raise AssertionError(f"澄清分支不应调用 {name}")
+
+
+async def test_planner_receives_configured_dw_database() -> None:
+    """非默认 DW 数据库名必须进入生成提示负载。"""
+    model = Mock(spec=BaseChatModel)
+    runnable = AsyncMock()
+    runnable.ainvoke.return_value = QueryDraft(
+        sql="SELECT COUNT(*) FROM analytics.orders",
+        table_ids=["table-orders"],
+    )
+    model.with_structured_output.return_value = runnable
+    adapter = QueryLLMAdapter(cast(BaseChatModel, model), dw_database="analytics")
+
+    await adapter.draft(
+        QueryContext(
+            physical_schema=PhysicalSchema(
+                source="erp",
+                canonical_ddl="",
+                ddl_hash="ddl",
+                schema_fingerprint="schema",
+                tables=[],
+            )
+        ),
+        QueryIntent(query_type=QueryType.AGGREGATE),
+    )
+
+    messages = runnable.ainvoke.await_args.args[0]
+    payload = json.loads(messages[1][1])
+    assert payload["dw_database"] == "analytics"
 
 
 async def test_stream_completes_only_one_authoritative_clarification() -> None:

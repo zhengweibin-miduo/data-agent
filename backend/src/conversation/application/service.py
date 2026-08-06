@@ -103,15 +103,23 @@ class ConversationService:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartTurnResponse:
         """提交用户消息后，基于已提交状态构建同用户的有界上下文。"""
         # 步骤一：store 在短事务中提交消息与活动轮次门禁，再返回会话快照。
-        started = await self._store.start_turn(
-            user_id,
-            conversation_uid,
-            turn_uid,
-            content,
-        )
+        if semantic_fingerprint is None:
+            started = await self._store.start_turn(
+                user_id, conversation_uid, turn_uid, content
+            )
+        else:
+            started = await self._store.start_turn(
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
+            )
         # 步骤二：提交完成后再召回消息与长期记忆，模型或索引延迟不持有行锁。
         context = await self._context(
             user_id,

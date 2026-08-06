@@ -37,7 +37,7 @@ limits, or defaults.
 Record unresolved meaning in ambiguities; do not resolve it with confidence.
 Return only the typed structured result and no hidden reasoning."""
 _DRAFT_PROMPT = """Generate one MySQL QueryDraft from the authoritative QueryContext.
-Use only dw tables and columns in the supplied physical schema and bindings.
+Use only the supplied dw_database and columns in the physical schema and bindings.
 Return one SELECT or WITH ... SELECT, named placeholders for user values, and exact
 referenced table/column/metric IDs. Do not use SELECT star, comments, user variables,
 dangerous functions, file output, unsupported joins, or a LIMIT the QueryIntent did not
@@ -47,9 +47,10 @@ explicitly request. Return only the typed structured result and no hidden reason
 class QueryLLMAdapter:
     """复用共享零温度模型与并发预算的查询结构化适配器。"""
 
-    def __init__(self, model: BaseChatModel) -> None:
+    def __init__(self, model: BaseChatModel, *, dw_database: str) -> None:
         """绑定已经由组合根初始化的共享模型。"""
         self._model = model
+        self._dw_database = dw_database
         self._semaphore = asyncio.Semaphore(app_config.llm.max_concurrency)
 
     async def parse(self, question: str, user_messages: list[str]) -> QueryIntent:
@@ -86,6 +87,7 @@ class QueryLLMAdapter:
             {
                 "intent": intent.model_dump(mode="json"),
                 "context": context.model_dump(mode="json"),
+                "dw_database": self._dw_database,
             },
         )
 
@@ -103,6 +105,7 @@ class QueryLLMAdapter:
             {
                 "intent": intent.model_dump(mode="json"),
                 "context": context.model_dump(mode="json"),
+                "dw_database": self._dw_database,
                 "previous_draft": draft.model_dump(mode="json"),
                 "validation_feedback": [
                     issue.model_dump(mode="json") for issue in issues

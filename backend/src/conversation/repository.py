@@ -278,6 +278,8 @@ class ConversationRepository:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> tuple[MessageRecord, RowMapping, bool]:
         """门禁并幂等持久化用户消息。"""
         # 步骤一：先锁定会话再检查 active_turn_uid，避免并发请求同时通过门禁。
@@ -327,7 +329,11 @@ class ConversationRepository:
             .one_or_none()
         )
         if existing is not None:
-            if str(existing["content"]) != content:
+            if str(existing["content"]) != content or (
+                semantic_fingerprint is not None
+                and str(existing["semantic_fingerprint"] or "")
+                != semantic_fingerprint
+            ):
                 raise DataAgentError(
                     "idempotency_conflict",
                     "conversation_turn",
@@ -364,6 +370,7 @@ class ConversationRepository:
                 turn_uid=turn_uid,
                 role=MessageRole.USER.value,
                 content=content,
+                semantic_fingerprint=semantic_fingerprint,
             )
         )
         message_id = _inserted_id(result, "用户消息")

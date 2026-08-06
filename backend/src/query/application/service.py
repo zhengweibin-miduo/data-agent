@@ -1,6 +1,7 @@
 """自然语言只读查询的唯一应用编排入口。"""
 
 import hashlib
+import json
 from collections.abc import AsyncGenerator
 from time import perf_counter
 
@@ -63,6 +64,18 @@ class QueryApplication:
             request.conversation_uid,
             request.turn_uid,
             request.question,
+            semantic_fingerprint=hashlib.sha256(
+                json.dumps(
+                    {
+                        "question": request.question,
+                        "source": request.ddl_context.source,
+                        "schema_fingerprint": schema.schema_fingerprint,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
         )
         existing = await self._conversations.assistant_message(
             request.user_id,

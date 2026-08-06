@@ -19,6 +19,7 @@ from query.domain import (
     QueryIntent,
     QueryParameter,
     QueryType,
+    SortIntent,
     validate_query,
 )
 
@@ -42,6 +43,11 @@ def _context() -> QueryContext:
                             id="column-amount",
                             name="amount",
                             data_type="DECIMAL(10,2)",
+                        ),
+                        PhysicalColumn(
+                            id="column-created-at",
+                            name="created_at",
+                            data_type="DATE",
                         ),
                     ],
                 ),
@@ -86,7 +92,7 @@ async def test_valid_aggregate_keeps_complete_result_without_forced_limit() -> N
     """没有业务 Top-N 的聚合查询通过且不被注入总量 LIMIT。"""
     result = await validate_query(
         _draft("SELECT SUM(o.amount) AS total FROM dw.orders AS o"),
-        _context(),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
         QueryIntent(query_type=QueryType.AGGREGATE, measure_quotes=["金额"]),
         dw_database="dw",
     )
@@ -119,6 +125,19 @@ def test_top_n_requires_exact_user_evidence() -> None:
 
     with pytest.raises(ValueError, match="Top-N"):
         intent.validate_evidence(["查询销售额"])
+
+
+def test_time_range_requires_normalized_predicate_contract() -> None:
+    """独立时间证据不得在缺少可验证谓词契约时进入规划。"""
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        time_quote="2026-08-01",
+        time_column_quote="日期",
+        grain="day",
+    )
+
+    with pytest.raises(ValueError, match="时间范围"):
+        intent.validate_evidence(["按日期查看 2026-08-01 的趋势"])
 
 
 @pytest.mark.parametrize(
@@ -312,11 +331,12 @@ async def test_predicates_must_exactly_match_filter_intent(
 async def test_explicit_top_n_is_preserved_exactly() -> None:
     """用户明确的 Top-N 数量原样通过，不被执行层改写。"""
     result = await validate_query(
-        _draft("SELECT o.amount FROM dw.orders AS o LIMIT 10"),
-        _context(),
+        _draft("SELECT o.amount FROM dw.orders AS o ORDER BY o.amount DESC LIMIT 10"),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
         QueryIntent(
             query_type=QueryType.RANKING,
             measure_quotes=["金额"],
+            sorts=[SortIntent(quote="金额", direction="desc")],
             limit=10,
         ),
         dw_database="dw",
@@ -333,16 +353,120 @@ async def test_order_by_projection_alias_keeps_physical_validation() -> None:
             "SELECT SUM(o.amount) AS total FROM dw.orders AS o "
             "ORDER BY total DESC LIMIT 10"
         ),
-        _context(),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
         QueryIntent(
             query_type=QueryType.RANKING,
             measure_quotes=["金额"],
+            sorts=[SortIntent(quote="金额", direction="desc")],
             limit=10,
         ),
         dw_database="dw",
     )
 
     assert result.validated is not None
+
+
+async def test_trend_requires_bound_time_predicate_and_group() -> None:
+    """趋势查询的时间范围与粒度必须同时落入 SQL AST。"""
+    context = _context().model_copy(
+        update={"bindings": {"日期": "column-created-at", "金额": "column-amount"}}
+    )
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        measure_quotes=["金额"],
+        time_quote="2026-08-01",
+        time_column_quote="日期",
+        time_filter=FilterIntent(
+            column_quote="日期", operator="eq", value_quotes=["2026-08-01"]
+        ),
+        grain="day",
+    )
+    draft = QueryDraft(
+        sql=(
+            "SELECT DATE(o.created_at) AS day, SUM(o.amount) AS total "
+            "FROM dw.orders o WHERE o.created_at = :day GROUP BY DATE(o.created_at)"
+        ),
+        params={"day": "2026-08-01"},
+        table_ids=["table-orders"],
+        column_ids=["column-created-at", "column-amount"],
+    )
+
+    result = await validate_query(draft, context, intent, dw_database="dw")
+
+    assert result.validated is not None
+
+
+@pytest.mark.parametrize(
+    ("sql", "code"),
+    [
+        ("SELECT o.amount FROM dw.orders o", "query_shape_mismatch"),
+        ("SELECT SUM(o.amount) FROM dw.orders o", "query_shape_mismatch"),
+        ("SELECT o.amount FROM dw.orders o LIMIT 10 OFFSET 1", "offset_forbidden"),
+        ("SELECT o.amount FROM dw.orders o LIMIT 1, 10", "offset_forbidden"),
+    ],
+)
+async def test_query_shape_and_offset_are_enforced(sql: str, code: str) -> None:
+    """查询形态不匹配或携带无证据偏移时失败关闭。"""
+    query_type = QueryType.AGGREGATE if "SUM" not in sql else QueryType.DETAIL
+    intent = QueryIntent(
+        query_type=query_type,
+        measure_quotes=["金额"],
+        limit=10 if "LIMIT" in sql else None,
+    )
+    result = await validate_query(_draft(sql), _context(), intent, dw_database="dw")
+    assert result.issues[0].code == code
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT o.amount FROM dw.orders o JOIN dw.customers c "
+        "ON o.id = c.id AND o.amount = c.id",
+        "SELECT o.amount FROM dw.orders o JOIN dw.customers c "
+        "ON o.id = c.id OR o.amount = c.id",
+    ],
+)
+async def test_join_rejects_every_unauthorized_condition(sql: str) -> None:
+    """合法 FK 旁的额外非授权连接条件不能被 any 校验掩盖。"""
+    draft = QueryDraft(
+        sql=sql,
+        table_ids=["table-orders", "table-customers"],
+        column_ids=["column-amount", "column-id", "column-customer-id"],
+    )
+    result = await validate_query(
+        draft,
+        _context(),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_unsupported"
+
+
+@pytest.mark.parametrize(
+    ("sql", "sorts"),
+    [
+        (
+            "SELECT o.amount FROM dw.orders o LIMIT 10",
+            [SortIntent(quote="金额", direction="desc")],
+        ),
+        (
+            "SELECT o.amount FROM dw.orders o ORDER BY o.amount ASC LIMIT 10",
+            [SortIntent(quote="金额", direction="desc")],
+        ),
+    ],
+)
+async def test_ranking_requires_exact_sort(sql: str, sorts: list[SortIntent]) -> None:
+    """排名查询必须按已绑定对象和用户方向排序。"""
+    context = _context().model_copy(update={"bindings": {"金额": "column-amount"}})
+    result = await validate_query(
+        _draft(sql),
+        context,
+        QueryIntent(
+            query_type=QueryType.RANKING, measure_quotes=["金额"], sorts=sorts, limit=10
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "sort_mismatch"
 
 
 async def test_sqlglot_validation_does_not_block_event_loop(

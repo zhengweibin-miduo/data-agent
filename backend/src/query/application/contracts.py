@@ -101,6 +101,8 @@ class ConversationPort(Protocol):
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartTurnResponse:
         """原子开始用户轮次并返回有界上下文。"""
         ...

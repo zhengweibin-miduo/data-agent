@@ -111,6 +111,10 @@ class QueryIntent(ContractModel):
         max_length=256,
         description="用户明确指定的时间字段原文。",
     )
+    time_filter: FilterIntent | None = Field(
+        default=None,
+        description="可确定性映射到绑定参数的时间范围契约。",
+    )
     grain: Literal["day", "week", "month", "quarter", "year"] | None = Field(
         default=None,
         description="用户明确表达的时间粒度。",
@@ -135,6 +139,11 @@ class QueryIntent(ContractModel):
             *self.dimension_quotes,
             *([self.time_quote] if self.time_quote else []),
             *([self.time_column_quote] if self.time_column_quote else []),
+            *([self.time_filter.column_quote] if self.time_filter else []),
+            *(
+                quote
+                for quote in (self.time_filter.value_quotes if self.time_filter else [])
+            ),
             *(item.column_quote for item in self.filters),
             *(quote for item in self.filters for quote in item.value_quotes),
             *(item.quote for item in self.sorts),
@@ -156,6 +165,10 @@ class QueryIntent(ContractModel):
             and (len(limit_numbers) != 1 or limit_numbers[0] != self.limit)
         ):
             raise ValueError("Top-N 数量必须有包含同值的用户原文证据")
+        if self.time_quote and self.time_filter is None:
+            raise ValueError("时间范围必须提供可验证的过滤契约")
+        if self.grain and (self.time_column_quote is None or self.time_filter is None):
+            raise ValueError("时间粒度必须提供时间字段和范围契约")
 
 
 QueryParameter = str | int | float | bool | None
@@ -306,6 +319,22 @@ def _values_match(
     return normalized == quotes
 
 
+def _column_id(
+    column: exp.Column,
+    columns_by_coordinate: dict[tuple[str, str], str],
+) -> str | None:
+    """把已通过 allowlist 的字段表达式映射为权威字段标识。"""
+    direct = columns_by_coordinate.get((column.table, column.name))
+    if direct is not None:
+        return direct
+    matches = {
+        candidate_id
+        for (alias, name), candidate_id in columns_by_coordinate.items()
+        if name == column.name and (not column.table or alias == column.table)
+    }
+    return matches.pop() if len(matches) == 1 else None
+
+
 async def validate_query(
     draft: QueryDraft,
     context: QueryContext,
@@ -331,6 +360,12 @@ def _validate_query_sync(
     dw_database: str,
 ) -> QueryValidationResult:
     """拥有完整 SQLGlot 解析、scope 分析和领域模型构造流水线。"""
+    if intent.time_quote and intent.time_filter is None:
+        return _failed("time_contract_mismatch")
+    if intent.grain and (
+        intent.time_column_quote is None or intent.time_filter is None
+    ):
+        return _failed("time_contract_mismatch")
     # 步骤一：拒绝注释、多语句、解析失败和任何非 SELECT 根节点。
     if any(marker in draft.sql for marker in ("--", "/*", "*/", "#")):
         return _failed("comment_forbidden")
@@ -405,8 +440,12 @@ def _validate_query_sync(
     if placeholders != set(draft.params):
         return _failed("parameter_mismatch")
 
-    # 步骤五：用户未表达 Top-N 时禁止固定 LIMIT；表达后必须精确保留。
+    # 步骤五：用户未表达 Top-N 时禁止固定 LIMIT；分页偏移一律失败关闭。
     limit = root.args.get("limit")
+    if root.args.get("offset") is not None or (
+        isinstance(limit, exp.Limit) and limit.args.get("offset") is not None
+    ):
+        return _failed("offset_forbidden")
     if intent.limit is None and limit is not None:
         return _failed("limit_unexpected")
     if intent.limit is not None:
@@ -465,7 +504,7 @@ def _validate_query_sync(
             if matching:
                 referenced_columns.add(matching[0].id)
 
-    # 步骤七：JOIN 必须显式、非 CROSS，且连接字段来自当前 DDL FK 边。
+    # 步骤七：JOIN 的完整 ON 树只能由 AND 连接当前 DDL 的 FK 等式。
     fk_edges: set[frozenset[str]] = set()
     table_by_qualified = {
         table.qualified_name: table for table in context.physical_schema.tables
@@ -496,6 +535,15 @@ def _validate_query_sync(
     for join in root.find_all(exp.Join):
         if join.kind.upper() == "CROSS" or join.args.get("on") is None:
             return _failed("join_forbidden")
+        on = join.args["on"]
+        if on.find(exp.Or) is not None:
+            return _failed("join_unsupported")
+        equalities = list(on.find_all(exp.EQ))
+        if any(
+            not isinstance(node, (exp.And, exp.EQ, exp.Column, exp.Identifier))
+            for node in on.walk()
+        ):
+            return _failed("join_unsupported")
         join_pairs = {
             frozenset(
                 (
@@ -503,22 +551,25 @@ def _validate_query_sync(
                     columns_by_coordinate.get((right.table, right.name), ""),
                 )
             )
-            for equality in join.args["on"].find_all(exp.EQ)
+            for equality in equalities
             if isinstance((left := equality.this), exp.Column)
             and isinstance((right := equality.expression), exp.Column)
         }
         joined_alias = join.this.alias_or_name
-        if not any(
-            pair in fk_edges
-            and "" not in pair
-            and any(
-                column.table == joined_alias
-                for equality in join.args["on"].find_all(exp.EQ)
-                for column in (equality.this, equality.expression)
-                if isinstance(column, exp.Column)
-                and columns_by_coordinate.get((column.table, column.name), "") in pair
+        if (
+            not join_pairs
+            or not all(pair in fk_edges and "" not in pair for pair in join_pairs)
+            or not any(
+                any(
+                    column.table == joined_alias
+                    for equality in equalities
+                    for column in (equality.this, equality.expression)
+                    if isinstance(column, exp.Column)
+                    and columns_by_coordinate.get((column.table, column.name), "")
+                    in pair
+                )
+                for pair in join_pairs
             )
-            for pair in join_pairs
         ):
             return _failed("join_unsupported")
 
@@ -561,13 +612,16 @@ def _validate_query_sync(
         _predicate_contract(node, columns_by_coordinate, draft.params)
         for node in predicate_nodes
     ]
+    expected_filters = [*intent.filters]
+    if intent.time_filter is not None:
+        expected_filters.append(intent.time_filter)
     expected_contracts = [
         (
             context.bindings.get(item.column_quote),
             item.operator,
             item.value_quotes,
         )
-        for item in intent.filters
+        for item in expected_filters
     ]
     if len(predicate_contracts) != len(expected_contracts) or any(
         actual is None
@@ -580,6 +634,75 @@ def _validate_query_sync(
         )
     ):
         return _failed("predicate_mismatch")
+
+    # 步骤九：查询形态、时间粒度和排序必须与可信 QueryIntent 精确一致。
+    has_aggregate = root.find(exp.AggFunc) is not None
+    has_group = root.args.get("group") is not None
+    shape_valid = {
+        QueryType.DETAIL: not has_aggregate and not has_group,
+        QueryType.AGGREGATE: has_aggregate,
+        QueryType.RANKING: limit is not None,
+        QueryType.TREND: has_aggregate and has_group,
+        QueryType.COMPARISON: has_aggregate and has_group,
+    }[intent.query_type]
+    if not shape_valid:
+        return _failed("query_shape_mismatch")
+
+    projection_aliases = {
+        projection.alias: next(projection.find_all(exp.Column), None)
+        for projection in root.expressions
+        if projection.alias
+    }
+    actual_sorts: list[tuple[str | None, str]] = []
+    order = root.args.get("order")
+    if isinstance(order, exp.Order):
+        for ordered in order.expressions:
+            expression = ordered.this
+            if isinstance(expression, exp.Column) and not expression.table:
+                expression = projection_aliases.get(expression.name, expression)
+            actual_sorts.append(
+                (
+                    _column_id(expression, columns_by_coordinate)
+                    if isinstance(expression, exp.Column)
+                    else None,
+                    "desc" if ordered.args.get("desc") else "asc",
+                )
+            )
+    expected_sorts = [
+        (context.bindings.get(item.quote), item.direction) for item in intent.sorts
+    ]
+    if actual_sorts != expected_sorts:
+        return _failed("sort_mismatch")
+
+    if intent.grain is not None:
+        time_column_id = context.bindings.get(intent.time_column_quote or "")
+        group = root.args.get("group")
+        grouped_column_ids = {
+            _column_id(column, columns_by_coordinate)
+            for expression in (
+                group.expressions if isinstance(group, exp.Group) else []
+            )
+            for column in expression.find_all(exp.Column)
+        }
+        group_sql = " ".join(
+            expression.sql(dialect="mysql").upper()
+            for expression in (
+                group.expressions if isinstance(group, exp.Group) else []
+            )
+        )
+        grain_markers = {
+            "day": "DATE(",
+            "week": "YEARWEEK(",
+            "month": "%Y-%M",
+            "quarter": "QUARTER(",
+            "year": "YEAR(",
+        }
+        if (
+            time_column_id is None
+            or time_column_id not in grouped_column_ids
+            or grain_markers[intent.grain] not in group_sql
+        ):
+            return _failed("time_grain_mismatch")
     validated = ValidatedQuery(
         sql=draft.sql,
         params=dict(draft.params),

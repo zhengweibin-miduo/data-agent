@@ -66,6 +66,8 @@ class ConversationStore(Protocol):
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartedConversationTurn:
         """原子写入用户消息并占用轮次门禁。"""
         ...

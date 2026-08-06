@@ -109,7 +109,10 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         qdrant=qdrant,
         embeddings=embeddings,
     )
-    query_model = QueryLLMAdapter(model)
+    query_model = QueryLLMAdapter(
+        model,
+        dw_database=app_config.data_sync.dw_database,
+    )
     query_executor = MySQLQueryExecutor(
         app_config.query.read_url,
         timeout_seconds=app_config.query.timeout_seconds,

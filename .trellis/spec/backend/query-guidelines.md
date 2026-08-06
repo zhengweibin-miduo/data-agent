@@ -26,6 +26,11 @@
   Query domain/application code must not import concrete Meta Projection models.
 - `QueryDraft` is untrusted model output. Only `validate_query` can create a
   `ValidatedQuery`, and the application receives `dw_database` by injection.
+- Draft and repair prompts receive that same configured `dw_database`; prompts
+  must not assume the default `dw` schema name.
+- Query turn idempotency covers the question, source, and parsed schema
+  fingerprint. Reusing a `turn_uid` with different query semantics is a
+  conflict, not a completed-result replay.
 - Results use NDJSON events: one `metadata`, zero or more `rows`, then
   `complete`; post-start failures emit one safe `stream_error`.
 - The `metadata` event declares `result_scope="all_sources"`; request
@@ -42,6 +47,10 @@
   dangerous functions, system/non-DW schemas, unknown objects, `SELECT *`,
   unsupported joins, raw predicate literals, or parameter mismatch -> stable
   validation issue; permit at most one model repair.
+- The AST must exactly preserve the intent's result shape, filter and time
+  predicates, time grain, sort objects and directions, Top-N, and absence of
+  pagination offsets. Every `JOIN ON` condition must be an allowlisted FK edge;
+  one valid edge never authorizes additional boolean conditions.
 - `EXPLAIN` semantic rejection -> one repair; timeout, connection, permission,
   readiness, or execution failures -> no model repair.
 - Any target table not ready -> exactly `数据准备中，请稍后重试`.
