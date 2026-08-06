@@ -76,6 +76,7 @@ class MySQLConversationStore:
                 if conversation["summary_through_message_id"] is not None
                 else None
             ),
+            execution_owner=str(conversation["active_turn_uid"] or "") != turn_uid,
         )
 
     async def complete_turn(

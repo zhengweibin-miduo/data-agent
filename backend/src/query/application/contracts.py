@@ -68,6 +68,9 @@ class QueryEvent(ContractModel):
     rows: list[list[object]] = Field(default_factory=list, description="本批结果行。")
     row_count: int | None = Field(default=None, description="已经发送的结果总行数。")
     elapsed_ms: int | None = Field(default=None, description="查询执行耗时毫秒数。")
+    result_scope: Literal["all_sources"] | None = Field(
+        default=None, description="业务结果覆盖的数据来源范围。"
+    )
     error: QueryStreamError | None = Field(
         default=None, description="响应开始后的安全流错误。"
     )

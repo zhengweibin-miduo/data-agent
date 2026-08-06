@@ -112,6 +112,35 @@ async def test_count_star_is_not_projection_star() -> None:
     assert result.validated is not None
 
 
+def test_top_n_requires_exact_user_evidence() -> None:
+    """Top-N 数量必须由包含同值的用户原文证明。"""
+    intent = QueryIntent(query_type=QueryType.RANKING, limit=10)
+
+    with pytest.raises(ValueError, match="Top-N"):
+        intent.validate_evidence(["查询销售额"])
+
+
+async def test_nested_cte_name_does_not_hide_outer_physical_table() -> None:
+    """嵌套 CTE 名称不能把外层同名真实表伪装成可见 CTE。"""
+    draft = QueryDraft(
+        sql=(
+            "SELECT COUNT(*) FROM secret, "
+            "(WITH secret AS (SELECT o.id FROM dw.orders o) SELECT id FROM secret) x"
+        ),
+        table_ids=["table-orders"],
+        column_ids=["column-id"],
+    )
+
+    result = await validate_query(
+        draft,
+        _context(),
+        QueryIntent(query_type=QueryType.AGGREGATE, measure_quotes=["数量"]),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "schema_forbidden"
+
+
 @pytest.mark.parametrize(
     ("sql", "params", "code"),
     [

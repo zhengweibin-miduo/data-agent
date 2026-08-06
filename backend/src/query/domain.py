@@ -120,6 +120,9 @@ class QueryIntent(ContractModel):
     limit: int | None = Field(
         default=None, gt=0, le=100_000, description="用户明确表达的 Top-N 数量。"
     )
+    limit_quote: str | None = Field(
+        default=None, max_length=256, description="包含 Top-N 数量的用户原文。"
+    )
     ambiguities: list[QueryAmbiguity] = Field(
         default_factory=list, max_length=20, description="未解决歧义。"
     )
@@ -135,12 +138,17 @@ class QueryIntent(ContractModel):
             *(quote for item in self.filters for quote in item.value_quotes),
             *(item.quote for item in self.sorts),
             *(item.quote for item in self.ambiguities),
+            *([self.limit_quote] if self.limit_quote else []),
         ]
         if any(
             not quote or not any(quote in message for message in user_messages)
             for quote in quotes
         ):
             raise ValueError("QueryIntent 关键短语必须逐字来自用户原文")
+        if (self.limit is None) != (self.limit_quote is None) or (
+            self.limit is not None and str(self.limit) not in (self.limit_quote or "")
+        ):
+            raise ValueError("Top-N 数量必须有包含同值的用户原文证据")
 
 
 QueryParameter = str | int | float | bool | None
@@ -234,7 +242,7 @@ def _physical_sources(scope: Scope) -> dict[str, exp.Table]:
     return {
         alias: source
         for alias, source in scope.sources.items()
-        if isinstance(source, exp.Table) and source.db
+        if isinstance(source, exp.Table)
     }
 
 
@@ -292,16 +300,16 @@ def _validate_query_sync(
 
     # 步骤二：真实物理表必须显式位于 DW schema，并来自当前 DDL allowlist。
     tables_by_name = {table.name: table for table in context.physical_schema.tables}
-    cte_names = {cte.alias for cte in root.find_all(exp.CTE)}
-    physical_tables: list[exp.Table] = []
-    for table_node in root.find_all(exp.Table):
-        if not table_node.db and table_node.name in cte_names:
-            continue
+    physical_tables = [
+        table
+        for scope in traverse_scope(root)
+        for table in _physical_sources(scope).values()
+    ]
+    for table_node in physical_tables:
         if table_node.db != dw_database:
             return _failed("schema_forbidden", table_node.db or table_node.name)
         if table_node.name not in tables_by_name:
             return _failed("table_unknown", table_node.name)
-        physical_tables.append(table_node)
 
     # 步骤三：函数、文件输出、锁和谓词中的裸值全部失败关闭。
     dangerous_functions = {
@@ -439,7 +447,19 @@ def _validate_query_sync(
             if isinstance((left := equality.this), exp.Column)
             and isinstance((right := equality.expression), exp.Column)
         }
-        if not any(pair in fk_edges and "" not in pair for pair in join_pairs):
+        joined_alias = join.this.alias_or_name
+        if not any(
+            pair in fk_edges
+            and "" not in pair
+            and any(
+                column.table == joined_alias
+                for equality in join.args["on"].find_all(exp.EQ)
+                for column in (equality.this, equality.expression)
+                if isinstance(column, exp.Column)
+                and columns_by_coordinate.get((column.table, column.name), "") in pair
+            )
+            for pair in join_pairs
+        ):
             return _failed("join_unsupported")
 
     # 步骤八：模型声明必须与 AST 实际引用以及当前权威指标完全一致。
@@ -455,6 +475,32 @@ def _validate_query_sync(
     }
     if not set(draft.metric_ids).issubset(allowed_metric_ids):
         return _failed("metric_id_mismatch")
+    required_ids = set(context.bindings.values())
+    allowed_table_ids = {table.id for table in context.physical_schema.tables}
+    required_metric_ids = required_ids & allowed_metric_ids
+    required_table_ids = required_ids & allowed_table_ids
+    required_column_ids = required_ids - required_metric_ids - required_table_ids
+    for candidate in context.candidates:
+        if candidate.object_id in required_metric_ids:
+            required_column_ids.update(candidate.related_column_ids)
+    if not required_metric_ids.issubset(draft.metric_ids):
+        return _failed("binding_missing")
+    if not required_table_ids.issubset(referenced_tables):
+        return _failed("binding_missing")
+    if not required_column_ids.issubset(referenced_columns):
+        return _failed("binding_missing")
+    predicate_column_ids = {
+        columns_by_coordinate.get((column.table, column.name), "")
+        for predicate in (*root.find_all(exp.Where), *root.find_all(exp.Having))
+        for column in predicate.find_all(exp.Column)
+    }
+    required_filter_ids = {
+        context.bindings[item.column_quote]
+        for item in intent.filters
+        if item.column_quote in context.bindings
+    }
+    if not required_filter_ids.issubset(predicate_column_ids):
+        return _failed("binding_missing")
     validated = ValidatedQuery(
         sql=draft.sql,
         params=dict(draft.params),

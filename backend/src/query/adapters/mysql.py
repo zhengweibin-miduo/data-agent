@@ -18,6 +18,7 @@ from query.application.contracts import (
 from query.domain import SQLValidationIssue, ValidatedQuery
 
 _Result = TypeVar("_Result")
+_CLEANUP_TIMEOUT_SECONDS = 2.0
 
 
 async def _before_deadline(
@@ -164,12 +165,26 @@ class MySQLQueryExecutor:
                 http_status=502,
             ) from error
         finally:
-            if result is not None:
-                await result.close()
-            if connected:
-                if connection.in_transaction():
-                    await connection.rollback()
-                await connection.close()
+            try:
+                if result is not None:
+                    try:
+                        async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
+                            await result.close()
+                    except (Exception, asyncio.CancelledError):
+                        pass
+                if connected and connection.in_transaction():
+                    try:
+                        async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
+                            await connection.rollback()
+                    except (Exception, asyncio.CancelledError):
+                        await connection.invalidate()
+            finally:
+                if connected:
+                    try:
+                        async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
+                            await connection.close()
+                    except (Exception, asyncio.CancelledError):
+                        await connection.invalidate()
 
     async def close(self) -> None:
         """关闭专用查询连接池。"""

@@ -25,6 +25,7 @@ class StartedConversationTurn:
     conversation_id: int
     summary: str | None
     summary_through_message_id: int | None
+    execution_owner: bool = True
 
 
 class ConversationStore(Protocol):

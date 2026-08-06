@@ -92,6 +92,9 @@ class StartTurnResponse(ContractModel):
 
     message: MessageRecord = Field(description="消息文本。")
     context: ConversationContext = Field(description="有界会话上下文。")
+    execution_owner: bool = Field(
+        default=True, description="当前请求是否拥有该轮次的执行权。"
+    )
 
 
 class CompleteTurnRequest(ContractModel):

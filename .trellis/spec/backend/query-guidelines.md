@@ -28,6 +28,8 @@
   `ValidatedQuery`, and the application receives `dw_database` by injection.
 - Results use NDJSON events: one `metadata`, zero or more `rows`, then
   `complete`; post-start failures emit one safe `stream_error`.
+- The `metadata` event declares `result_scope="all_sources"`; request
+  `ddl_context.source` scopes metadata grounding only and never filters DW rows.
 - The dedicated MySQL URL must select the configured DW database and use a
   database user distinct from the writable application user. Provision that
   user with `SELECT` on `dw.*` only.

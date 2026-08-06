@@ -72,6 +72,14 @@ class QueryApplication:
         if existing is not None:
             yield QueryEvent(kind="complete", message=existing.content)
             return
+        if not started.execution_owner:
+            raise DataAgentError(
+                "query_in_progress",
+                "query_turn",
+                "相同轮次正在执行",
+                retryable=True,
+                http_status=409,
+            )
         # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
         user_messages = [
             message.content
@@ -81,7 +89,14 @@ class QueryApplication:
         intent = await self._intents.parse(request.question, user_messages)
         intent.validate_evidence(user_messages)
         context_or_clarification = await self._metadata.build_context(
-            request.question,
+            " ".join(
+                [*intent.measure_quotes, *intent.dimension_quotes]
+                + [item.column_quote for item in intent.filters]
+                + [quote for item in intent.filters for quote in item.value_quotes]
+                + ([intent.time_quote] if intent.time_quote else [])
+                + [item.quote for item in intent.sorts]
+            )
+            or request.question,
             intent,
             schema,
         )
@@ -95,8 +110,7 @@ class QueryApplication:
         context = context_or_clarification
         # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
         validated = await self._plan(context, intent)
-        # 步骤六：只按 AST 实际目标表检查就绪；未就绪保持固定安全文案。
-        if not await self._readiness.ready(validated.target_tables):
+        if validated is None:
             await self._complete(request, DATA_PREPARING_MESSAGE)
             yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
             return
@@ -110,7 +124,12 @@ class QueryApplication:
             except StopAsyncIteration:
                 first = None
             columns = first.columns if first is not None else []
-            yield QueryEvent(kind="metadata", sql=validated.sql, columns=columns)
+            yield QueryEvent(
+                kind="metadata",
+                sql=validated.sql,
+                columns=columns,
+                result_scope="all_sources",
+            )
             if first is not None and first.rows:
                 row_count += len(first.rows)
                 yield QueryEvent(kind="rows", rows=first.rows)
@@ -121,10 +140,17 @@ class QueryApplication:
             elapsed_ms = round((perf_counter() - started_at) * 1000)
             sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
             logger.warning(
-                "只读查询执行未完成，已记录安全审计字段："
-                f"sql_hash={sql_hash} table_ids={','.join(validated.table_ids)} "
-                f"elapsed_ms={elapsed_ms} row_count={row_count} "
-                f"outcome=failed error_type={type(error).__name__}"
+                "只读查询执行未完成，安全审计：user_id={} conversation_uid={} "
+                "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
+                "outcome=failed error_type={}",
+                request.user_id,
+                request.conversation_uid,
+                request.turn_uid,
+                sql_hash,
+                ",".join(validated.table_ids),
+                elapsed_ms,
+                row_count,
+                type(error).__name__,
             )
             raise
         finally:
@@ -134,9 +160,16 @@ class QueryApplication:
         await self._complete(request, summary)
         sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
         logger.info(
-            "只读查询执行完成，已记录 SQL 哈希、权威表标识、耗时、行数和成功结果："
-            f"sql_hash={sql_hash} table_ids={','.join(validated.table_ids)} "
-            f"elapsed_ms={elapsed_ms} row_count={row_count} outcome=success"
+            "只读查询执行完成，安全审计：user_id={} conversation_uid={} "
+            "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
+            "outcome=success",
+            request.user_id,
+            request.conversation_uid,
+            request.turn_uid,
+            sql_hash,
+            ",".join(validated.table_ids),
+            elapsed_ms,
+            row_count,
         )
         yield QueryEvent(kind="complete", row_count=row_count, elapsed_ms=elapsed_ms)
 
@@ -144,7 +177,7 @@ class QueryApplication:
         self,
         context: QueryContext,
         intent: QueryIntent,
-    ) -> ValidatedQuery:
+    ) -> ValidatedQuery | None:
         """执行一次生成、静态门禁、EXPLAIN 和唯一修复闭环。"""
         draft = await self._planner.draft(context, intent)
         for attempt in range(2):
@@ -156,6 +189,8 @@ class QueryApplication:
             )
             issues = result.issues
             if result.validated is not None:
+                if not await self._readiness.ready(result.validated.target_tables):
+                    return None
                 try:
                     await self._executor.explain(result.validated)
                 except QueryExplainRejected as error:

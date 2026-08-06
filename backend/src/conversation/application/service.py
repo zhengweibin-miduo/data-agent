@@ -120,7 +120,11 @@ class ConversationService:
             started.summary_through_message_id,
             content,
         )
-        return StartTurnResponse(message=started.message, context=context)
+        return StartTurnResponse(
+            message=started.message,
+            context=context,
+            execution_owner=started.execution_owner,
+        )
 
     async def complete_turn(
         self,

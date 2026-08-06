@@ -30,7 +30,9 @@ class QueryTurnRequest(ContractModel):
         max_length=app_config.conversation.max_message_chars,
         description="用户查询原文。",
     )
-    ddl_context: DDLJobRequest = Field(description="当前数据来源和 MySQL DDL。")
+    ddl_context: DDLJobRequest = Field(
+        description="用于元数据绑定的当前来源和 MySQL DDL；不按来源过滤业务结果行。"
+    )
 
 
 def _line(event: QueryEvent) -> bytes:
