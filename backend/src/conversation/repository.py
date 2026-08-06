@@ -736,6 +736,9 @@ class ConversationRepository:
             .values(
                 summary=summary,
                 summary_through_message_id=through,
+                # updated_at 同时是轮次租约坐标；摘要更新不得覆盖
+                # abandon_turn 写入的可重新认领哨兵值。
+                updated_at=agent_conversation.c.updated_at,
             )
         )
         await self._session.execute(

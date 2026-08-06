@@ -352,6 +352,20 @@ class QueryIntent(ContractModel):
             for marker in shape_markers[self.query_type]
         ):
             raise ValueError("查询形态必须与用户原文动作证据一致")
+        user_text = " ".join(user_messages).casefold()
+        trend_markers = ("趋势", "按日", "按周", "按月", "按季", "按年")
+        if any(marker in user_text for marker in trend_markers) and (
+            self.query_type != QueryType.TREND
+            or self.grain is None
+            or self.aggregation is None
+        ):
+            raise ValueError("用户明确表达的趋势形态必须完整映射到查询意图")
+        if re.search(r"(?:前\s*\d+|top\s*\d+)", user_text) and (
+            self.query_type != QueryType.RANKING
+            or self.limit is None
+            or not self.sorts
+        ):
+            raise ValueError("用户明确表达的 Top-N 形态必须完整映射到查询意图")
         shape_is_consistent = {
             QueryType.DETAIL: self.aggregation is None and self.grain is None,
             QueryType.AGGREGATE: (
@@ -832,7 +846,11 @@ def _validate_query_sync(
         for column in table.columns
     }
     for join in root.find_all(exp.Join):
-        if join.kind.upper() == "CROSS" or join.args.get("on") is None:
+        if (
+            join.kind.upper() == "CROSS"
+            or str(join.side or "").upper() not in ("", "INNER")
+            or join.args.get("on") is None
+        ):
             return _failed("join_forbidden")
         on = join.args["on"]
         if on.find(exp.Or) is not None:
@@ -905,7 +923,7 @@ def _validate_query_sync(
         }
         result_column_ids = {
             context.bindings[quote]
-            for quote in (*intent.measure_quotes, *intent.dimension_quotes)
+            for quote in intent.measure_quotes
             if context.bindings.get(quote) is not None
         }
         measure_owner_tables = {
@@ -1206,6 +1224,21 @@ def _validate_query_sync(
                 and isinstance(expression.this, exp.Column)
                 else None
             )
+            if exact_column_id is None and intent.grain is not None:
+                time_column_id = context.bindings.get(intent.time_column_quote or "")
+                if any(
+                    expression.sql(dialect="mysql")
+                    == grouped.sql(dialect="mysql")
+                    for grouped in (
+                        root.args.get("group").expressions
+                        if isinstance(root.args.get("group"), exp.Group)
+                        else []
+                    )
+                ) and {
+                    _column_id(column, columns_by_coordinate)
+                    for column in expression.find_all(exp.Column)
+                } == {time_column_id}:
+                    exact_column_id = time_column_id
             actual_sorts.append(
                 (
                     metric_id or exact_column_id,

@@ -228,6 +228,49 @@ async def test_extraction_claims_one_ordered_turn_per_conversation() -> None:
         await MySQLDatabase.close()
 
 
+async def test_summary_update_preserves_abandoned_turn_reclaim() -> None:
+    """摘要 worker 不得覆盖失败轮次的立即重试标记。"""
+    engine = MySQLDatabase.initialize()
+    async with engine.begin() as connection:
+        await connection.run_sync(metadata.create_all)
+    user_id = f"conversation-abandon-summary-{uuid4().hex}"
+    conversation_uid = ""
+    try:
+        async with MySQLDatabase.session() as session:
+            repository = ConversationRepository(session)
+            conversation = await repository.create(user_id)
+            conversation_uid = conversation.uid
+            await repository.start_turn(user_id, conversation_uid, "turn-1", "第一轮")
+            await repository.complete_turn(
+                user_id, conversation_uid, "turn-1", "已完成"
+            )
+            await repository.start_turn(user_id, conversation_uid, "turn-2", "重试问题")
+            await repository.abandon_turn(user_id, conversation_uid, "turn-2")
+
+        async with MySQLDatabase.session() as session:
+            repository = ConversationRepository(session)
+            claims = await repository.claim_extractions(
+                limit=10, lease_seconds=180, message_limit=20
+            )
+            check_equal("待完成摘要数量", len(claims), 1)
+            await repository.finish_extraction(claims[0], "第一轮摘要")
+
+        async with MySQLDatabase.session() as session:
+            _, _, execution_owner = await ConversationRepository(session).start_turn(
+                user_id, conversation_uid, "turn-2", "重试问题"
+            )
+            check_equal("摘要完成后立即重新认领", execution_owner, True)
+    finally:
+        if conversation_uid:
+            async with MySQLDatabase.session() as session:
+                await session.execute(
+                    delete(agent_conversation).where(
+                        agent_conversation.c.uid == conversation_uid
+                    )
+                )
+        await MySQLDatabase.close()
+
+
 async def test_user_data_eraser_rolls_back_conversation_when_memory_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

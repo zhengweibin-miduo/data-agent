@@ -348,6 +348,35 @@ async def test_nested_cte_name_does_not_hide_outer_physical_table() -> None:
     assert result.issues[0].code == "schema_forbidden"
 
 
+@pytest.mark.parametrize("side", ["LEFT", "RIGHT"])
+async def test_outer_join_is_rejected_without_trusted_semantics(side: str) -> None:
+    """当前只有内连接契约，外连接不得引入未匹配行。"""
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                f"SELECT o.amount FROM dw.orders o {side} JOIN dw.customers c "
+                "ON o.id = c.id"
+            ),
+            table_ids=["table-orders", "table-customers"],
+            column_ids=["column-id", "column-customer-id", "column-amount"],
+        ),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_forbidden"
+
+
+def test_explicit_trend_cannot_be_downgraded_to_detail() -> None:
+    """完整用户消息中的趋势标记必须被意图覆盖。"""
+    with pytest.raises(ValueError, match="趋势形态"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            query_type_quote="列出",
+            measure_quotes=["销售额"],
+        ).validate_evidence(["列出每月销售额趋势"])
+
+
 @pytest.mark.parametrize(
     ("sql", "params", "code"),
     [
@@ -948,6 +977,54 @@ async def test_join_cannot_merge_two_independent_foreign_keys() -> None:
     assert valid.validated is not None
 
 
+async def test_many_to_one_join_allows_parent_dimension_for_child_measure() -> None:
+    """子表度量按父表维度分组不会放大子表结果粒度。"""
+    context = _context()
+    customers = context.physical_schema.tables[1].model_copy(
+        update={
+            "columns": [
+                *context.physical_schema.tables[1].columns,
+                PhysicalColumn(
+                    id="column-customer-region", name="region", data_type="VARCHAR(32)"
+                ),
+            ]
+        }
+    )
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={"tables": [context.physical_schema.tables[0], customers]}
+            ),
+            "bindings": {"金额": "column-amount", "地区": "column-customer-region"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT c.region, SUM(o.amount) FROM dw.orders o "
+                "JOIN dw.customers c ON o.id = c.id GROUP BY c.region"
+            ),
+            table_ids=["table-orders", "table-customers"],
+            column_ids=[
+                "column-id",
+                "column-customer-id",
+                "column-customer-region",
+                "column-amount",
+            ],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+            dimension_quotes=["地区"],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is not None
+
+
 @pytest.mark.parametrize(
     ("sql", "sorts"),
     [
@@ -1238,6 +1315,36 @@ async def test_time_bucket_requires_exact_ast_shape() -> None:
         dw_database="dw",
     )
     assert result.issues[0].code == "time_grain_mismatch"
+
+
+async def test_trend_can_sort_by_validated_time_bucket_alias() -> None:
+    """趋势可按已验证时间桶的投影别名排序。"""
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT DATE_FORMAT(o.created_at, '%Y-%m') AS month, SUM(o.amount) "
+                "FROM dw.orders o GROUP BY DATE_FORMAT(o.created_at, '%Y-%m') "
+                "ORDER BY month ASC"
+            ),
+            table_ids=["table-orders"],
+            column_ids=["column-created-at", "column-amount"],
+        ),
+        _context().model_copy(
+            update={"bindings": {"日期": "column-created-at", "金额": "column-amount"}}
+        ),
+        QueryIntent(
+            query_type=QueryType.TREND,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+            time_column_quote="日期",
+            grain="month",
+            grain_quote="按月",
+            sorts=[SortIntent(quote="日期", direction="asc")],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is not None
 
 
 async def test_numeric_aggregate_rejects_text_measure() -> None:
