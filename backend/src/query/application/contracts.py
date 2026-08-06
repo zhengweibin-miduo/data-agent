@@ -124,6 +124,15 @@ class ConversationPort(Protocol):
         """原子完成助手消息与提炼 outbox。"""
         ...
 
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> None:
+        """释放失败或取消的查询轮次执行权。"""
+        ...
+
 
 class QueryIntentPort(Protocol):
     """从用户原文生成严格 QueryIntent。"""

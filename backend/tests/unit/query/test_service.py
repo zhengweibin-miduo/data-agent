@@ -55,6 +55,7 @@ class _Conversations:
 
     def __init__(self) -> None:
         self.completed: list[str] = []
+        self.abandoned = 0
 
     async def start_turn(self, *_args: object) -> StartTurnResponse:
         """返回包含当前用户原文的已开始轮次。"""
@@ -76,6 +77,10 @@ class _Conversations:
         content = str(_args[-1])
         self.completed.append(content)
         return CompleteTurnResponse(message=_message(MessageRole.ASSISTANT, content))
+
+    async def abandon_turn(self, *_args: object) -> None:
+        """记录流结束后的执行权释放。"""
+        self.abandoned += 1
 
 
 class _ReplayConversations(_Conversations):
@@ -405,8 +410,9 @@ async def test_stream_repairs_sql_once_but_never_repairs_timeout() -> None:
     assert planner.repairs == 1
 
     timeout_planner = _Planner()
+    timeout_conversations = _Conversations()
     timeout_application = QueryApplication(
-        conversations=cast(ConversationPort, _Conversations()),
+        conversations=cast(ConversationPort, timeout_conversations),
         intents=cast(QueryIntentPort, _IntentParser()),
         metadata=cast(QueryMetadataPort, _GroundedMetadata()),
         planner=cast(QueryPlannerPort, timeout_planner),
@@ -417,3 +423,4 @@ async def test_stream_repairs_sql_once_but_never_repairs_timeout() -> None:
     with pytest.raises(DataAgentError, match="预检超时"):
         _ = [event async for event in timeout_application.stream(request)]
     assert timeout_planner.repairs == 0
+    assert timeout_conversations.abandoned == 1

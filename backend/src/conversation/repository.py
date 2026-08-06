@@ -26,6 +26,9 @@ from errors import DataAgentError
 from identifiers import stable_id
 from settings import app_config
 
+_ABANDONED_TURN_TIMESTAMP = "1970-01-01 00:00:00"
+_ABANDONED_TURN_YEAR = 1970
+
 
 def _message(row: RowMapping) -> MessageRecord:
     """把数据库行转换为纯文本消息。"""
@@ -275,7 +278,7 @@ class ConversationRepository:
         conversation_uid: str,
         turn_uid: str,
         content: str,
-    ) -> tuple[MessageRecord, RowMapping]:
+    ) -> tuple[MessageRecord, RowMapping, bool]:
         """门禁并幂等持久化用户消息。"""
         # 步骤一：先锁定会话再检查 active_turn_uid，避免并发请求同时通过门禁。
         conversation = await self.get(
@@ -310,15 +313,19 @@ class ConversationRepository:
         # 步骤二：在持锁事务内回查用户消息；同一 turn 仅允许相同内容幂等回放，
         # 内容变化必须拒绝，不能覆盖已经成为会话历史的输入。
         existing = (
-            await self._session.execute(
-                select(agent_message).where(
-                    agent_message.c.user_id == user_id,
-                    agent_message.c.conversation_id == int(conversation["id"]),
-                    agent_message.c.turn_uid == turn_uid,
-                    agent_message.c.role == MessageRole.USER.value,
+            (
+                await self._session.execute(
+                    select(agent_message).where(
+                        agent_message.c.user_id == user_id,
+                        agent_message.c.conversation_id == int(conversation["id"]),
+                        agent_message.c.turn_uid == turn_uid,
+                        agent_message.c.role == MessageRole.USER.value,
+                    )
                 )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if existing is not None:
             if str(existing["content"]) != content:
                 raise DataAgentError(
@@ -333,13 +340,18 @@ class ConversationRepository:
             # 后续轮次抢占（重新占用会让陈旧轮次在替代轮次完成后写入助手消息，形成
             # user(A) user(B) assistant(B) assistant(A) 这种错乱顺序，并污染后续摘要
             # 与记忆提炼）。两种情况都必须保持门禁不变。
+            execution_owner = False
             if str(conversation["active_turn_uid"] or "") == turn_uid:
+                execution_owner = (
+                    getattr(conversation["updated_at"], "year", None)
+                    == _ABANDONED_TURN_YEAR
+                )
                 await self._claim_turn_gate(
                     int(conversation["id"]),
                     user_id,
                     turn_uid,
                 )
-            return _message(existing), conversation
+            return _message(existing), conversation, execution_owner
 
         # 步骤三：新消息与 active_turn_uid 在调用方事务内一并写入，确保可见的
         # 用户消息必然占住活动轮次门禁，后续助手完成只能匹配该 turn。
@@ -357,11 +369,15 @@ class ConversationRepository:
         message_id = _inserted_id(result, "用户消息")
         await self._claim_turn_gate(int(conversation["id"]), user_id, turn_uid)
         row = (
-            await self._session.execute(
-                select(agent_message).where(agent_message.c.id == message_id)
+            (
+                await self._session.execute(
+                    select(agent_message).where(agent_message.c.id == message_id)
+                )
             )
-        ).mappings().one()
-        return _message(row), conversation
+            .mappings()
+            .one()
+        )
+        return _message(row), conversation, True
 
     async def complete_turn(
         self,
@@ -472,6 +488,23 @@ class ConversationRepository:
             )
         ).mappings().one()
         return _message(row)
+
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> None:
+        """把仍由失败请求持有的轮次原子标记为可重新认领。"""
+        await self._session.execute(
+            update(agent_conversation)
+            .where(
+                agent_conversation.c.uid == conversation_uid,
+                agent_conversation.c.user_id == user_id,
+                agent_conversation.c.active_turn_uid == turn_uid,
+            )
+            .values(active_turn_uid=turn_uid, updated_at=_ABANDONED_TURN_TIMESTAMP)
+        )
 
     async def assistant_message(
         self,

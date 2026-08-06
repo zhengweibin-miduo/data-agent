@@ -60,9 +60,9 @@ class MySQLConversationStore:
     ) -> StartedConversationTurn:
         """原子写入用户消息并占用轮次门禁。"""
         async with MySQLDatabase.session() as session:
-            message, conversation = await ConversationRepository(session).start_turn(
-                user_id, conversation_uid, turn_uid, content
-            )
+            message, conversation, execution_owner = await ConversationRepository(
+                session
+            ).start_turn(user_id, conversation_uid, turn_uid, content)
         return StartedConversationTurn(
             message=message,
             conversation_id=int(conversation["id"]),
@@ -76,7 +76,7 @@ class MySQLConversationStore:
                 if conversation["summary_through_message_id"] is not None
                 else None
             ),
-            execution_owner=str(conversation["active_turn_uid"] or "") != turn_uid,
+            execution_owner=execution_owner,
         )
 
     async def complete_turn(
@@ -90,6 +90,18 @@ class MySQLConversationStore:
         async with MySQLDatabase.session() as session:
             return await ConversationRepository(session).complete_turn(
                 user_id, conversation_uid, turn_uid, content
+            )
+
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> None:
+        """释放失败或取消后仍由当前轮次持有的门禁。"""
+        async with MySQLDatabase.session() as session:
+            await ConversationRepository(session).abandon_turn(
+                user_id, conversation_uid, turn_uid
             )
 
     async def assistant_message(

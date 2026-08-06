@@ -94,13 +94,13 @@ async def test_turn_idempotency_history_and_tenant_isolation() -> None:
             repository = ConversationRepository(session)
             conversation = await repository.create(user_id)
             conversation_uid = conversation.uid
-            first, _ = await repository.start_turn(
+            first, _, _ = await repository.start_turn(
                 user_id,
                 conversation_uid,
                 "turn-1",
                 "永久保存这条用户消息",
             )
-            repeated, _ = await repository.start_turn(
+            repeated, _, _ = await repository.start_turn(
                 user_id,
                 conversation_uid,
                 "turn-1",
@@ -277,7 +277,7 @@ async def test_extraction_committer_rolls_back_memory_when_finish_loses_lease(
             repository = ConversationRepository(session)
             conversation = await repository.create(user_id)
             conversation_uid = conversation.uid
-            user_message, _ = await repository.start_turn(
+            user_message, _, _ = await repository.start_turn(
                 user_id,
                 conversation_uid,
                 "turn-1",

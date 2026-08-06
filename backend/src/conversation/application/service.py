@@ -142,6 +142,15 @@ class ConversationService:
         )
         return CompleteTurnResponse(message=message)
 
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> None:
+        """释放失败或取消的活动轮次门禁，使同轮次可安全重试。"""
+        await self._store.abandon_turn(user_id, conversation_uid, turn_uid)
+
     async def assistant_message(
         self,
         user_id: str,

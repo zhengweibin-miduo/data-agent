@@ -1,6 +1,7 @@
 """自然语言查询的纯领域契约与 SQL 安全规则。"""
 
 import asyncio
+import re
 from dataclasses import InitVar, dataclass
 from enum import StrEnum
 from typing import Literal
@@ -145,8 +146,14 @@ class QueryIntent(ContractModel):
             for quote in quotes
         ):
             raise ValueError("QueryIntent 关键短语必须逐字来自用户原文")
+        limit_numbers = (
+            [int(value) for value in re.findall(r"(?<!\d)\d+(?!\d)", self.limit_quote)]
+            if self.limit_quote
+            else []
+        )
         if (self.limit is None) != (self.limit_quote is None) or (
-            self.limit is not None and str(self.limit) not in (self.limit_quote or "")
+            self.limit is not None
+            and (len(limit_numbers) != 1 or limit_numbers[0] != self.limit)
         ):
             raise ValueError("Top-N 数量必须有包含同值的用户原文证据")
 
@@ -244,6 +251,59 @@ def _physical_sources(scope: Scope) -> dict[str, exp.Table]:
         for alias, source in scope.sources.items()
         if isinstance(source, exp.Table)
     }
+
+
+def _predicate_contract(
+    predicate: exp.Expression,
+    columns_by_coordinate: dict[tuple[str, str], str],
+    params: dict[str, QueryParameter],
+) -> tuple[str, str, list[QueryParameter]] | None:
+    """把一个简单绑定谓词规范化为字段、操作符和值。"""
+    operators: dict[type[exp.Expression], str] = {
+        exp.EQ: "eq",
+        exp.NEQ: "ne",
+        exp.GT: "gt",
+        exp.GTE: "gte",
+        exp.LT: "lt",
+        exp.LTE: "lte",
+        exp.In: "in",
+        exp.Like: "contains",
+    }
+    operator = operators.get(type(predicate))
+    if operator is None or not isinstance(predicate.this, exp.Column):
+        return None
+    column = predicate.this
+    column_id = columns_by_coordinate.get((column.table, column.name))
+    if column_id is None:
+        matches = {
+            candidate_id
+            for (alias, name), candidate_id in columns_by_coordinate.items()
+            if name == column.name and (not column.table or alias == column.table)
+        }
+        if len(matches) != 1:
+            return None
+        column_id = matches.pop()
+    value_nodes = (
+        list(predicate.expressions)
+        if isinstance(predicate, exp.In)
+        else [predicate.expression]
+    )
+    if not value_nodes or not all(
+        isinstance(node, exp.Placeholder) for node in value_nodes
+    ):
+        return None
+    values = [params[str(node.this)] for node in value_nodes]
+    return column_id, operator, values
+
+
+def _values_match(
+    operator: str, values: list[QueryParameter], quotes: list[str]
+) -> bool:
+    """按用户证据精确比较谓词绑定值。"""
+    normalized = [str(value) for value in values]
+    if operator == "contains":
+        normalized = [value.removeprefix("%").removesuffix("%") for value in normalized]
+    return normalized == quotes
 
 
 async def validate_query(
@@ -489,18 +549,37 @@ def _validate_query_sync(
         return _failed("binding_missing")
     if not required_column_ids.issubset(referenced_columns):
         return _failed("binding_missing")
-    predicate_column_ids = {
-        columns_by_coordinate.get((column.table, column.name), "")
-        for predicate in (*root.find_all(exp.Where), *root.find_all(exp.Having))
-        for column in predicate.find_all(exp.Column)
-    }
-    required_filter_ids = {
-        context.bindings[item.column_quote]
+    predicate_nodes = [
+        node
+        for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
+        for node in clause.this.walk()
+        if isinstance(
+            node, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.In, exp.Like)
+        )
+    ]
+    predicate_contracts = [
+        _predicate_contract(node, columns_by_coordinate, draft.params)
+        for node in predicate_nodes
+    ]
+    expected_contracts = [
+        (
+            context.bindings.get(item.column_quote),
+            item.operator,
+            item.value_quotes,
+        )
         for item in intent.filters
-        if item.column_quote in context.bindings
-    }
-    if not required_filter_ids.issubset(predicate_column_ids):
-        return _failed("binding_missing")
+    ]
+    if len(predicate_contracts) != len(expected_contracts) or any(
+        actual is None
+        or expected[0] is None
+        or actual[0] != expected[0]
+        or actual[1] != expected[1]
+        or not _values_match(actual[1], actual[2], expected[2])
+        for actual, expected in zip(
+            predicate_contracts, expected_contracts, strict=True
+        )
+    ):
+        return _failed("predicate_mismatch")
     validated = ValidatedQuery(
         sql=draft.sql,
         params=dict(draft.params),

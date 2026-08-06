@@ -13,6 +13,7 @@ from models.physical import (
     PhysicalTable,
 )
 from query.domain import (
+    FilterIntent,
     QueryContext,
     QueryDraft,
     QueryIntent,
@@ -120,6 +121,24 @@ def test_top_n_requires_exact_user_evidence() -> None:
         intent.validate_evidence(["查询销售额"])
 
 
+@pytest.mark.parametrize(
+    ("limit", "quote"),
+    [(10, "前100名"), (1, "前10名"), (10, "2025年前100名")],
+)
+def test_top_n_rejects_partial_or_ambiguous_numeric_evidence(
+    limit: int, quote: str
+) -> None:
+    """Top-N 只接受证据中唯一且完整匹配的十进制数量。"""
+    intent = QueryIntent(
+        query_type=QueryType.RANKING,
+        limit=limit,
+        limit_quote=quote,
+    )
+
+    with pytest.raises(ValueError, match="Top-N"):
+        intent.validate_evidence([quote])
+
+
 async def test_nested_cte_name_does_not_hide_outer_physical_table() -> None:
     """嵌套 CTE 名称不能把外层同名真实表伪装成可见 CTE。"""
     draft = QueryDraft(
@@ -160,8 +179,7 @@ async def test_nested_cte_name_does_not_hide_outer_physical_table() -> None:
             "join_forbidden",
         ),
         (
-            "SELECT o.amount FROM dw.orders o "
-            "JOIN dw.customers c ON o.amount = c.id",
+            "SELECT o.amount FROM dw.orders o JOIN dw.customers c ON o.amount = c.id",
             {},
             "join_unsupported",
         ),
@@ -237,12 +255,58 @@ async def test_named_placeholder_and_fk_join_are_accepted() -> None:
 
     result = await validate_query(
         draft,
-        _context(),
-        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="金额",
+                    operator="gt",
+                    value_quotes=["10"],
+                )
+            ],
+        ),
         dw_database="dw",
     )
 
     assert result.validated is not None
+
+
+@pytest.mark.parametrize(
+    ("sql", "params"),
+    [
+        ("SELECT o.amount FROM dw.orders o WHERE o.amount > :minimum", {"minimum": 10}),
+        ("SELECT o.amount FROM dw.orders o WHERE o.amount < :minimum", {"minimum": 10}),
+        (
+            "SELECT o.amount FROM dw.orders o WHERE o.amount > :minimum",
+            {"minimum": 999},
+        ),
+    ],
+)
+async def test_predicates_must_exactly_match_filter_intent(
+    sql: str, params: dict[str, QueryParameter]
+) -> None:
+    """额外谓词、反向运算符和错误参数值均在自动执行前拒绝。"""
+    context = _context().model_copy(update={"bindings": {"金额": "column-amount"}})
+    filters = (
+        []
+        if params.get("minimum") == 10 and ">" in sql
+        else [FilterIntent(column_quote="金额", operator="gt", value_quotes=["10"])]
+    )
+
+    result = await validate_query(
+        _draft(sql, params=params),
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=filters,
+        ),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "predicate_mismatch"
 
 
 async def test_explicit_top_n_is_preserved_exactly() -> None:

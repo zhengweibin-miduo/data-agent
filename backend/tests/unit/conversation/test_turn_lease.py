@@ -117,10 +117,11 @@ class _ReplaySession(_RecordingSession):
         self,
         conversation: dict[str, object],
         message: dict[str, object],
+        assistant: object | None = None,
     ):
         """绑定预置的会话行与既有用户消息。"""
         super().__init__(claimable=True)
-        self._rows = [conversation, message]
+        self._rows = [conversation, message, assistant]
         self._index = 0
 
     async def execute(self, statement: ClauseElement) -> object:
@@ -129,6 +130,8 @@ class _ReplaySession(_RecordingSession):
         rendered = str(statement).casefold()
         if rendered.startswith("update"):
             return _FakeResult(None)
+        if "timestampadd" in rendered:
+            return _FakeResult((1,))
         row = self._rows[min(self._index, len(self._rows) - 1)]
         self._index += 1
         return _FakeResult(row)
@@ -146,14 +149,15 @@ async def test_idempotent_replay_renews_turn_lease() -> None:
         "content": "订单口径是什么",
         "created_at": moment,
     }
-    session = _ReplaySession(conversation, message)
+    session = _ReplaySession(conversation, message, {"id": 8})
     repository = ConversationRepository(cast(AsyncSession, session))
 
-    record, _ = await repository.start_turn(
+    record, _, execution_owner = await repository.start_turn(
         "user-1", "conv-1", "turn-1", "订单口径是什么"
     )
 
     check_equal("幂等回放返回既有消息", record.uid, "message-7")
+    check_equal("在途幂等回放不取得执行权", execution_owner, False)
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("幂等回放执行一次门禁续租", len(updates), 1)
     rendered = _rendered(updates[0])
@@ -180,10 +184,10 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
         "content": "订单口径是什么",
         "created_at": moment,
     }
-    session = _ReplaySession(conversation, message)
+    session = _ReplaySession(conversation, message, {"id": 8})
     repository = ConversationRepository(cast(AsyncSession, session))
 
-    record, _ = await repository.start_turn(
+    record, _, execution_owner = await repository.start_turn(
         "user-1",
         "conv-1",
         "turn-1",
@@ -191,8 +195,35 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
     )
 
     check_equal("仍返回既有用户消息", record.uid, "message-7")
+    check_equal("已完成轮次不取得执行权", execution_owner, False)
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("已完成轮次不重新占用门禁", updates, [])
+
+
+async def test_abandoned_turn_replay_reclaims_execution_owner() -> None:
+    """失败释放后的同一 turn_uid 能原子续租并重新取得执行权。"""
+    conversation = {
+        "id": 1,
+        "active_turn_uid": "turn-1",
+        "updated_at": datetime(1970, 1, 1, tzinfo=UTC),
+    }
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "订单口径是什么",
+        "created_at": datetime.now(UTC),
+    }
+    repository = ConversationRepository(
+        cast(AsyncSession, _ReplaySession(conversation, message))
+    )
+
+    _, _, execution_owner = await repository.start_turn(
+        "user-1", "conv-1", "turn-1", "订单口径是什么"
+    )
+
+    check_equal("失败轮次重新取得执行权", execution_owner, True)
 
 
 async def test_preempted_turn_replay_does_not_reclaim_gate() -> None:

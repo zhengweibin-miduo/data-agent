@@ -80,69 +80,90 @@ class QueryApplication:
                 retryable=True,
                 http_status=409,
             )
-        # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
-        user_messages = [
-            message.content
-            for message in started.context.messages
-            if message.role == MessageRole.USER
-        ]
-        intent = await self._intents.parse(request.question, user_messages)
-        intent.validate_evidence(user_messages)
-        context_or_clarification = await self._metadata.build_context(
-            " ".join(
-                [*intent.measure_quotes, *intent.dimension_quotes]
-                + [item.column_quote for item in intent.filters]
-                + [quote for item in intent.filters for quote in item.value_quotes]
-                + ([intent.time_quote] if intent.time_quote else [])
-                + [item.quote for item in intent.sorts]
-            )
-            or request.question,
-            intent,
-            schema,
-        )
-        # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
-        if isinstance(context_or_clarification, QueryClarification):
-            await self._complete(request, context_or_clarification.question)
-            yield QueryEvent(
-                kind="clarification", message=context_or_clarification.question
-            )
-            return
-        context = context_or_clarification
-        # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
-        validated = await self._plan(context, intent)
-        if validated is None:
-            await self._complete(request, DATA_PREPARING_MESSAGE)
-            yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
-            return
-        # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
-        started_at = perf_counter()
-        row_count = 0
-        stream = self._executor.execute(validated)
         try:
-            try:
-                first = await anext(stream)
-            except StopAsyncIteration:
-                first = None
-            columns = first.columns if first is not None else []
-            yield QueryEvent(
-                kind="metadata",
-                sql=validated.sql,
-                columns=columns,
-                result_scope="all_sources",
+            # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
+            user_messages = [
+                message.content
+                for message in started.context.messages
+                if message.role == MessageRole.USER
+            ]
+            intent = await self._intents.parse(request.question, user_messages)
+            intent.validate_evidence(user_messages)
+            context_or_clarification = await self._metadata.build_context(
+                " ".join(
+                    [*intent.measure_quotes, *intent.dimension_quotes]
+                    + [item.column_quote for item in intent.filters]
+                    + [quote for item in intent.filters for quote in item.value_quotes]
+                    + ([intent.time_quote] if intent.time_quote else [])
+                    + [item.quote for item in intent.sorts]
+                )
+                or request.question,
+                intent,
+                schema,
             )
-            if first is not None and first.rows:
-                row_count += len(first.rows)
-                yield QueryEvent(kind="rows", rows=first.rows)
-            async for batch in stream:
-                row_count += len(batch.rows)
-                yield QueryEvent(kind="rows", rows=batch.rows)
-        except BaseException as error:
+            # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
+            if isinstance(context_or_clarification, QueryClarification):
+                await self._complete(request, context_or_clarification.question)
+                yield QueryEvent(
+                    kind="clarification", message=context_or_clarification.question
+                )
+                return
+            context = context_or_clarification
+            # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
+            validated = await self._plan(context, intent)
+            if validated is None:
+                await self._complete(request, DATA_PREPARING_MESSAGE)
+                yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
+                return
+            # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
+            started_at = perf_counter()
+            row_count = 0
+            stream = self._executor.execute(validated)
+            try:
+                try:
+                    first = await anext(stream)
+                except StopAsyncIteration:
+                    first = None
+                columns = first.columns if first is not None else []
+                yield QueryEvent(
+                    kind="metadata",
+                    sql=validated.sql,
+                    columns=columns,
+                    result_scope="all_sources",
+                )
+                if first is not None and first.rows:
+                    row_count += len(first.rows)
+                    yield QueryEvent(kind="rows", rows=first.rows)
+                async for batch in stream:
+                    row_count += len(batch.rows)
+                    yield QueryEvent(kind="rows", rows=batch.rows)
+            except BaseException as error:
+                elapsed_ms = round((perf_counter() - started_at) * 1000)
+                sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
+                logger.warning(
+                    "只读查询执行未完成，安全审计：user_id={} conversation_uid={} "
+                    "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
+                    "outcome=failed error_type={}",
+                    request.user_id,
+                    request.conversation_uid,
+                    request.turn_uid,
+                    sql_hash,
+                    ",".join(validated.table_ids),
+                    elapsed_ms,
+                    row_count,
+                    type(error).__name__,
+                )
+                raise
+            finally:
+                await stream.aclose()
             elapsed_ms = round((perf_counter() - started_at) * 1000)
+            summary = f"查询完成，共返回 {row_count} 行。"
+            await self._complete(request, summary)
             sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
-            logger.warning(
-                "只读查询执行未完成，安全审计：user_id={} conversation_uid={} "
+            logger.info(
+                "只读查询执行完成，安全审计：user_id={} conversation_uid={} "
                 "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
-                "outcome=failed error_type={}",
+                "outcome=success",
                 request.user_id,
                 request.conversation_uid,
                 request.turn_uid,
@@ -150,28 +171,26 @@ class QueryApplication:
                 ",".join(validated.table_ids),
                 elapsed_ms,
                 row_count,
-                type(error).__name__,
             )
-            raise
+            yield QueryEvent(
+                kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
+            )
         finally:
-            await stream.aclose()
-        elapsed_ms = round((perf_counter() - started_at) * 1000)
-        summary = f"查询完成，共返回 {row_count} 行。"
-        await self._complete(request, summary)
-        sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
-        logger.info(
-            "只读查询执行完成，安全审计：user_id={} conversation_uid={} "
-            "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
-            "outcome=success",
-            request.user_id,
-            request.conversation_uid,
-            request.turn_uid,
-            sql_hash,
-            ",".join(validated.table_ids),
-            elapsed_ms,
-            row_count,
-        )
-        yield QueryEvent(kind="complete", row_count=row_count, elapsed_ms=elapsed_ms)
+            try:
+                await self._conversations.abandon_turn(
+                    request.user_id,
+                    request.conversation_uid,
+                    request.turn_uid,
+                )
+            except Exception as error:
+                logger.warning(
+                    "查询轮次门禁释放失败：user_id={} conversation_uid={} "
+                    "turn_uid={} error_type={}",
+                    request.user_id,
+                    request.conversation_uid,
+                    request.turn_uid,
+                    type(error).__name__,
+                )
 
     async def _plan(
         self,

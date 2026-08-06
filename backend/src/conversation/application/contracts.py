@@ -80,6 +80,15 @@ class ConversationStore(Protocol):
         """原子写入助手消息、outbox 并释放轮次门禁。"""
         ...
 
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+    ) -> None:
+        """释放失败或取消的活动轮次门禁。"""
+        ...
+
     async def assistant_message(
         self,
         user_id: str,
