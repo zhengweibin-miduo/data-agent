@@ -96,6 +96,7 @@ def _service(
             message=_message(MessageRole.ASSISTANT, "按支付成功金额定义。")
         ),
     )
+    conversations.abandon_turn = AsyncMock()
     readiness = Mock(spec=AnswerReadinessService)
     readiness.evaluate = AsyncMock(
         return_value=AnswerGateResult(
@@ -250,7 +251,9 @@ async def test_chat_turn_rejects_oversized_ddl_before_starting_turn() -> None:
 
 async def test_chat_turn_preserves_completion_failure() -> None:
     """助手消息持久化失败时保留原始事务异常。"""
-    service, _, _, _ = _service(completion_error=RuntimeError("write failed"))
+    service, conversations, _, _ = _service(
+        completion_error=RuntimeError("write failed")
+    )
 
     try:
         await service.run_turn("conversation-1", _request())
@@ -263,3 +266,17 @@ async def test_chat_turn_preserves_completion_failure() -> None:
             actual="未抛异常",
             expected="RuntimeError",
         )
+    check_equal("完成失败释放执行权", conversations.abandon_turn.await_count, 1)
+
+
+async def test_chat_turn_releases_execution_owner_after_model_failure() -> None:
+    """模型失败后释放当前轮次，使同一 turn_uid 可安全重试。"""
+    timeout = APITimeoutError(request=httpx.Request("POST", "http://model.test"))
+    service, conversations, _, _ = _service(model_result=timeout)
+
+    try:
+        await service.run_turn("conversation-1", _request())
+    except DataAgentError:
+        pass
+
+    check_equal("模型失败释放执行权", conversations.abandon_turn.await_count, 1)

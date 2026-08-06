@@ -121,8 +121,8 @@ class MySQLQueryExecutor:
             columns = list(result.keys())
             pending: list[list[object]] = []
             pending_bytes = 0
-            # 步骤一（ponytail）：逐行取数，避免 500 个近 1 MiB 行先进入内存。
-            partitions = result.partitions(1).__aiter__()
+            # 驱动按配置行数批量取数，进程内仍逐行执行字节预算切分。
+            partitions = result.partitions(self._fetch_batch_rows).__aiter__()
             while True:
                 try:
                     partition = await _before_deadline(anext(partitions), deadline)

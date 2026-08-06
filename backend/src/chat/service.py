@@ -132,6 +132,7 @@ class ChatService:
                 for table in schema.tables
             ]
         )
+        completed_turn = False
         try:
             gate = await self._readiness.evaluate(request.content, catalog)
             if gate.decision == AnswerGateDecision.PROCEED:
@@ -142,6 +143,15 @@ class ChatService:
                 )
             else:
                 assistant_content = gate.user_message or "无法继续回答"
+            # 步骤六：复用完成轮次事务，原子写入助手消息、提炼 outbox 并释放门禁。
+            completed = await self._conversations.complete_turn(
+                request.user_id,
+                conversation_uid,
+                request.turn_uid,
+                assistant_content,
+            )
+            completed_turn = True
+            return ChatTurnResponse(message=completed.message, readiness=gate.decision)
         except OpenAIError as error:
             # 步骤五：模型边界只投影稳定错误字段；同一 turn 可在会话租约内安全重试。
             raise DataAgentError(
@@ -151,15 +161,17 @@ class ChatService:
                 retryable=isinstance(error, _RETRYABLE_MODEL_ERRORS),
                 http_status=502,
             ) from error
-
-        # 步骤六：复用完成轮次事务，原子写入助手消息、提炼 outbox 并释放门禁。
-        completed = await self._conversations.complete_turn(
-            request.user_id,
-            conversation_uid,
-            request.turn_uid,
-            assistant_content,
-        )
-        return ChatTurnResponse(message=completed.message, readiness=gate.decision)
+        finally:
+            if not completed_turn:
+                try:
+                    await self._conversations.abandon_turn(
+                        request.user_id,
+                        conversation_uid,
+                        request.turn_uid,
+                    )
+                except Exception:
+                    # 清理失败不得覆盖 readiness、模型、取消或持久化的原始异常。
+                    pass
 
     @staticmethod
     def _existing_decision(content: str) -> AnswerGateDecision:

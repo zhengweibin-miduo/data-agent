@@ -66,6 +66,12 @@ class FilterIntent(ContractModel):
     operator: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"] = Field(
         description="用户明确表达的过滤操作。"
     )
+    operator_quote: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="过滤操作符的用户原文证据。",
+    )
     value_quotes: list[str] = Field(
         min_length=1,
         max_length=100,
@@ -152,7 +158,13 @@ class QueryIntent(ContractModel):
                 for quote in (self.time_filter.value_quotes if self.time_filter else [])
             ),
             *(item.column_quote for item in self.filters),
+            *(item.operator_quote for item in self.filters if item.operator_quote),
             *(quote for item in self.filters for quote in item.value_quotes),
+            *(
+                [self.time_filter.operator_quote]
+                if self.time_filter and self.time_filter.operator_quote
+                else []
+            ),
             *(item.quote for item in self.sorts),
             *(item.quote for item in self.ambiguities),
             *([self.limit_quote] if self.limit_quote else []),
@@ -162,6 +174,30 @@ class QueryIntent(ContractModel):
             for quote in quotes
         ):
             raise ValueError("QueryIntent 关键短语必须逐字来自用户原文")
+        operator_markers = {
+            "eq": ("等于", "为", "是", "="),
+            "ne": ("不等于", "不是", "!=", "<>"),
+            "gt": ("大于", "超过", ">"),
+            "gte": ("大于等于", "至少", "不小于", ">="),
+            "lt": ("小于", "低于", "少于", "<"),
+            "lte": ("小于等于", "至多", "不超过", "<="),
+            "in": ("属于", "在", "之一", "in"),
+            "contains": ("包含", "含有", "like"),
+        }
+        for item in [*self.filters, *([self.time_filter] if self.time_filter else [])]:
+            quote = item.operator_quote
+            marker_matches = sorted(
+                (
+                    (len(marker), operator)
+                    for operator, markers in operator_markers.items()
+                    for marker in markers
+                    if quote is not None and marker in quote.casefold()
+                ),
+                reverse=True,
+            )
+            evidenced_operator = marker_matches[0][1] if marker_matches else None
+            if evidenced_operator != item.operator:
+                raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
         limit_numbers = (
             [int(value) for value in re.findall(r"(?<!\d)\d+(?!\d)", self.limit_quote)]
             if self.limit_quote
@@ -359,6 +395,20 @@ def _column_id(
         if name == column.name and (not column.table or alias == column.table)
     }
     return matches.pop() if len(matches) == 1 else None
+
+
+def _predicate_tree_supported(expression: exp.Expression) -> bool:
+    """当前过滤契约只允许由 AND 连接的受支持原子谓词。"""
+    if isinstance(expression, exp.Paren):
+        return _predicate_tree_supported(expression.this)
+    if isinstance(expression, exp.And):
+        return _predicate_tree_supported(expression.this) and _predicate_tree_supported(
+            expression.expression
+        )
+    return isinstance(
+        expression,
+        (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.In, exp.Like),
+    )
 
 
 async def validate_query(
@@ -641,7 +691,7 @@ def _validate_query_sync(
         for node in predicate_nodes
     ]
     if any(
-        clause.this.find(exp.Not) is not None or clause.this.find(exp.Or) is not None
+        not _predicate_tree_supported(clause.this)
         for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
     ):
         return _failed("predicate_mismatch")
@@ -686,6 +736,29 @@ def _validate_query_sync(
     }[intent.query_type]
     if not shape_valid:
         return _failed("query_shape_mismatch")
+
+    if intent.query_type == QueryType.DETAIL:
+        expected_projection_ids = {
+            context.bindings[quote]
+            for quote in (*intent.measure_quotes, *intent.dimension_quotes)
+            if context.bindings.get(quote) in referenced_columns
+        }
+        actual_projection_ids: list[str | None] = []
+        for projection in root.expressions:
+            expression = (
+                projection.this if isinstance(projection, exp.Alias) else projection
+            )
+            actual_projection_ids.append(
+                _column_id(expression, columns_by_coordinate)
+                if isinstance(expression, exp.Column)
+                else None
+            )
+        if expected_projection_ids and (
+            any(item is None for item in actual_projection_ids)
+            or len(actual_projection_ids) != len(set(actual_projection_ids))
+            or set(actual_projection_ids) != expected_projection_ids
+        ):
+            return _failed("projection_mismatch")
     aggregate_functions = [node.key.lower() for node in top_level_aggregates]
     if aggregate_functions and (
         intent.aggregation is None or set(aggregate_functions) != {intent.aggregation}

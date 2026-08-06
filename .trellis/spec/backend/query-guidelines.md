@@ -65,11 +65,16 @@
 - Reject negated predicates unless the trusted intent explicitly models the
   negation. Aggregate functions require an exact user-evidenced operation, and
   quarter buckets must retain a year coordinate.
+- Every filter operator requires verbatim user evidence. `WHERE` and `HAVING`
+  fail closed unless their complete trees consist only of supported atoms
+  joined by `AND`; detail projections exactly match bound result fields.
 - `EXPLAIN` semantic rejection -> one repair; timeout, connection, permission,
   readiness, or execution failures -> no model repair.
 - Any target table not ready -> exactly `数据准备中，请稍后重试`.
 - Execution timeout -> `query_timeout`; an oversized single row ->
   `query_row_too_large`; never add a total-result `LIMIT` as a safety control.
+- The async driver fetches configured row batches; byte-budget splitting stays
+  incremental in process so streaming does not degrade to one cursor await per row.
 
 ### 5. Good/Base/Bad Cases
 

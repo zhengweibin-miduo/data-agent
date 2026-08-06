@@ -386,6 +386,77 @@ async def test_filter_predicates_reject_or_boolean_structure() -> None:
     assert result.issues[0].code == "predicate_mismatch"
 
 
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "EXISTS (SELECT c.id FROM dw.customers c)",
+        "o.amount BETWEEN :minimum AND :maximum",
+    ],
+)
+async def test_unmodeled_predicate_nodes_fail_closed(predicate: str) -> None:
+    """WHERE/HAVING 只允许可逐项映射到可信意图的原子谓词。"""
+    params = {"minimum": 1, "maximum": 10} if "BETWEEN" in predicate else {}
+    draft = _draft(f"SELECT o.amount FROM dw.orders o WHERE {predicate}", params=params)
+    if "EXISTS" in predicate:
+        draft = draft.model_copy(
+            update={
+                "table_ids": ["table-orders", "table-customers"],
+                "column_ids": ["column-amount", "column-customer-id"],
+            }
+        )
+    result = await validate_query(
+        draft,
+        _context(),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "predicate_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("operator", "operator_quote"),
+    [("lt", "大于"), ("lte", "至少"), ("ne", "等于")],
+)
+def test_filter_operator_requires_matching_user_evidence(
+    operator: str, operator_quote: str
+) -> None:
+    """过滤方向必须由用户逐字原文证明，不能只信任模型枚举。"""
+    intent = QueryIntent(
+        query_type=QueryType.DETAIL,
+        filters=[
+            FilterIntent(
+                column_quote="金额",
+                operator=operator,
+                operator_quote=operator_quote,
+                value_quotes=["10"],
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="过滤操作"):
+        intent.validate_evidence([f"金额{operator_quote}10"])
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT o.amount, o.id FROM dw.orders o",
+        "SELECT o.amount * 0 FROM dw.orders o",
+    ],
+)
+async def test_detail_projection_exactly_matches_bound_results(sql: str) -> None:
+    """明细顶层投影不得附加字段或篡改绑定字段。"""
+    draft = _draft(sql)
+    if "o.id" in sql:
+        draft = draft.model_copy(update={"column_ids": ["column-amount", "column-id"]})
+    result = await validate_query(
+        draft,
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "projection_mismatch"
+
+
 async def test_aggregate_must_be_in_top_level_projection() -> None:
     """标量子查询中的聚合不能把顶层明细伪装成聚合结果。"""
     draft = QueryDraft(
