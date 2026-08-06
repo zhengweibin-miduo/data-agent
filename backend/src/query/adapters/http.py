@@ -1,10 +1,14 @@
 """自然语言查询的 NDJSON HTTP 适配器。"""
 
-from collections.abc import AsyncGenerator
+import asyncio
+from collections.abc import AsyncGenerator, Mapping
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import Field
+from starlette.background import BackgroundTask
+from starlette.responses import ContentStream
+from starlette.types import Send
 
 from errors import DataAgentError
 from models.base import ContractModel
@@ -18,6 +22,40 @@ from query.application.service import QueryApplication
 from settings import app_config
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["query"])
+
+
+class _DeadlineStreamingResponse(StreamingResponse):
+    """让查询预算覆盖 ASGI 发送背压，而不只覆盖数据库游标。"""
+
+    def __init__(
+        self,
+        content: ContentStream,
+        *,
+        timeout_seconds: float,
+        status_code: int = 200,
+        headers: Mapping[str, str] | None = None,
+        media_type: str | None = None,
+        background: BackgroundTask | None = None,
+    ) -> None:
+        """保存整个响应流允许占用查询资源的壁钟预算。"""
+        super().__init__(
+            content,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+            background=background,
+        )
+        self._timeout_seconds = timeout_seconds
+
+    async def stream_response(self, send: Send) -> None:
+        """在同一截止时间内迭代应用流并等待客户端发送。"""
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                await super().stream_response(send)
+        finally:
+            close = getattr(self.body_iterator, "aclose", None)
+            if close is not None:
+                await close()
 
 
 class QueryTurnRequest(ContractModel):
@@ -108,7 +146,8 @@ async def query_turn(
         await stream.aclose()
         raise
     # 步骤二：响应开始后只发送类型化事件或固定安全 stream_error。
-    return StreamingResponse(
+    return _DeadlineStreamingResponse(
         _remaining(first, stream),
         media_type="application/x-ndjson",
+        timeout_seconds=app_config.query.timeout_seconds,
     )

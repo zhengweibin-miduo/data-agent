@@ -1,12 +1,14 @@
 """自然语言查询 NDJSON HTTP seam 测试。"""
 
+import asyncio
 import json
 
 import httpx
+import pytest
 from fastapi import FastAPI
 
 from errors import DataAgentError
-from query.adapters.http import router
+from query.adapters.http import _DeadlineStreamingResponse, router
 from query.application.contracts import QueryEvent
 
 
@@ -141,3 +143,35 @@ async def test_query_route_handles_stream_errors_and_cleanup() -> None:
         )
     assert failed.status_code == 500
     assert pre_response.result.closed is True
+
+
+async def test_streaming_deadline_closes_application_stream_during_send_backpressure(
+) -> None:
+    """客户端停止接收时，壁钟预算仍会关闭流并释放应用资源。"""
+    closed = asyncio.Event()
+
+    async def content():
+        try:
+            yield b'{"kind":"metadata"}\n'
+            yield b'{"kind":"rows"}\n'
+        finally:
+            closed.set()
+
+    body_started = asyncio.Event()
+
+    async def blocked_send(message: object) -> None:
+        if isinstance(message, dict) and message.get("type") == "http.response.body":
+            body_started.set()
+            await asyncio.Event().wait()
+
+    response = _DeadlineStreamingResponse(
+        content(),
+        timeout_seconds=0.01,
+        media_type="application/x-ndjson",
+    )
+
+    with pytest.raises(TimeoutError):
+        await response.stream_response(blocked_send)
+
+    assert body_started.is_set()
+    assert closed.is_set()
