@@ -108,3 +108,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 62: 实现自然语言只读查询流程
+
+**Date**: 2026-08-06
+**Task**: 实现自然语言只读查询流程
+**Branch**: `feature/query-sql-flow-20260805`
+
+### Summary
+
+实现 QueryIntent、Meta 绑定、SQL 安全校验、只读 DW 执行和 NDJSON 流式结果，并通过单元、非集成及真实 MySQL 权限测试。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ebbc73` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
