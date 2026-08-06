@@ -158,7 +158,7 @@ class QueryIntent(ContractModel):
             *([self.limit_quote] if self.limit_quote else []),
         ]
         if any(
-            not quote or not any(quote in message for message in user_messages)
+            not quote.strip() or not any(quote in message for message in user_messages)
             for quote in quotes
         ):
             raise ValueError("QueryIntent 关键短语必须逐字来自用户原文")
@@ -339,7 +339,9 @@ def _values_match(
     """按用户证据精确比较谓词绑定值。"""
     normalized = [str(value) for value in values]
     if operator == "contains":
-        normalized = [value.removeprefix("%").removesuffix("%") for value in normalized]
+        if any("%" in quote or "_" in quote for quote in quotes):
+            return False
+        return normalized == [f"%{quote}%" for quote in quotes]
     return normalized == quotes
 
 
@@ -416,6 +418,8 @@ def _validate_query_sync(
         return _failed("user_variable_forbidden")
     if root.find(exp.Lock) is not None:
         return _failed("lock_forbidden")
+    if root.find(exp.Distinct) is not None:
+        return _failed("distinct_forbidden")
 
     # 步骤二：真实物理表必须显式位于 DW schema，并来自当前 DDL allowlist。
     tables_by_name = {table.name: table for table in context.physical_schema.tables}
@@ -637,7 +641,7 @@ def _validate_query_sync(
         for node in predicate_nodes
     ]
     if any(
-        clause.this.find(exp.Not) is not None
+        clause.this.find(exp.Not) is not None or clause.this.find(exp.Or) is not None
         for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
     ):
         return _failed("predicate_mismatch")
@@ -665,7 +669,13 @@ def _validate_query_sync(
         return _failed("predicate_mismatch")
 
     # 步骤九：查询形态、时间粒度和排序必须与可信 QueryIntent 精确一致。
-    has_aggregate = root.find(exp.AggFunc) is not None
+    top_level_aggregates = [
+        aggregate
+        for projection in root.expressions
+        for aggregate in projection.find_all(exp.AggFunc)
+        if aggregate.find_ancestor(exp.Select) is root
+    ]
+    has_aggregate = bool(top_level_aggregates)
     has_group = root.args.get("group") is not None
     shape_valid = {
         QueryType.DETAIL: not has_aggregate and not has_group,
@@ -676,15 +686,36 @@ def _validate_query_sync(
     }[intent.query_type]
     if not shape_valid:
         return _failed("query_shape_mismatch")
-    aggregate_functions = [node.key.lower() for node in root.find_all(exp.AggFunc)]
+    aggregate_functions = [node.key.lower() for node in top_level_aggregates]
     if aggregate_functions and (
-        intent.aggregation is None
-        or set(aggregate_functions) != {intent.aggregation}
+        intent.aggregation is None or set(aggregate_functions) != {intent.aggregation}
     ):
         return _failed("aggregation_mismatch")
 
+    required_measure_columns = {
+        context.bindings[quote]
+        for quote in intent.measure_quotes
+        if context.bindings.get(quote) in referenced_columns
+    }
+    for metric_id in required_metric_ids:
+        candidate = next(
+            item for item in context.candidates if item.object_id == metric_id
+        )
+        required_measure_columns.update(candidate.related_column_ids)
+    for aggregate in top_level_aggregates:
+        if isinstance(aggregate, exp.Count) and aggregate.find(exp.Star) is not None:
+            continue
+        operands = {
+            _column_id(column, columns_by_coordinate)
+            for column in aggregate.find_all(exp.Column)
+        }
+        if required_measure_columns and (
+            len(operands) != 1 or operands != required_measure_columns
+        ):
+            return _failed("aggregation_operand_mismatch")
+
     projection_aliases = {
-        projection.alias: next(projection.find_all(exp.Column), None)
+        projection.alias: projection.this
         for projection in root.expressions
         if projection.alias
     }
@@ -695,11 +726,38 @@ def _validate_query_sync(
             expression = ordered.this
             if isinstance(expression, exp.Column) and not expression.table:
                 expression = projection_aliases.get(expression.name, expression)
+            metric_id = next(
+                (
+                    candidate.object_id
+                    for candidate in context.candidates
+                    if candidate.kind == QueryMetadataKind.METRIC
+                    and set(candidate.related_column_ids)
+                    == {
+                        _column_id(column, columns_by_coordinate)
+                        for column in expression.find_all(exp.Column)
+                    }
+                    and (
+                        isinstance(expression, exp.AggFunc)
+                        or expression.find(exp.AggFunc) is not None
+                    )
+                ),
+                None,
+            )
             actual_sorts.append(
                 (
-                    _column_id(expression, columns_by_coordinate)
-                    if isinstance(expression, exp.Column)
-                    else None,
+                    metric_id
+                    or next(
+                        (
+                            _column_id(column, columns_by_coordinate)
+                            for column in expression.find_all(exp.Column)
+                        ),
+                        None,
+                    )
+                    or (
+                        _column_id(expression, columns_by_coordinate)
+                        if isinstance(expression, exp.Column)
+                        else None
+                    ),
                     "desc" if ordered.args.get("desc") else "asc",
                 )
             )
@@ -709,34 +767,54 @@ def _validate_query_sync(
     if actual_sorts != expected_sorts:
         return _failed("sort_mismatch")
 
+    group = root.args.get("group")
+    group_expressions = group.expressions if isinstance(group, exp.Group) else []
+    dimension_ids = {
+        context.bindings[quote]
+        for quote in intent.dimension_quotes
+        if context.bindings.get(quote) is not None
+    }
+    if intent.query_type == QueryType.COMPARISON:
+        actual_group_ids = {
+            _column_id(expression, columns_by_coordinate)
+            for expression in group_expressions
+            if isinstance(expression, exp.Column)
+        }
+        if actual_group_ids != dimension_ids:
+            return _failed("group_mismatch")
+
     if intent.grain is not None:
         time_column_id = context.bindings.get(intent.time_column_quote or "")
-        group = root.args.get("group")
-        grouped_column_ids = {
-            _column_id(column, columns_by_coordinate)
-            for expression in (
-                group.expressions if isinstance(group, exp.Group) else []
+
+        def bucket_matches(expression: exp.Expression, marker: str) -> bool:
+            columns = list(expression.find_all(exp.Column))
+            return (
+                marker in expression.sql(dialect="mysql").upper()
+                and len(columns) == 1
+                and _column_id(columns[0], columns_by_coordinate) == time_column_id
             )
-            for column in expression.find_all(exp.Column)
-        }
-        group_sql = " ".join(
-            expression.sql(dialect="mysql").upper()
-            for expression in (
-                group.expressions if isinstance(group, exp.Group) else []
-            )
-        )
-        grain_markers = {
+
+        markers = {
             "day": "DATE(",
             "week": "YEARWEEK(",
             "month": "%Y-%M",
             "quarter": "QUARTER(",
             "year": "YEAR(",
         }
+        buckets = [
+            item
+            for item in group_expressions
+            if bucket_matches(item, markers[intent.grain])
+        ]
+        quarter_years = [
+            item for item in group_expressions if bucket_matches(item, "YEAR(")
+        ]
+        expected_count = 2 if intent.grain == "quarter" else 1
         if (
             time_column_id is None
-            or time_column_id not in grouped_column_ids
-            or grain_markers[intent.grain] not in group_sql
-            or (intent.grain == "quarter" and "YEAR(" not in group_sql)
+            or len(group_expressions) != expected_count
+            or len(buckets) != 1
+            or (intent.grain == "quarter" and len(quarter_years) != 1)
         ):
             return _failed("time_grain_mismatch")
     validated = ValidatedQuery(

@@ -334,11 +334,9 @@ class ConversationRepository:
             .one_or_none()
         )
         if existing is not None:
-            if str(existing["content"]) != content or (
-                semantic_fingerprint is not None
-                and str(existing["semantic_fingerprint"] or "")
-                != semantic_fingerprint
-            ):
+            if str(existing["content"]) != content or str(
+                existing.get("semantic_fingerprint") or ""
+            ) != (semantic_fingerprint or ""):
                 raise DataAgentError(
                     "idempotency_conflict",
                     "conversation_turn",

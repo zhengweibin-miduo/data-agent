@@ -355,14 +355,123 @@ async def test_negated_predicates_fail_closed(sql: str) -> None:
             query_type=QueryType.DETAIL,
             measure_quotes=["金额"],
             filters=[
-                FilterIntent(
-                    column_quote="金额", operator="gt", value_quotes=["10"]
-                )
+                FilterIntent(column_quote="金额", operator="gt", value_quotes=["10"])
             ],
         ),
         dw_database="dw",
     )
     assert result.issues[0].code == "predicate_mismatch"
+
+
+async def test_filter_predicates_reject_or_boolean_structure() -> None:
+    """未建模布尔关系时多个可信过滤只能由 AND 连接。"""
+    result = await validate_query(
+        _draft(
+            "SELECT o.amount FROM dw.orders o WHERE o.amount > :minimum OR o.id = :id",
+            params={"minimum": 10, "id": 1},
+        ).model_copy(update={"column_ids": ["column-amount", "column-id"]}),
+        _context().model_copy(
+            update={"bindings": {"金额": "column-amount", "订单": "column-id"}}
+        ),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(column_quote="金额", operator="gt", value_quotes=["10"]),
+                FilterIntent(column_quote="订单", operator="eq", value_quotes=["1"]),
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "predicate_mismatch"
+
+
+async def test_aggregate_must_be_in_top_level_projection() -> None:
+    """标量子查询中的聚合不能把顶层明细伪装成聚合结果。"""
+    draft = QueryDraft(
+        sql="SELECT o.amount, (SELECT SUM(i.amount) FROM dw.orders i) FROM dw.orders o",
+        table_ids=["table-orders"],
+        column_ids=["column-amount"],
+    )
+    result = await validate_query(
+        draft,
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "query_shape_mismatch"
+
+
+async def test_aggregate_operand_must_be_selected_measure() -> None:
+    """正确聚合函数不得通过无效引用掩盖错误操作数。"""
+    result = await validate_query(
+        _draft("SELECT SUM(o.id + 0 * o.amount) FROM dw.orders o").model_copy(
+            update={"column_ids": ["column-id", "column-amount"]}
+        ),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "aggregation_operand_mismatch"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT DISTINCT o.amount FROM dw.orders o",
+        "SELECT COUNT(DISTINCT o.amount) FROM dw.orders o",
+    ],
+)
+async def test_distinct_requires_explicit_intent_contract(sql: str) -> None:
+    """当前无唯一化意图证据时明细和聚合 DISTINCT 都失败关闭。"""
+    result = await validate_query(
+        _draft(sql),
+        _context(),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "distinct_forbidden"
+
+
+@pytest.mark.parametrize("value", ["foo", "foo%", "%foo", "%foo%%"])
+async def test_contains_requires_exact_both_sided_pattern(value: str) -> None:
+    """Contains 只接受受控的双侧通配模式。"""
+    result = await validate_query(
+        _draft(
+            "SELECT o.amount FROM dw.orders o WHERE o.amount LIKE :value",
+            params={"value": value},
+        ),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="金额", operator="contains", value_quotes=["foo"]
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert (result.validated is not None) is (value == "%foo%")
+
+
+def test_evidence_rejects_whitespace_only_quotes() -> None:
+    """空白槽位不能冒充用户原文证据。"""
+    with pytest.raises(ValueError, match="关键短语"):
+        QueryIntent(
+            query_type=QueryType.DETAIL, dimension_quotes=[" "]
+        ).validate_evidence(["查询金额 "])
 
 
 async def test_aggregate_function_must_match_evidenced_operation() -> None:

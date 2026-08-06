@@ -53,6 +53,15 @@
   predicates, time grain, sort objects and directions, Top-N, and absence of
   pagination offsets. Every `JOIN ON` condition must be an allowlisted FK edge;
   one valid edge never authorizes additional boolean conditions.
+- Until separately evidenced, predicates may only be joined with `AND` and
+  `DISTINCT` is forbidden. Aggregate validation is limited to the top-level
+  projection and binds both the function and its operand to the selected
+  measure; grouping and time buckets must bind exactly to their selected
+  dimension or time column.
+- Chat and Query use entrypoint-specific semantic fingerprints and both obey
+  execution ownership. Query intent reconstruction may consume bounded
+  role-labelled clarification history, while final evidence quotes must still
+  occur verbatim in user messages.
 - Reject negated predicates unless the trusted intent explicitly models the
   negation. Aggregate functions require an exact user-evidenced operation, and
   quarter buckets must retain a year coordinate.

@@ -67,6 +67,7 @@ class QueryApplication:
             semantic_fingerprint=hashlib.sha256(
                 json.dumps(
                     {
+                        "entrypoint": "query",
                         "question": request.question,
                         "source": request.ddl_context.source,
                         "schema_fingerprint": schema.schema_fingerprint,
@@ -107,7 +108,11 @@ class QueryApplication:
                 for message in started.context.messages
                 if message.role == MessageRole.USER
             ]
-            intent = await self._intents.parse(request.question, user_messages)
+            intent_context = [
+                f"{message.role.value}: {message.content}"
+                for message in started.context.messages
+            ]
+            intent = await self._intents.parse(request.question, intent_context)
             intent.validate_evidence(user_messages)
             context_or_clarification = await self._metadata.build_context(
                 " ".join(

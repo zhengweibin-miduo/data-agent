@@ -1,5 +1,6 @@
 """当前 DDL 上下文的最小 AI 聊天应用编排。"""
 
+import hashlib
 import json
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -86,6 +87,19 @@ class ChatService:
             conversation_uid,
             request.turn_uid,
             request.content,
+            semantic_fingerprint=hashlib.sha256(
+                json.dumps(
+                    {
+                        "entrypoint": "chat",
+                        "content": request.content,
+                        "source": request.ddl_context.source,
+                        "schema_fingerprint": schema.schema_fingerprint,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
         )
 
         # 步骤三：完成轮次的幂等回放直接返回现有助手消息，不重复调用门禁或模型。
@@ -98,6 +112,14 @@ class ChatService:
             return ChatTurnResponse(
                 message=existing,
                 readiness=self._existing_decision(existing.content),
+            )
+        if not started.execution_owner:
+            raise DataAgentError(
+                "chat_in_progress",
+                "chat_turn",
+                "相同轮次正在执行",
+                retryable=True,
+                http_status=409,
             )
 
         # 步骤四：只把确定性解析得到的真实表名和当前来源交给就绪分类器。
