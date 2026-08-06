@@ -39,6 +39,12 @@ tei:
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
 
+query:
+  read_url: mysql+asyncmy://data_agent_query:data_agent_query@localhost:3306/dw?charset=utf8mb4
+  timeout_seconds: 10
+  fetch_batch_rows: 500
+  max_batch_bytes: 1048576
+
 data_sync:
   database: data_sync
   dw_database: dw

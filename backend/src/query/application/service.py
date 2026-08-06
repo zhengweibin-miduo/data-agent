@@ -1,0 +1,189 @@
+"""自然语言只读查询的唯一应用编排入口。"""
+
+import hashlib
+from collections.abc import AsyncGenerator
+from time import perf_counter
+
+from loguru import logger
+
+from answer_readiness.service import DATA_PREPARING_MESSAGE
+from conversation.models import MessageRole
+from ddl_metadata.parsing import parse_ddl
+from errors import DataAgentError
+from query.application.contracts import (
+    ConversationPort,
+    QueryClarification,
+    QueryEvent,
+    QueryExecutorPort,
+    QueryExplainRejected,
+    QueryIntentPort,
+    QueryMetadataPort,
+    QueryPlannerPort,
+    QueryReadinessPort,
+    QueryRequest,
+)
+from query.domain import (
+    QueryContext,
+    QueryIntent,
+    ValidatedQuery,
+    validate_query,
+)
+
+
+class QueryApplication:
+    """隐藏意图、召回、校验、就绪和只读执行顺序的深模块。"""
+
+    def __init__(
+        self,
+        *,
+        conversations: ConversationPort,
+        intents: QueryIntentPort,
+        metadata: QueryMetadataPort,
+        planner: QueryPlannerPort,
+        readiness: QueryReadinessPort,
+        executor: QueryExecutorPort,
+        dw_database: str,
+    ) -> None:
+        """绑定查询流程的外部端口。"""
+        self._conversations = conversations
+        self._intents = intents
+        self._metadata = metadata
+        self._planner = planner
+        self._readiness = readiness
+        self._executor = executor
+        self._dw_database = dw_database
+
+    async def stream(self, request: QueryRequest) -> AsyncGenerator[QueryEvent, None]:
+        """执行一轮查询并逐个产生有界 NDJSON 事件。"""
+        # 步骤一：在占用 Conversation 门禁前确定性解析当前 DDL。
+        schema = await parse_ddl(request.ddl_context.source, request.ddl_context.ddl)
+        # 步骤二：提交用户消息并复用已有 Conversation 上下文和幂等坐标。
+        started = await self._conversations.start_turn(
+            request.user_id,
+            request.conversation_uid,
+            request.turn_uid,
+            request.question,
+        )
+        existing = await self._conversations.assistant_message(
+            request.user_id,
+            request.conversation_uid,
+            request.turn_uid,
+        )
+        if existing is not None:
+            yield QueryEvent(kind="complete", message=existing.content)
+            return
+        # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
+        user_messages = [
+            message.content
+            for message in started.context.messages
+            if message.role == MessageRole.USER
+        ]
+        intent = await self._intents.parse(request.question, user_messages)
+        intent.validate_evidence(user_messages)
+        context_or_clarification = await self._metadata.build_context(
+            request.question,
+            intent,
+            schema,
+        )
+        # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
+        if isinstance(context_or_clarification, QueryClarification):
+            await self._complete(request, context_or_clarification.question)
+            yield QueryEvent(
+                kind="clarification", message=context_or_clarification.question
+            )
+            return
+        context = context_or_clarification
+        # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
+        validated = await self._plan(context, intent)
+        # 步骤六：只按 AST 实际目标表检查就绪；未就绪保持固定安全文案。
+        if not await self._readiness.ready(validated.target_tables):
+            await self._complete(request, DATA_PREPARING_MESSAGE)
+            yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
+            return
+        # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
+        started_at = perf_counter()
+        row_count = 0
+        stream = self._executor.execute(validated)
+        try:
+            try:
+                first = await anext(stream)
+            except StopAsyncIteration:
+                first = None
+            columns = first.columns if first is not None else []
+            yield QueryEvent(kind="metadata", sql=validated.sql, columns=columns)
+            if first is not None and first.rows:
+                row_count += len(first.rows)
+                yield QueryEvent(kind="rows", rows=first.rows)
+            async for batch in stream:
+                row_count += len(batch.rows)
+                yield QueryEvent(kind="rows", rows=batch.rows)
+        except BaseException as error:
+            elapsed_ms = round((perf_counter() - started_at) * 1000)
+            sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
+            logger.warning(
+                "只读查询执行未完成，已记录安全审计字段："
+                f"sql_hash={sql_hash} table_ids={','.join(validated.table_ids)} "
+                f"elapsed_ms={elapsed_ms} row_count={row_count} "
+                f"outcome=failed error_type={type(error).__name__}"
+            )
+            raise
+        finally:
+            await stream.aclose()
+        elapsed_ms = round((perf_counter() - started_at) * 1000)
+        summary = f"查询完成，共返回 {row_count} 行。"
+        await self._complete(request, summary)
+        sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
+        logger.info(
+            "只读查询执行完成，已记录 SQL 哈希、权威表标识、耗时、行数和成功结果："
+            f"sql_hash={sql_hash} table_ids={','.join(validated.table_ids)} "
+            f"elapsed_ms={elapsed_ms} row_count={row_count} outcome=success"
+        )
+        yield QueryEvent(kind="complete", row_count=row_count, elapsed_ms=elapsed_ms)
+
+    async def _plan(
+        self,
+        context: QueryContext,
+        intent: QueryIntent,
+    ) -> ValidatedQuery:
+        """执行一次生成、静态门禁、EXPLAIN 和唯一修复闭环。"""
+        draft = await self._planner.draft(context, intent)
+        for attempt in range(2):
+            result = await validate_query(
+                draft,
+                context,
+                intent,
+                dw_database=self._dw_database,
+            )
+            issues = result.issues
+            if result.validated is not None:
+                try:
+                    await self._executor.explain(result.validated)
+                except QueryExplainRejected as error:
+                    issues = (error.issue,)
+                else:
+                    return result.validated
+            if attempt == 0:
+                draft = await self._planner.repair(
+                    context,
+                    intent,
+                    draft,
+                    issues,
+                )
+                continue
+            raise DataAgentError(
+                "query_unsafe",
+                "query_validation",
+                "查询草稿两次未通过安全门禁",
+                http_status=422,
+                details={"issue_codes": ",".join(issue.code for issue in issues)},
+            )
+        raise AssertionError("查询修复循环必须返回或抛出")
+
+    async def _complete(self, request: QueryRequest, content: str) -> None:
+        """复用 Conversation 原子完成语义持久化助手文本。"""
+        await self._conversations.complete_turn(
+            request.user_id,
+            request.conversation_uid,
+            request.turn_uid,
+            content,
+        )

@@ -68,6 +68,8 @@ include = [
     "models.*",
     "persistence",
     "persistence.*",
+    "query",
+    "query.*",
 ]
 namespaces = false
 

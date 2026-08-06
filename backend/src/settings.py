@@ -141,6 +141,39 @@ class MySQLSettings(SettingsModel):
     url: str = Field(description="SQLAlchemy asyncmy 使用的 MySQL 连接地址。")
 
 
+class QuerySettings(SettingsModel):
+    """自然语言查询的专用只读 DW 连接与流式预算。"""
+
+    read_url: str = Field(description="仅授予 DW SELECT 权限的 asyncmy 连接地址。")
+    timeout_seconds: float = Field(
+        default=10,
+        gt=0,
+        le=60,
+        description="EXPLAIN 或业务查询允许占用的最长秒数。",
+    )
+    fetch_batch_rows: int = Field(
+        default=500,
+        gt=0,
+        le=500,
+        description="单个 NDJSON 结果批次允许包含的最大行数。",
+    )
+    max_batch_bytes: int = Field(
+        default=1_048_576,
+        ge=4096,
+        le=16_777_216,
+        description="单个 NDJSON 结果批次允许占用的最大字节数。",
+    )
+
+    @field_validator("read_url")
+    @classmethod
+    def validate_read_url(cls, value: str) -> str:
+        """校验查询连接使用 asyncmy 且显式选择数据库。"""
+        url = make_url(value)
+        if url.drivername != "mysql+asyncmy" or url.database is None:
+            raise ValueError("query.read_url 必须是包含数据库名的 mysql+asyncmy 地址")
+        return value
+
+
 class DataSyncSourceSettings(SettingsModel):
     """命名 MySQL 业务数据源配置。"""
 
@@ -505,6 +538,7 @@ class AppSettings(SettingsModel):
     )
     tei: TEISettings = Field(description="Text Embeddings Inference 向量化服务配置。")
     mysql: MySQLSettings = Field(description="MySQL 持久化连接配置。")
+    query: QuerySettings = Field(description="自然语言查询的专用只读 DW 配置。")
     data_sync: DataSyncSettings = Field(description="DW 结构与 Binlog 数据同步配置。")
     api: APISettings = Field(description="本地 HTTP API 配置。")
     redis: RedisSettings = Field(description="Redis、任务队列和恢复配置。")
@@ -542,6 +576,13 @@ class AppSettings(SettingsModel):
                 "mysql 默认库、memory.database、data_sync.database 和 "
                 "data_sync.dw_database 必须彼此不同"
             )
+        query_url = make_url(self.query.read_url)
+        if query_url.database is None or (
+            query_url.database.casefold() != self.data_sync.dw_database.casefold()
+        ):
+            raise ValueError("query.read_url 必须连接 data_sync.dw_database")
+        if query_url.username == make_url(self.mysql.url).username:
+            raise ValueError("query.read_url 必须使用独立于应用写连接的数据库账号")
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")

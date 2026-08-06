@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Defines seam-focused tests, typing/docstring rules and the repository quality commands required before completion."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review read-only database lifecycle, result budgets, parameter binding, real MySQL validation and safe dynamic identifiers."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Review timeout configuration, structured model boundaries, projection authority and readiness behavior."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review safe error details, stable status mapping and fail-closed behavior without raw SQL, credentials or database errors."}
+{"file":".trellis/spec/backend/conversation-memory.md","reason":"Review user isolation, turn replay, bounded context and atomic completion semantics."}
