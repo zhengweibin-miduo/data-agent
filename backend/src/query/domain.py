@@ -1226,13 +1226,12 @@ def _validate_query_sync(
             )
             if exact_column_id is None and intent.grain is not None:
                 time_column_id = context.bindings.get(intent.time_column_quote or "")
+                group = root.args.get("group")
                 if any(
                     expression.sql(dialect="mysql")
                     == grouped.sql(dialect="mysql")
                     for grouped in (
-                        root.args.get("group").expressions
-                        if isinstance(root.args.get("group"), exp.Group)
-                        else []
+                        group.expressions if isinstance(group, exp.Group) else []
                     )
                 ) and {
                     _column_id(column, columns_by_coordinate)
