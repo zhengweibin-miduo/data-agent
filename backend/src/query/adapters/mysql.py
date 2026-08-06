@@ -21,10 +21,17 @@ _Result = TypeVar("_Result")
 _CLEANUP_TIMEOUT_SECONDS = 2.0
 
 
-async def _before_deadline(awaitable: Awaitable[_Result], deadline: float) -> _Result:
-    """只在数据库 await 期间执行总截止时间取消。"""
-    async with asyncio.timeout_at(deadline):
-        return await awaitable
+async def _within_budget(
+    awaitable: Awaitable[_Result], remaining: list[float]
+) -> _Result:
+    """只累计数据库 I/O 等待时间，响应背压不消耗执行预算。"""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        async with asyncio.timeout(remaining[0]):
+            return await awaitable
+    finally:
+        remaining[0] = max(0.0, remaining[0] - (loop.time() - started))
 
 
 def _stream_value(value: object) -> object:
@@ -93,27 +100,18 @@ class MySQLQueryExecutor:
 
     async def execute(self, query: ValidatedQuery) -> AsyncGenerator[QueryBatch, None]:
         """在一个只读事务中按行数与字节双预算读取完整结果。"""
-        deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        remaining = [self._timeout_seconds]
         connection = self._engine.connect()
         connected = False
         result = None
-        deadline_task: asyncio.Task[None] | None = None
-
-        async def expire_connection() -> None:
-            """即使生成器停在 yield，也在壁钟截止点主动释放池连接。"""
-            await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
-            if connected:
-                await connection.invalidate()
-
         try:
-            await _before_deadline(connection.start(), deadline)
+            await _within_budget(connection.start(), remaining)
             connected = True
-            deadline_task = asyncio.create_task(expire_connection())
-            await _before_deadline(
-                connection.exec_driver_sql("SET TRANSACTION READ ONLY"), deadline
+            await _within_budget(
+                connection.exec_driver_sql("SET TRANSACTION READ ONLY"), remaining
             )
-            result = await _before_deadline(
-                connection.stream(text(query.sql), query.params), deadline
+            result = await _within_budget(
+                connection.stream(text(query.sql), query.params), remaining
             )
             columns = list(result.keys())
             pending: list[list[object]] = []
@@ -125,7 +123,7 @@ class MySQLQueryExecutor:
             partitions = result.partitions(driver_fetch_rows).__aiter__()
             while True:
                 try:
-                    partition = await _before_deadline(anext(partitions), deadline)
+                    partition = await _within_budget(anext(partitions), remaining)
                 except StopAsyncIteration:
                     break
                 for row in partition:
@@ -174,12 +172,6 @@ class MySQLQueryExecutor:
                 http_status=502,
             ) from error
         finally:
-            if deadline_task is not None:
-                deadline_task.cancel()
-                try:
-                    await deadline_task
-                except (Exception, asyncio.CancelledError):
-                    pass
             try:
                 if result is not None:
                     try:

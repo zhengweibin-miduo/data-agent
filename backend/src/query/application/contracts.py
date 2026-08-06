@@ -159,6 +159,10 @@ class QueryMetadataPort(Protocol):
         """返回查询上下文或一个澄清问题。"""
         ...
 
+    async def relationships_are_authoritative(self, schema: PhysicalSchema) -> bool:
+        """在最终执行协调区内重新核验 accepted 关系快照。"""
+        ...
+
 
 class QueryPlannerPort(Protocol):
     """生成严格 QueryDraft 并消费唯一一次修复预算。"""

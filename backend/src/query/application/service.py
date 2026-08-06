@@ -120,7 +120,11 @@ class QueryApplication:
                 if message.role == MessageRole.ASSISTANT
                 and message.semantic_fingerprint == "query:clarification"
             ]
-            if clarification_indexes:
+            pending_clarification = bool(clarification_indexes) and not any(
+                message.role == MessageRole.ASSISTANT
+                for message in messages[clarification_indexes[-1] + 1 :]
+            )
+            if pending_clarification:
                 clarification_index = clarification_indexes[-1]
                 prior_user_indexes = [
                     index
@@ -198,6 +202,20 @@ class QueryApplication:
             # 通过后目标表切入重建并暴露空集或部分代次。
             generation_guard = self._readiness.hold(validated.target_tables)
             await generation_guard.__aenter__()
+            if (
+                len(validated.target_tables) > 1
+                and context.relationships_authoritative
+                and not await self._metadata.relationships_are_authoritative(
+                    context.physical_schema
+                )
+            ):
+                raise DataAgentError(
+                    "query_schema_changed",
+                    "query_metadata",
+                    "查询使用的物理模式已变化，请重试",
+                    retryable=True,
+                    http_status=409,
+                )
             if not await self._readiness.ready(validated.target_tables):
                 await self._complete(request, DATA_PREPARING_MESSAGE)
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)

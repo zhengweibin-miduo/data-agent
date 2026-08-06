@@ -51,6 +51,9 @@ def _context() -> QueryContext:
                             name="created_at",
                             data_type="DATE",
                         ),
+                        PhysicalColumn(
+                            id="column-code", name="code", data_type="VARCHAR(16)"
+                        ),
                     ],
                 ),
                 PhysicalTable(
@@ -107,6 +110,63 @@ async def test_valid_aggregate_keeps_complete_result_without_forced_limit() -> N
     assert result.validated is not None
     assert result.validated.sql == "SELECT SUM(o.amount) AS total FROM dw.orders AS o"
     assert result.validated.target_tables == ("orders",)
+
+
+async def test_text_filter_preserves_leading_zeroes() -> None:
+    """文本标识符不得被数值规范化后丢失前导零。"""
+    context = _context().model_copy(update={"bindings": {"编号": "column-code"}})
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.code FROM dw.orders o WHERE o.code = :code",
+            params={"code": "001"},
+            table_ids=["table-orders"],
+            column_ids=["column-code"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="编号",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["001"],
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is not None
+
+
+async def test_swapped_detail_aliases_fail_closed() -> None:
+    """公开结果列标签不能交换两个权威字段的业务身份。"""
+    context = _context().model_copy(
+        update={"bindings": {"编号": "column-id", "金额": "column-amount"}}
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.id AS amount, o.amount AS id FROM dw.orders o",
+            table_ids=["table-orders"],
+            column_ids=["column-id", "column-amount"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["编号", "金额"],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "projection_alias_mismatch"
+
+
+def test_explicit_equality_cannot_be_omitted_from_intent() -> None:
+    """“是”表达的等值条件必须进入过滤槽位。"""
+    with pytest.raises(ValueError, match="过滤条件"):
+        QueryIntent(
+            query_type=QueryType.DETAIL, measure_quotes=["订单编号"]
+        ).validate_evidence(["列出地区是华东的订单编号"])
 
 
 @pytest.mark.parametrize(

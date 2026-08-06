@@ -393,8 +393,8 @@ class QueryIntent(ContractModel):
                     "包含",
                 )
             )
-            and not all_filters
-        ):
+            or re.search(r"\S+(?:是|为|属于)\S+", user_text)
+        ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
         if (
             any(
@@ -593,8 +593,16 @@ def _values_match(
     return normalized == [str(quote) for quote in quotes]
 
 
-def _normalized_filter_values(item: FilterIntent) -> list[QueryParameter]:
+def _normalized_filter_values(
+    item: FilterIntent, *, data_type: str = ""
+) -> list[QueryParameter]:
     """只从逐字证据确定性解析常用数字与本地化日期绑定值。"""
+    normalized_type = data_type.upper()
+    if not re.match(
+        r"^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|DATE|DATETIME|TIMESTAMP)\b",
+        normalized_type,
+    ):
+        return list(item.value_quotes)
     values: list[QueryParameter] = []
     for quote in item.value_quotes:
         compact = quote.replace(",", "")
@@ -1073,14 +1081,6 @@ def _validate_query_sync(
     expected_filters = [*intent.filters]
     if intent.time_filter is not None:
         expected_filters.append(intent.time_filter)
-    expected_contracts = [
-        (
-            context.bindings.get(item.column_quote),
-            item.operator,
-            _normalized_filter_values(item),
-        )
-        for item in expected_filters
-    ]
     column_types = {
         column.id: column.data_type.upper()
         for table in context.physical_schema.tables
@@ -1090,13 +1090,26 @@ def _validate_query_sync(
         r"^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL)\b"
     )
     temporal_type = re.compile(r"^(?:DATE|DATETIME|TIMESTAMP)\b")
+    expected_contracts = [
+        (
+            context.bindings.get(item.column_quote),
+            item.operator,
+            _normalized_filter_values(
+                item,
+                data_type=column_types.get(
+                    context.bindings.get(item.column_quote) or "", ""
+                ),
+            ),
+        )
+        for item in expected_filters
+    ]
     for item in [
         *intent.filters,
         *([intent.time_filter] if intent.time_filter else []),
     ]:
         column_id = context.bindings.get(item.column_quote)
         data_type = column_types.get(column_id or "", "")
-        values = _normalized_filter_values(item)
+        values = _normalized_filter_values(item, data_type=data_type)
         if numeric_type.match(data_type) and any(
             not isinstance(value, (int, Decimal)) for value in values
         ):
@@ -1199,6 +1212,12 @@ def _validate_query_sync(
             expression = (
                 projection.this if isinstance(projection, exp.Alias) else projection
             )
+            if (
+                isinstance(projection, exp.Alias)
+                and isinstance(expression, exp.Column)
+                and projection.alias.casefold() != expression.name.casefold()
+            ):
+                return _failed("projection_alias_mismatch")
             projection_id = (
                 _column_id(expression, columns_by_coordinate)
                 if isinstance(expression, exp.Column)
@@ -1500,6 +1519,12 @@ def _validate_query_sync(
             expression = (
                 projection.this if isinstance(projection, exp.Alias) else projection
             )
+            if (
+                isinstance(projection, exp.Alias)
+                and isinstance(expression, exp.Column)
+                and projection.alias.casefold() != expression.name.casefold()
+            ):
+                return _failed("projection_alias_mismatch")
             actual_projection_sql.append(expression.sql(dialect="mysql"))
             if expression.sql(dialect="mysql") not in required_projection_sql:
                 return _failed("projection_mismatch")

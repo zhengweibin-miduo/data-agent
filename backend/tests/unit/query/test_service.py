@@ -158,6 +158,32 @@ class _IndependentQueryConversations(_Conversations):
         )
 
 
+class _ResolvedClarificationConversations(_Conversations):
+    """返回已经由后续 Query 终态关闭的历史澄清。"""
+
+    async def start_turn(
+        self, *_args: object, semantic_fingerprint: str | None = None
+    ) -> StartTurnResponse:
+        del semantic_fingerprint
+        return StartTurnResponse(
+            message=_message(MessageRole.USER, "查询销售额总和"),
+            context=ConversationContext(
+                messages=[
+                    ContextMessage(role=MessageRole.USER, content="按月查看销售额趋势"),
+                    ContextMessage(
+                        role=MessageRole.ASSISTANT,
+                        content="请明确日期字段",
+                        semantic_fingerprint="query:clarification",
+                    ),
+                    ContextMessage(role=MessageRole.USER, content="下单日期"),
+                    ContextMessage(role=MessageRole.ASSISTANT, content="旧查询已完成"),
+                    ContextMessage(role=MessageRole.USER, content="查询销售额总和"),
+                ],
+                memories=[],
+            ),
+        )
+
+
 class _Metadata:
     """模拟权威 Meta 对象仍有两个候选。"""
 
@@ -262,6 +288,38 @@ async def test_independent_query_does_not_reuse_completed_history_as_evidence() 
 
     await anext(application.stream(request))
 
+    assert parser.messages == ["user: 查询销售额总和"]
+
+
+async def test_resolved_clarification_does_not_pollute_independent_query() -> None:
+    """澄清后的普通终态会关闭证据链。"""
+    parser = _RecordingIntentParser()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _ResolvedClarificationConversations()),
+        intents=cast(QueryIntentPort, parser),
+        metadata=cast(QueryMetadataPort, _Metadata()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    await anext(
+        application.stream(
+            QueryRequest(
+                user_id="user-1",
+                conversation_uid="conversation-1",
+                turn_uid="turn-2",
+                question="查询销售额总和",
+                ddl_context=DDLJobRequest(
+                    source="erp",
+                    ddl=(
+                        "CREATE TABLE orders "
+                        "(id BIGINT PRIMARY KEY, amount DECIMAL(10,2))"
+                    ),
+                ),
+            )
+        )
+    )
     assert parser.messages == ["user: 查询销售额总和"]
 
 

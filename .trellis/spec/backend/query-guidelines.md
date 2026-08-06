@@ -106,6 +106,11 @@
   plus an explicitly pending clarification chain, not arbitrary completed turns.
 - Explicit distinct semantics fail closed until modeled, and every time bucket
   operand must be an authoritative temporal physical type.
+- Stream backpressure does not consume the database I/O budget; accepted
+  relationship fingerprints are revalidated while generation locks are held.
+- Filter normalization follows the authoritative column type so textual IDs
+  retain leading zeroes, and public projection aliases cannot relabel direct
+  physical fields as another business field.
 
 ### 5. Good/Base/Bad Cases
 

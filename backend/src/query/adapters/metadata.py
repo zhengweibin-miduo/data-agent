@@ -67,6 +67,17 @@ class QueryMetadataAdapter:
         """绑定现有 Meta Projection 搜索用例。"""
         self._search = search
 
+    async def relationships_are_authoritative(self, schema: PhysicalSchema) -> bool:
+        """重新核验请求物理模式仍是当前 accepted snapshot。"""
+        return await self._search.schema_is_authoritative(
+            schema.source,
+            schema.schema_fingerprint,
+            table_ids={table.id for table in schema.tables},
+            column_ids={
+                column.id for table in schema.tables for column in table.columns
+            },
+        )
+
     async def build_context(
         self,
         question: str,

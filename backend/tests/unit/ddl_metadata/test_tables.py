@@ -8,6 +8,7 @@ from ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
     metric_info,
+    physical_schema_authority,
     table_info,
 )
 from tests.helpers.checks import check_equal
@@ -28,7 +29,13 @@ def test_meta_core_columns_match_bootstrap_script() -> None:
         if isinstance(statement, exp.Create)
         and isinstance(statement.this, exp.Schema)
     }
-    tables = (table_info, column_info, metric_info, column_metric)
+    tables = (
+        table_info,
+        column_info,
+        metric_info,
+        column_metric,
+        physical_schema_authority,
+    )
     check_equal("Meta 表集合", {table.name for table in tables}, set(creates))
     for table in tables:
         check_equal(
