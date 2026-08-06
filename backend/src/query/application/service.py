@@ -120,6 +120,15 @@ class QueryApplication:
                     + [item.column_quote for item in intent.filters]
                     + [quote for item in intent.filters for quote in item.value_quotes]
                     + ([intent.time_quote] if intent.time_quote else [])
+                    + ([intent.time_column_quote] if intent.time_column_quote else [])
+                    + (
+                        [
+                            intent.time_filter.column_quote,
+                            *intent.time_filter.value_quotes,
+                        ]
+                        if intent.time_filter
+                        else []
+                    )
                     + [item.quote for item in intent.sorts]
                 )
                 or request.question,

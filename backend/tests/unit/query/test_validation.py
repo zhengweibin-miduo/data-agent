@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from typing import Literal
 
 import pytest
 
@@ -270,8 +271,8 @@ async def test_cte_validates_physical_column_but_allows_outer_projection() -> No
     assert invalid.issues[0].code == "column_unknown"
 
 
-async def test_named_placeholder_and_fk_join_are_accepted() -> None:
-    """绑定值与当前 DDL 外键支持的显式 JOIN 可安全通过。"""
+async def test_unbound_fk_join_is_rejected() -> None:
+    """即使 JOIN 使用合法外键，也不能引入未受意图绑定的额外表。"""
     draft = QueryDraft(
         sql=(
             "SELECT o.amount FROM dw.orders AS o "
@@ -299,7 +300,7 @@ async def test_named_placeholder_and_fk_join_are_accepted() -> None:
         dw_database="dw",
     )
 
-    assert result.validated is not None
+    assert result.issues[0].code == "table_binding_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -395,7 +396,9 @@ async def test_filter_predicates_reject_or_boolean_structure() -> None:
 )
 async def test_unmodeled_predicate_nodes_fail_closed(predicate: str) -> None:
     """WHERE/HAVING 只允许可逐项映射到可信意图的原子谓词。"""
-    params = {"minimum": 1, "maximum": 10} if "BETWEEN" in predicate else {}
+    params: dict[str, QueryParameter] = (
+        {"minimum": 1, "maximum": 10} if "BETWEEN" in predicate else {}
+    )
     draft = _draft(f"SELECT o.amount FROM dw.orders o WHERE {predicate}", params=params)
     if "EXISTS" in predicate:
         draft = draft.model_copy(
@@ -418,7 +421,7 @@ async def test_unmodeled_predicate_nodes_fail_closed(predicate: str) -> None:
     [("lt", "大于"), ("lte", "至少"), ("ne", "等于")],
 )
 def test_filter_operator_requires_matching_user_evidence(
-    operator: str, operator_quote: str
+    operator: Literal["lt", "lte", "ne"], operator_quote: str
 ) -> None:
     """过滤方向必须由用户逐字原文证明，不能只信任模型枚举。"""
     intent = QueryIntent(
@@ -770,3 +773,89 @@ async def test_sqlglot_validation_does_not_block_event_loop(
     result = await validation
 
     assert result.validated is not None
+
+
+async def test_nested_limit_and_transformed_sort_fail_closed() -> None:
+    """嵌套截断和变换排序均不能冒充可信 Top-N。"""
+    context = _context().model_copy(update={"bindings": {"金额": "column-amount"}})
+    nested = await validate_query(
+        _draft(
+            "SELECT SUM(scoped.amount) FROM "
+            "(SELECT o.amount FROM dw.orders o LIMIT 1) scoped"
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+    assert nested.issues[0].code == "nested_limit_forbidden"
+    transformed = await validate_query(
+        _draft("SELECT o.amount FROM dw.orders o ORDER BY o.amount * 0 DESC LIMIT 10"),
+        context,
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            measure_quotes=["金额"],
+            sorts=[SortIntent(quote="金额", direction="desc")],
+            limit=10,
+        ),
+        dw_database="dw",
+    )
+    assert transformed.issues[0].code == "sort_mismatch"
+
+
+async def test_scalar_aggregate_rejects_grouping_and_transformed_operand() -> None:
+    """标量汇总只能输出直接作用于绑定度量的单个聚合。"""
+    context = _context().model_copy(update={"bindings": {"金额": "column-amount"}})
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        aggregation="sum",
+        aggregation_quote="总和",
+        measure_quotes=["金额"],
+    )
+    grouped = await validate_query(
+        QueryDraft(
+            sql="SELECT o.id, SUM(o.amount) FROM dw.orders o GROUP BY o.id",
+            table_ids=["table-orders"],
+            column_ids=["column-id", "column-amount"],
+        ),
+        context,
+        intent,
+        dw_database="dw",
+    )
+    assert grouped.issues[0].code == "query_shape_mismatch"
+    transformed = await validate_query(
+        _draft("SELECT SUM(o.amount * 0) FROM dw.orders o"),
+        context,
+        intent,
+        dw_database="dw",
+    )
+    assert transformed.issues[0].code == "aggregation_operand_mismatch"
+
+
+def test_intent_requires_sort_and_grain_evidence() -> None:
+    """排序方向和时间粒度枚举必须由用户原文确定性证明。"""
+    with pytest.raises(ValueError, match="排序方向"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            sorts=[
+                SortIntent(quote="金额", direction="desc", direction_quote="从低到高")
+            ],
+        ).validate_evidence(["金额从低到高"])
+    with pytest.raises(ValueError, match="时间粒度"):
+        QueryIntent(
+            query_type=QueryType.TREND,
+            time_quote="2025年",
+            time_column_quote="日期",
+            time_filter=FilterIntent(
+                column_quote="日期",
+                operator="gte",
+                operator_quote="大于等于",
+                value_quotes=["2025"],
+            ),
+            grain="day",
+            grain_quote="按月",
+        ).validate_evidence(["按月查看日期大于等于2025年"])

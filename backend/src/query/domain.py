@@ -77,6 +77,12 @@ class FilterIntent(ContractModel):
         max_length=100,
         description="过滤值的用户原文列表。",
     )
+    clause_quote: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        description="同时包含字段、操作符和值的一项完整用户原文子句。",
+    )
 
 
 class SortIntent(ContractModel):
@@ -84,6 +90,12 @@ class SortIntent(ContractModel):
 
     quote: str = Field(min_length=1, max_length=256, description="排序对象原文。")
     direction: Literal["asc", "desc"] = Field(description="用户明确表达的排序方向。")
+    direction_quote: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="排序方向的用户原文证据。",
+    )
 
 
 class QueryAmbiguity(ContractModel):
@@ -131,6 +143,9 @@ class QueryIntent(ContractModel):
         default=None,
         description="用户明确表达的时间粒度。",
     )
+    grain_quote: str | None = Field(
+        default=None, max_length=64, description="时间粒度的用户原文证据。"
+    )
     sorts: list[SortIntent] = Field(
         default_factory=list, max_length=10, description="排序条件。"
     )
@@ -159,6 +174,7 @@ class QueryIntent(ContractModel):
             ),
             *(item.column_quote for item in self.filters),
             *(item.operator_quote for item in self.filters if item.operator_quote),
+            *(item.clause_quote for item in self.filters if item.clause_quote),
             *(quote for item in self.filters for quote in item.value_quotes),
             *(
                 [self.time_filter.operator_quote]
@@ -166,8 +182,10 @@ class QueryIntent(ContractModel):
                 else []
             ),
             *(item.quote for item in self.sorts),
+            *(item.direction_quote for item in self.sorts if item.direction_quote),
             *(item.quote for item in self.ambiguities),
             *([self.limit_quote] if self.limit_quote else []),
+            *([self.grain_quote] if self.grain_quote else []),
         ]
         if any(
             not quote.strip() or not any(quote in message for message in user_messages)
@@ -198,6 +216,27 @@ class QueryIntent(ContractModel):
             evidenced_operator = marker_matches[0][1] if marker_matches else None
             if evidenced_operator != item.operator:
                 raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
+        if len(self.filters) > 1:
+            for item in self.filters:
+                if item.clause_quote is None or not all(
+                    quote in item.clause_quote
+                    for quote in (
+                        item.column_quote,
+                        item.operator_quote or "",
+                        *item.value_quotes,
+                    )
+                ):
+                    raise ValueError("多项过滤的字段、操作符和值必须来自同一用户子句")
+        direction_markers = {
+            "asc": ("升序", "从低到高", "最低", "最小", "asc"),
+            "desc": ("降序", "从高到低", "最高", "最大", "desc"),
+        }
+        for item in self.sorts:
+            if item.direction_quote is None or not any(
+                marker in item.direction_quote.casefold()
+                for marker in direction_markers[item.direction]
+            ):
+                raise ValueError("排序方向必须携带与枚举一致的用户原文证据")
         limit_numbers = (
             [int(value) for value in re.findall(r"(?<!\d)\d+(?!\d)", self.limit_quote)]
             if self.limit_quote
@@ -229,6 +268,21 @@ class QueryIntent(ContractModel):
             raise ValueError("时间范围必须提供可验证的过滤契约")
         if self.grain and (self.time_column_quote is None or self.time_filter is None):
             raise ValueError("时间粒度必须提供时间字段和范围契约")
+        grain_markers = {
+            "day": ("日", "天", "day"),
+            "week": ("周", "星期", "week"),
+            "month": ("月", "month"),
+            "quarter": ("季度", "季", "quarter"),
+            "year": ("年", "year"),
+        }
+        if self.grain and (
+            self.grain_quote is None
+            or not any(
+                marker in self.grain_quote.casefold()
+                for marker in grain_markers[self.grain]
+            )
+        ):
+            raise ValueError("时间粒度必须携带与枚举一致的用户原文证据")
 
 
 QueryParameter = str | int | float | bool | None
@@ -519,6 +573,17 @@ def _validate_query_sync(
         return _failed("parameter_mismatch")
 
     # 步骤五：用户未表达 Top-N 时禁止固定 LIMIT；分页偏移一律失败关闭。
+    nested_limits = [
+        select
+        for select in root.find_all(exp.Select)
+        if select is not root
+        and (
+            select.args.get("limit") is not None
+            or select.args.get("offset") is not None
+        )
+    ]
+    if nested_limits:
+        return _failed("nested_limit_forbidden")
     limit = root.args.get("limit")
     if root.args.get("offset") is not None or (
         isinstance(limit, exp.Limit) and limit.args.get("offset") is not None
@@ -584,6 +649,7 @@ def _validate_query_sync(
 
     # 步骤七：JOIN 的完整 ON 树只能由 AND 连接当前 DDL 的 FK 等式。
     fk_edges: set[frozenset[str]] = set()
+    fk_constraints: dict[str, set[frozenset[str]]] = {}
     table_by_qualified = {
         table.qualified_name: table for table in context.physical_schema.tables
     }
@@ -601,7 +667,12 @@ def _validate_query_sync(
             None,
         )
         if target_column is not None:
-            fk_edges.add(frozenset((relation.source_column_id, target_column.id)))
+            edge = frozenset((relation.source_column_id, target_column.id))
+            fk_edges.add(edge)
+            constraint_id = (
+                relation.constraint_id or f"legacy:{relation.source_column_id}"
+            )
+            fk_constraints.setdefault(constraint_id, set()).add(edge)
     aliases = {
         table.alias_or_name: tables_by_name[table.name] for table in physical_tables
     }
@@ -650,6 +721,13 @@ def _validate_query_sync(
             )
         ):
             return _failed("join_unsupported")
+        matching_constraints = [
+            edges for edges in fk_constraints.values() if edges & join_pairs
+        ]
+        if not matching_constraints or not any(
+            edges <= join_pairs for edges in matching_constraints
+        ):
+            return _failed("join_unsupported")
 
     # 步骤八：模型声明必须与 AST 实际引用以及当前权威指标完全一致。
     referenced_tables = {tables_by_name[table.name].id for table in physical_tables}
@@ -678,9 +756,42 @@ def _validate_query_sync(
         return _failed("binding_missing")
     if not required_column_ids.issubset(referenced_columns):
         return _failed("binding_missing")
+    column_owner = {
+        column.id: table.id
+        for table in context.physical_schema.tables
+        for column in table.columns
+    }
+    allowed_bound_tables = required_table_ids | {
+        column_owner[column_id]
+        for column_id in required_column_ids
+        if column_id in column_owner
+    }
+    if allowed_bound_tables and not referenced_tables.issubset(allowed_bound_tables):
+        return _failed("table_binding_mismatch")
+
+    root_scope = next(
+        scope for scope in traverse_scope(root) if scope.expression is root
+    )
+    reachable_expressions: set[int] = set()
+
+    def visit_scope(scope: Scope) -> None:
+        if id(scope.expression) in reachable_expressions:
+            return
+        reachable_expressions.add(id(scope.expression))
+        for source in scope.sources.values():
+            if isinstance(source, Scope):
+                visit_scope(source)
+
+    visit_scope(root_scope)
+    predicate_clauses = [
+        clause
+        for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
+        if (owner := clause.find_ancestor(exp.Select)) is not None
+        and id(owner) in reachable_expressions
+    ]
     predicate_nodes = [
         node
-        for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
+        for clause in predicate_clauses
         for node in clause.this.walk()
         if isinstance(
             node, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.In, exp.Like)
@@ -690,10 +801,7 @@ def _validate_query_sync(
         _predicate_contract(node, columns_by_coordinate, draft.params)
         for node in predicate_nodes
     ]
-    if any(
-        not _predicate_tree_supported(clause.this)
-        for clause in (*root.find_all(exp.Where), *root.find_all(exp.Having))
-    ):
+    if any(not _predicate_tree_supported(clause.this) for clause in predicate_clauses):
         return _failed("predicate_mismatch")
     expected_filters = [*intent.filters]
     if intent.time_filter is not None:
@@ -706,14 +814,36 @@ def _validate_query_sync(
         )
         for item in expected_filters
     ]
-    if len(predicate_contracts) != len(expected_contracts) or any(
-        actual is None
-        or expected[0] is None
-        or actual[0] != expected[0]
-        or actual[1] != expected[1]
-        or not _values_match(actual[1], actual[2], expected[2])
-        for actual, expected in zip(
-            predicate_contracts, expected_contracts, strict=True
+
+    def comparable_actual(
+        item: tuple[str, str, list[QueryParameter]] | None,
+    ) -> tuple[str, str, tuple[str, ...]] | None:
+        if item is None:
+            return None
+        return item[0], item[1], tuple(str(value) for value in item[2])
+
+    comparable_expected = [
+        (column_id, operator, tuple(values))
+        for column_id, operator, values in expected_contracts
+        if column_id is not None
+    ]
+    actual_multiset = sorted(
+        (
+            item
+            for item in (comparable_actual(value) for value in predicate_contracts)
+            if item
+        ),
+        key=repr,
+    )
+    expected_multiset = sorted(comparable_expected, key=repr)
+    if (
+        len(comparable_expected) != len(expected_contracts)
+        or len(actual_multiset) != len(predicate_contracts)
+        or len(actual_multiset) != len(expected_multiset)
+        or any(
+            actual[:2] != expected[:2]
+            or not _values_match(actual[1], list(actual[2]), list(expected[2]))
+            for actual, expected in zip(actual_multiset, expected_multiset, strict=True)
         )
     ):
         return _failed("predicate_mismatch")
@@ -729,13 +859,21 @@ def _validate_query_sync(
     has_group = root.args.get("group") is not None
     shape_valid = {
         QueryType.DETAIL: not has_aggregate and not has_group,
-        QueryType.AGGREGATE: has_aggregate,
+        QueryType.AGGREGATE: has_aggregate and not has_group,
         QueryType.RANKING: limit is not None,
         QueryType.TREND: has_aggregate and has_group,
         QueryType.COMPARISON: has_aggregate and has_group,
     }[intent.query_type]
     if not shape_valid:
         return _failed("query_shape_mismatch")
+    if intent.query_type == QueryType.AGGREGATE and (
+        len(root.expressions) != 1
+        or not any(
+            aggregate.find_ancestor(exp.Select) is root
+            for aggregate in root.expressions[0].find_all(exp.AggFunc)
+        )
+    ):
+        return _failed("projection_mismatch")
 
     if intent.query_type == QueryType.DETAIL:
         expected_projection_ids = {
@@ -778,10 +916,12 @@ def _validate_query_sync(
     for aggregate in top_level_aggregates:
         if isinstance(aggregate, exp.Count) and aggregate.find(exp.Star) is not None:
             continue
-        operands = {
-            _column_id(column, columns_by_coordinate)
-            for column in aggregate.find_all(exp.Column)
-        }
+        operand = aggregate.this
+        operands = (
+            {_column_id(operand, columns_by_coordinate)}
+            if isinstance(operand, exp.Column)
+            else set()
+        )
         if required_measure_columns and (
             len(operands) != 1 or operands != required_measure_columns
         ):
@@ -816,21 +956,17 @@ def _validate_query_sync(
                 ),
                 None,
             )
+            exact_column_id = (
+                _column_id(expression, columns_by_coordinate)
+                if isinstance(expression, exp.Column)
+                else _column_id(expression.this, columns_by_coordinate)
+                if isinstance(expression, exp.AggFunc)
+                and isinstance(expression.this, exp.Column)
+                else None
+            )
             actual_sorts.append(
                 (
-                    metric_id
-                    or next(
-                        (
-                            _column_id(column, columns_by_coordinate)
-                            for column in expression.find_all(exp.Column)
-                        ),
-                        None,
-                    )
-                    or (
-                        _column_id(expression, columns_by_coordinate)
-                        if isinstance(expression, exp.Column)
-                        else None
-                    ),
+                    metric_id or exact_column_id,
                     "desc" if ordered.args.get("desc") else "asc",
                 )
             )
@@ -847,7 +983,7 @@ def _validate_query_sync(
         for quote in intent.dimension_quotes
         if context.bindings.get(quote) is not None
     }
-    if intent.query_type == QueryType.COMPARISON:
+    if intent.query_type in (QueryType.COMPARISON, QueryType.RANKING):
         actual_group_ids = {
             _column_id(expression, columns_by_coordinate)
             for expression in group_expressions
@@ -882,12 +1018,22 @@ def _validate_query_sync(
         quarter_years = [
             item for item in group_expressions if bucket_matches(item, "YEAR(")
         ]
-        expected_count = 2 if intent.grain == "quarter" else 1
+        bucket_count = 2 if intent.grain == "quarter" else 1
+        bucket_ids = {id(item) for item in (*buckets, *quarter_years)}
+        business_groups = [
+            item for item in group_expressions if id(item) not in bucket_ids
+        ]
+        business_group_ids = {
+            _column_id(item, columns_by_coordinate)
+            for item in business_groups
+            if isinstance(item, exp.Column)
+        }
         if (
             time_column_id is None
-            or len(group_expressions) != expected_count
+            or len(group_expressions) != bucket_count + len(dimension_ids)
             or len(buckets) != 1
             or (intent.grain == "quarter" and len(quarter_years) != 1)
+            or business_group_ids != dimension_ids
         ):
             return _failed("time_grain_mismatch")
     validated = ValidatedQuery(

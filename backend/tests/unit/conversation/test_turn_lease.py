@@ -133,7 +133,8 @@ class _ReplaySession(_RecordingSession):
         if rendered.startswith("update"):
             return _FakeResult(None)
         if "timestampadd" in rendered:
-            return _FakeResult((1,))
+            # 初始门禁查询包含 OR；独立的自然过期判定默认模拟仍在租约内。
+            return _FakeResult((1,) if " or " in rendered else None)
         row = self._rows[min(self._index, len(self._rows) - 1)]
         self._index += 1
         return _FakeResult(row)
@@ -279,3 +280,37 @@ async def test_preempted_turn_replay_does_not_reclaim_gate() -> None:
 
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("陈旧轮次不重新占用门禁", updates, [])
+
+
+class _ExpiredReplaySession(_ReplaySession):
+    """让独立租约查询返回已过期。"""
+
+    async def execute(self, statement: ClauseElement) -> object:
+        rendered = str(statement).casefold()
+        if "timestampadd" in rendered and " or " not in rendered:
+            self.statements.append(statement)
+            return _FakeResult((1,))
+        return await super().execute(statement)
+
+
+async def test_expired_same_turn_reclaims_execution_owner() -> None:
+    """进程崩溃遗留的自然过期同轮次租约可由重试原子重新认领。"""
+    moment = datetime.now(UTC)
+    conversation = {"id": 1, "active_turn_uid": "turn-1", "updated_at": moment}
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "订单口径是什么",
+        "created_at": moment,
+    }
+    repository = ConversationRepository(
+        cast(AsyncSession, _ExpiredReplaySession(conversation, message))
+    )
+
+    _, _, execution_owner = await repository.start_turn(
+        "user-1", "conv-1", "turn-1", "订单口径是什么"
+    )
+
+    assert execution_owner is True

@@ -74,13 +74,17 @@ class ConversationRepository:
 
         # 步骤二：按新主键和同一用户边界回读数据库时间戳，避免返回应用时钟推测值。
         row = (
-            await self._session.execute(
-                select(agent_conversation).where(
-                    agent_conversation.c.id == identifier,
-                    agent_conversation.c.user_id == user_id,
+            (
+                await self._session.execute(
+                    select(agent_conversation).where(
+                        agent_conversation.c.id == identifier,
+                        agent_conversation.c.user_id == user_id,
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         return ConversationRecord(
             uid=uid,
             created_at=row["created_at"],
@@ -143,9 +147,7 @@ class ConversationRepository:
         # 步骤二：事务型调用按需追加行锁，普通读取沿用相同归属条件。
         if for_update:
             statement = statement.with_for_update()
-        return (
-            (await self._session.execute(statement)).mappings().one_or_none()
-        )
+        return (await self._session.execute(statement)).mappings().one_or_none()
 
     async def delete(self, user_id: str, conversation_uid: str) -> bool:
         """只删除指定用户拥有的会话。"""
@@ -164,9 +166,7 @@ class ConversationRepository:
         """硬删除用户的全部对话数据。"""
         # 步骤一：按用户边界删除会话，依靠外键级联同步清除消息和待提炼任务。
         await self._session.execute(
-            delete(agent_conversation).where(
-                agent_conversation.c.user_id == user_id
-            )
+            delete(agent_conversation).where(agent_conversation.c.user_id == user_id)
         )
 
     async def history(
@@ -277,6 +277,24 @@ class ConversationRepository:
             .values(active_turn_uid=turn_uid, updated_at=func.now())
         )
 
+    async def _turn_lease_expired(self, conversation_id: int, user_id: str) -> bool:
+        """在已锁定事务中用数据库时钟判断活动轮次租约是否自然过期。"""
+        row = (
+            await self._session.execute(
+                select(agent_conversation.c.id).where(
+                    agent_conversation.c.id == conversation_id,
+                    agent_conversation.c.user_id == user_id,
+                    agent_conversation.c.updated_at
+                    <= func.timestampadd(
+                        text("SECOND"),
+                        -app_config.conversation.turn_lease_seconds,
+                        func.now(),
+                    ),
+                )
+            )
+        ).one_or_none()
+        return row is not None
+
     async def start_turn(
         self,
         user_id: str,
@@ -354,7 +372,7 @@ class ConversationRepository:
                 execution_owner = (
                     getattr(conversation["updated_at"], "year", None)
                     == _ABANDONED_TURN_YEAR
-                )
+                ) or await self._turn_lease_expired(int(conversation["id"]), user_id)
                 await self._claim_turn_gate(
                     int(conversation["id"]),
                     user_id,
@@ -496,10 +514,14 @@ class ConversationRepository:
             .values(active_turn_uid=None, updated_at=func.now())
         )
         row = (
-            await self._session.execute(
-                select(agent_message).where(agent_message.c.id == assistant_id)
+            (
+                await self._session.execute(
+                    select(agent_message).where(agent_message.c.id == assistant_id)
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         return _message(row)
 
     async def abandon_turn(
@@ -532,15 +554,19 @@ class ConversationRepository:
             return None
         # 步骤二：完整作用域下只读取助手角色，供上层避免重复模型调用。
         row = (
-            await self._session.execute(
-                select(agent_message).where(
-                    agent_message.c.user_id == user_id,
-                    agent_message.c.conversation_id == int(conversation["id"]),
-                    agent_message.c.turn_uid == turn_uid,
-                    agent_message.c.role == MessageRole.ASSISTANT.value,
+            (
+                await self._session.execute(
+                    select(agent_message).where(
+                        agent_message.c.user_id == user_id,
+                        agent_message.c.conversation_id == int(conversation["id"]),
+                        agent_message.c.turn_uid == turn_uid,
+                        agent_message.c.role == MessageRole.ASSISTANT.value,
+                    )
                 )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         return _message(row) if row is not None else None
 
     async def context_messages(
@@ -601,13 +627,11 @@ class ConversationRepository:
                 await self._session.execute(
                     select(conversation_memory_outbox)
                     .where(
-                        conversation_memory_outbox.c.id
-                        == earliest_in_conversation,
+                        conversation_memory_outbox.c.id == earliest_in_conversation,
                         conversation_memory_outbox.c.available_at <= func.now(),
                         or_(
                             conversation_memory_outbox.c.lease_token.is_(None),
-                            conversation_memory_outbox.c.lease_expires_at
-                            <= func.now(),
+                            conversation_memory_outbox.c.lease_expires_at <= func.now(),
                         ),
                     )
                     .order_by(conversation_memory_outbox.c.id)
@@ -638,13 +662,17 @@ class ConversationRepository:
             # 步骤三：消息窗口严格位于摘要游标之后、截至当前助手消息，并继续
             # 携带该行的 user_id 边界，保证一次 claim 对应可验证的有界证据集。
             conversation = (
-                await self._session.execute(
-                    select(agent_conversation).where(
-                        agent_conversation.c.id == int(row["conversation_id"]),
-                        agent_conversation.c.user_id == str(row["user_id"]),
+                (
+                    await self._session.execute(
+                        select(agent_conversation).where(
+                            agent_conversation.c.id == int(row["conversation_id"]),
+                            agent_conversation.c.user_id == str(row["user_id"]),
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             messages = await self.context_messages(
                 str(row["user_id"]),
                 int(row["conversation_id"]),

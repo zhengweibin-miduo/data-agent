@@ -21,9 +21,7 @@ _Result = TypeVar("_Result")
 _CLEANUP_TIMEOUT_SECONDS = 2.0
 
 
-async def _before_deadline(
-    awaitable: Awaitable[_Result], deadline: float
-) -> _Result:
+async def _before_deadline(awaitable: Awaitable[_Result], deadline: float) -> _Result:
     """只在数据库 await 期间执行总截止时间取消。"""
     async with asyncio.timeout_at(deadline):
         return await awaitable
@@ -92,9 +90,7 @@ class MySQLQueryExecutor:
                 http_status=502,
             ) from error
 
-    async def execute(
-        self, query: ValidatedQuery
-    ) -> AsyncGenerator[QueryBatch, None]:
+    async def execute(self, query: ValidatedQuery) -> AsyncGenerator[QueryBatch, None]:
         """在一个只读事务中按行数与字节双预算读取完整结果。"""
         deadline = asyncio.get_running_loop().time() + self._timeout_seconds
         connection = self._engine.connect()
@@ -122,7 +118,10 @@ class MySQLQueryExecutor:
             pending: list[list[object]] = []
             pending_bytes = 0
             # 驱动按配置行数批量取数，进程内仍逐行执行字节预算切分。
-            partitions = result.partitions(self._fetch_batch_rows).__aiter__()
+            # 驱动批次还需受字节预算保护；在未知结果宽度时使用保守硬上限，
+            # 避免数百个大字段在逐行门禁前同时物化。
+            driver_fetch_rows = min(self._fetch_batch_rows, 16)
+            partitions = result.partitions(driver_fetch_rows).__aiter__()
             while True:
                 try:
                     partition = await _before_deadline(anext(partitions), deadline)
