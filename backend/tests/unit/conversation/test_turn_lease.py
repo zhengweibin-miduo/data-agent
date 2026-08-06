@@ -140,8 +140,8 @@ class _ReplaySession(_RecordingSession):
         return _FakeResult(row)
 
 
-async def test_idempotent_replay_renews_turn_lease() -> None:
-    """同一 turn_uid 的幂等回放必须续租门禁，否则回放后仍可被立即抢占。"""
+async def test_idempotent_replay_does_not_renew_turn_lease() -> None:
+    """非所有者轮询不得延长崩溃进程遗留的租约。"""
     moment = datetime.now(UTC)
     conversation = {"id": 1, "active_turn_uid": "turn-1", "updated_at": moment}
     message = {
@@ -162,15 +162,7 @@ async def test_idempotent_replay_renews_turn_lease() -> None:
     check_equal("幂等回放返回既有消息", record.uid, "message-7")
     check_equal("在途幂等回放不取得执行权", execution_owner, False)
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
-    check_equal("幂等回放执行一次门禁续租", len(updates), 1)
-    rendered = _rendered(updates[0])
-    check_condition(
-        "续租同时写回本轮次与当前时间",
-        "active_turn_uid=%s" in rendered.replace(" ", "")
-        and "updated_at=now()" in rendered.replace(" ", ""),
-        actual=rendered,
-        expected="UPDATE 同时设置 active_turn_uid 与 updated_at=now()",
-    )
+    check_equal("非所有者幂等回放不续租", len(updates), 0)
 
 
 async def test_query_replay_rejects_changed_semantic_fingerprint() -> None:

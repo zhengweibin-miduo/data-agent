@@ -84,10 +84,9 @@ class MetadataSearchService:
             )
         else:
             # 作用域内绑定必须看到完整候选集合，不能用全局展示 Top-K 证明唯一性。
-            scope_limit = max(
-                self._search_limit,
-                len(table_ids or set()) + 2 * len(column_ids or set()),
-            )
+            # 指标基数与字段数无上界关系；作用域绑定必须请求索引支持的完整
+            # 结果，而不能用字段数猜测候选总量后声称唯一。
+            scope_limit = 100_000
             identities = await self._semantic_index.search(
                 query,
                 kinds,

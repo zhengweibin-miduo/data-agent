@@ -108,6 +108,76 @@ async def test_valid_aggregate_keeps_complete_result_without_forced_limit() -> N
     assert result.validated.target_tables == ("orders",)
 
 
+@pytest.mark.parametrize(
+    ("sql", "issue"),
+    [
+        (
+            "WITH scoped AS (SELECT o.amount FROM dw.orders o GROUP BY o.amount) "
+            "SELECT amount FROM scoped",
+            "derived_lineage_unsupported",
+        ),
+        (
+            "SELECT SUM(o.amount) FROM dw.orders o HAVING amount > :minimum",
+            "predicate_mismatch",
+        ),
+        (
+            "SELECT o.amount FROM dw.orders o GROUP BY o.amount WITH ROLLUP",
+            "group_modifier_forbidden",
+        ),
+    ],
+)
+async def test_unmodeled_cardinality_and_filter_stages_fail_closed(
+    sql: str, issue: str
+) -> None:
+    """派生分组、HAVING 与分组修饰符不能冒充可信结果契约。"""
+    draft = _draft(sql, params={"minimum": 10} if ":minimum" in sql else {})
+    result = await validate_query(
+        draft,
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=(
+                [
+                    FilterIntent(
+                        column_quote="金额",
+                        operator="gt",
+                        value_quotes=["10"],
+                    )
+                ]
+                if ":minimum" in sql
+                else []
+            ),
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == issue
+
+
+async def test_filter_uses_typed_normalized_value() -> None:
+    """千位分隔原文证据可绑定确定性解析后的数值。"""
+    result = await validate_query(
+        _draft(
+            "SELECT o.amount FROM dw.orders o WHERE o.amount > :minimum",
+            params={"minimum": 1000},
+        ),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="金额",
+                    operator="gt",
+                    value_quotes=["1,000"],
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is not None
+
+
 async def test_count_star_is_not_projection_star() -> None:
     """COUNT(*) 保留标准聚合语义而普通 SELECT 星号仍被拒绝。"""
     draft = QueryDraft(
@@ -607,8 +677,8 @@ async def test_explicit_top_n_is_preserved_exactly() -> None:
     assert result.validated.sql.endswith("LIMIT 10")
 
 
-async def test_order_by_projection_alias_keeps_physical_validation() -> None:
-    """排序可引用已验证投影别名，不把别名误判成未知物理字段。"""
+async def test_aggregate_ranking_without_dimension_is_rejected() -> None:
+    """没有分组维度的 Top-N 不得用单个聚合值冒充排名明细。"""
     result = await validate_query(
         _draft(
             "SELECT SUM(o.amount) AS total FROM dw.orders AS o "
@@ -626,7 +696,7 @@ async def test_order_by_projection_alias_keeps_physical_validation() -> None:
         dw_database="dw",
     )
 
-    assert result.validated is not None
+    assert result.issues[0].code == "query_shape_mismatch"
 
 
 async def test_trend_requires_bound_time_predicate_and_group() -> None:

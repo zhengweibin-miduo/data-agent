@@ -9,7 +9,7 @@ from ddl_metadata.meta_projection.models import (
 from models.physical import PhysicalColumn, PhysicalSchema, PhysicalTable
 from query.adapters.metadata import QueryMetadataAdapter
 from query.application.contracts import QueryClarification
-from query.domain import QueryIntent, QueryMetadataCandidate, QueryType
+from query.domain import QueryIntent, QueryType
 
 
 class _Search:
@@ -101,8 +101,8 @@ def _candidate(
     )
 
 
-async def test_context_uses_one_meta_search_then_scoped_value_search() -> None:
-    """唯一绑定后扩展指标字段并以后置字段范围查询值。"""
+async def test_context_does_not_execute_natural_language_metric_definition() -> None:
+    """没有结构化公式的指标即使仅关联一列也必须继续澄清。"""
     search = _Search(
         [
             _candidate(
@@ -127,11 +127,9 @@ async def test_context_uses_one_meta_search_then_scoped_value_search() -> None:
         _schema(),
     )
 
-    assert not isinstance(result, QueryClarification)
-    assert search.calls == ["metadata", "values"]
-    assert search.column_ids == {"column-amount", "column-region"}
-    assert result.value_search_complete is False
-    assert all(isinstance(item, QueryMetadataCandidate) for item in result.candidates)
+    assert isinstance(result, QueryClarification)
+    assert result.slot == "measure"
+    assert search.calls == ["metadata"]
 
 
 async def test_context_returns_only_highest_impact_clarification() -> None:

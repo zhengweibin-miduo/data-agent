@@ -373,11 +373,14 @@ class ConversationRepository:
                     getattr(conversation["updated_at"], "year", None)
                     == _ABANDONED_TURN_YEAR
                 ) or await self._turn_lease_expired(int(conversation["id"]), user_id)
-                await self._claim_turn_gate(
-                    int(conversation["id"]),
-                    user_id,
-                    turn_uid,
-                )
+                # 非所有者的幂等轮询不能续租，否则崩溃进程留下的租约会被
+                # 轮询永久延长。只有真正重新取得执行权时才刷新占用起点。
+                if execution_owner:
+                    await self._claim_turn_gate(
+                        int(conversation["id"]),
+                        user_id,
+                        turn_uid,
+                    )
             return _message(existing), conversation, execution_owner
 
         # 步骤三：新消息与 active_turn_uid 在调用方事务内一并写入，确保可见的
