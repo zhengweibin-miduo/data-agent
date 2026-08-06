@@ -525,10 +525,26 @@ class MetadataProjectionRepository:
     async def authoritative_candidates(
         self,
         identities: list[MetadataSemanticHit],
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataCandidate]:
         """按 Qdrant 顺序回读当前 Meta 对象，拒绝已删除候选。"""
         if not identities:
             return []
+        scope_object_ids = {hit.object_id for hit in identities}
+        if column_ids:
+            scope_object_ids.update(column_ids)
+            metric_rows = (
+                await self._session.execute(
+                    select(column_metric.c.metric_id).where(
+                        column_metric.c.column_id.in_(column_ids)
+                    )
+                )
+            ).all()
+            scope_object_ids.update(str(metric_id) for (metric_id,) in metric_rows)
+        if table_ids:
+            scope_object_ids.update(table_ids)
         pending_rows = (
             await self._session.execute(
                 select(
@@ -537,9 +553,7 @@ class MetadataProjectionRepository:
                 ).where(
                     metadata_index_outbox.c.target
                     == MetadataIndexTarget.SEMANTIC.value,
-                    metadata_index_outbox.c.object_id.in_(
-                        {hit.object_id for hit in identities}
-                    ),
+                    metadata_index_outbox.c.object_id.in_(scope_object_ids),
                 )
             )
         ).all()

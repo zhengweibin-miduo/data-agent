@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import InitVar, dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Literal
@@ -227,6 +228,7 @@ class QueryIntent(ContractModel):
             "不高于": "lte",
             "不超过": "lte",
         }
+        normalized_equalities = {"不等于": "ne", "不是": "ne"}
         for item in [*self.filters, *([self.time_filter] if self.time_filter else [])]:
             quote = item.operator_quote
             if quote is not None and any(
@@ -240,6 +242,14 @@ class QueryIntent(ContractModel):
                     if quote is not None and marker in quote.casefold()
                 ),
                 None,
+            )
+            evidenced_operator = next(
+                (
+                    operator
+                    for marker, operator in normalized_equalities.items()
+                    if quote is not None and marker in quote.casefold()
+                ),
+                evidenced_operator,
             )
             marker_matches = sorted(
                 (
@@ -259,11 +269,15 @@ class QueryIntent(ContractModel):
             if evidenced_operator != item.operator:
                 raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
+        user_text = " ".join(user_messages).casefold()
+        if len(all_filters) > 1 and any(
+            marker in user_text for marker in ("或", "或者", " or ")
+        ):
+            raise ValueError("过滤条件包含尚未建模的 OR 关系")
         if len(all_filters) > 1 and any(
             item.clause_quote
             and any(
-                marker in item.clause_quote
-                for marker in ("或", "或者", "OR", "or")
+                marker in item.clause_quote for marker in ("或", "或者", "OR", "or")
             )
             for item in all_filters
         ):
@@ -352,7 +366,6 @@ class QueryIntent(ContractModel):
             for marker in shape_markers[self.query_type]
         ):
             raise ValueError("查询形态必须与用户原文动作证据一致")
-        user_text = " ".join(user_messages).casefold()
         trend_markers = ("趋势", "按日", "按周", "按月", "按季", "按年")
         if any(marker in user_text for marker in trend_markers) and (
             self.query_type != QueryType.TREND
@@ -361,11 +374,50 @@ class QueryIntent(ContractModel):
         ):
             raise ValueError("用户明确表达的趋势形态必须完整映射到查询意图")
         if re.search(r"(?:前\s*\d+|top\s*\d+)", user_text) and (
-            self.query_type != QueryType.RANKING
-            or self.limit is None
-            or not self.sorts
+            self.query_type != QueryType.RANKING or self.limit is None or not self.sorts
         ):
             raise ValueError("用户明确表达的 Top-N 形态必须完整映射到查询意图")
+        if (
+            any(
+                marker in user_text
+                for marker in (
+                    "大于",
+                    "小于",
+                    "等于",
+                    "超过",
+                    "低于",
+                    "至少",
+                    "至多",
+                    "包含",
+                )
+            )
+            and not all_filters
+        ):
+            raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
+        if (
+            any(
+                marker in user_text
+                for marker in (
+                    "总和",
+                    "合计",
+                    "平均",
+                    "均值",
+                    "数量",
+                    "最大值",
+                    "最小值",
+                )
+            )
+            and self.aggregation is None
+        ):
+            raise ValueError("用户明确表达的聚合必须完整映射到查询意图")
+        if (
+            any(
+                marker in user_text
+                for marker in ("升序", "降序", "从低到高", "从高到低")
+            )
+            and not self.sorts
+        ):
+            raise ValueError("用户明确表达的排序必须完整映射到查询意图")
         shape_is_consistent = {
             QueryType.DETAIL: self.aggregation is None and self.grain is None,
             QueryType.AGGREGATE: (
@@ -423,6 +475,9 @@ class QueryContext(ContractModel):
     )
     bindings: dict[str, str] = Field(
         default_factory=dict, description="用户原文到权威对象标识的绑定。"
+    )
+    relationships_authoritative: bool = Field(
+        default=True, description="关系是否已由权威 Meta 快照核验。"
     )
 
 
@@ -553,7 +608,10 @@ def _normalized_filter_values(item: FilterIntent) -> list[QueryParameter]:
         date_match = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日", quote)
         if date_match:
             year, month, day = map(int, date_match.groups())
-            values.append(f"{year:04d}-{month:02d}-{day:02d}")
+            try:
+                values.append(date(year, month, day).isoformat())
+            except ValueError:
+                values.append(quote)
             continue
         values.append(quote)
     return values
@@ -845,7 +903,12 @@ def _validate_query_sync(
         for alias, table in aliases.items()
         for column in table.columns
     }
-    for join in root.find_all(exp.Join):
+    joins = list(root.find_all(exp.Join))
+    # 请求 DDL 不是关系授权来源。当前 Meta 端口尚未提供权威关系快照，
+    # 因此在建立该契约前对 JOIN 失败关闭。
+    if joins and not context.relationships_authoritative:
+        return _failed("join_authority_unavailable")
+    for join in joins:
         if (
             join.kind.upper() == "CROSS"
             or str(join.side or "").upper() not in ("", "INNER")
@@ -917,9 +980,8 @@ def _validate_query_sync(
         referenced_side_tables = {
             target.id
             for relation in context.physical_schema.relationships
-            if (
-                target := table_by_qualified.get(relation.target_table.casefold())
-            ) is not None
+            if (target := table_by_qualified.get(relation.target_table.casefold()))
+            is not None
         }
         result_column_ids = {
             context.bindings[quote]
@@ -939,7 +1001,8 @@ def _validate_query_sync(
                     ),
                     None,
                 )
-            ) is not None
+            )
+            is not None
         }
         if measure_owner_tables & referenced_side_tables:
             return _failed("join_cardinality_unsupported")
@@ -1016,6 +1079,31 @@ def _validate_query_sync(
         )
         for item in expected_filters
     ]
+    column_types = {
+        column.id: column.data_type.upper()
+        for table in context.physical_schema.tables
+        for column in table.columns
+    }
+    numeric_type = re.compile(
+        r"^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL)\b"
+    )
+    temporal_type = re.compile(r"^(?:DATE|DATETIME|TIMESTAMP)\b")
+    for item in [
+        *intent.filters,
+        *([intent.time_filter] if intent.time_filter else []),
+    ]:
+        column_id = context.bindings.get(item.column_quote)
+        data_type = column_types.get(column_id or "", "")
+        values = _normalized_filter_values(item)
+        if numeric_type.match(data_type) and any(
+            not isinstance(value, (int, Decimal)) for value in values
+        ):
+            return _failed("filter_value_type_mismatch")
+        if temporal_type.match(data_type) and any(
+            not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+            for value in values
+        ):
+            return _failed("filter_value_type_mismatch")
 
     def comparable_actual(
         item: tuple[str, str, list[QueryParameter]] | None,
@@ -1067,12 +1155,19 @@ def _validate_query_sync(
     shape_valid = {
         QueryType.DETAIL: not has_aggregate and not has_group,
         QueryType.AGGREGATE: has_aggregate and not has_group,
-        QueryType.RANKING: limit is not None and (
-            (bool(dimension_ids := {
-                context.bindings[quote]
-                for quote in intent.dimension_quotes
-                if context.bindings.get(quote) is not None
-            }) and has_aggregate and has_group)
+        QueryType.RANKING: limit is not None
+        and (
+            (
+                bool(
+                    dimension_ids := {
+                        context.bindings[quote]
+                        for quote in intent.dimension_quotes
+                        if context.bindings.get(quote) is not None
+                    }
+                )
+                and has_aggregate
+                and has_group
+            )
             or (not dimension_ids and not has_aggregate and not has_group)
         ),
         QueryType.TREND: has_aggregate and has_group,
@@ -1180,9 +1275,13 @@ def _validate_query_sync(
         if not (isinstance(node, exp.Count) and node.find(exp.Star) is not None)
         and isinstance(node.this, exp.Column)
     ]
-    if top_level_aggregates and required_measure_columns and (
-        len(actual_aggregate_operands) != len(required_measure_columns)
-        or set(actual_aggregate_operands) != required_measure_columns
+    if (
+        top_level_aggregates
+        and required_measure_columns
+        and (
+            len(actual_aggregate_operands) != len(required_measure_columns)
+            or set(actual_aggregate_operands) != required_measure_columns
+        )
     ):
         return _failed("aggregation_operand_mismatch")
 
@@ -1228,8 +1327,7 @@ def _validate_query_sync(
                 time_column_id = context.bindings.get(intent.time_column_quote or "")
                 group = root.args.get("group")
                 if any(
-                    expression.sql(dialect="mysql")
-                    == grouped.sql(dialect="mysql")
+                    expression.sql(dialect="mysql") == grouped.sql(dialect="mysql")
                     for grouped in (
                         group.expressions if isinstance(group, exp.Group) else []
                     )
@@ -1247,6 +1345,40 @@ def _validate_query_sync(
     expected_sorts = [
         (context.bindings.get(item.quote), item.direction) for item in intent.sorts
     ]
+    if (
+        intent.grain == "quarter"
+        and len(expected_sorts) == 1
+        and isinstance(order, exp.Order)
+        and len(order.expressions) == 2
+    ):
+        quarter_order = [
+            projection_aliases.get(item.this.name, item.this)
+            if isinstance(item.this, exp.Column) and not item.this.table
+            else item.this
+            for item in order.expressions
+        ]
+        directions = [
+            "desc" if item.args.get("desc") else "asc" for item in order.expressions
+        ]
+        time_column_id = context.bindings.get(intent.time_column_quote or "")
+        operands = [
+            item.this
+            for item in quarter_order
+            if isinstance(item, (exp.Year, exp.Quarter))
+        ]
+        if (
+            isinstance(quarter_order[0], exp.Year)
+            and isinstance(quarter_order[1], exp.Quarter)
+            and len(operands) == 2
+            and {
+                _column_id(item, columns_by_coordinate)
+                for item in operands
+                if isinstance(item, exp.Column)
+            }
+            == {time_column_id}
+            and directions[0] == directions[1]
+        ):
+            actual_sorts = [(time_column_id, directions[0])]
     if actual_sorts != expected_sorts:
         return _failed("sort_mismatch")
 
@@ -1300,10 +1432,9 @@ def _validate_query_sync(
                 isinstance(operand, exp.Column)
                 and _column_id(operand, columns_by_coordinate) == time_column_id
             )
+
         buckets = [
-            item
-            for item in group_expressions
-            if bucket_matches(item, intent.grain)
+            item for item in group_expressions if bucket_matches(item, intent.grain)
         ]
         quarter_years = [
             item for item in group_expressions if bucket_matches(item, "year")

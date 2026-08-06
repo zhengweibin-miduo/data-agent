@@ -95,7 +95,9 @@ class MetadataSearchService:
                 column_ids=column_ids,
             )
         # 步骤二：权威 reader 剔除删除、pending 或指纹过期的对象。
-        candidates = await self._reader.authoritative_candidates(identities)
+        candidates = await self._reader.authoritative_candidates(
+            identities, table_ids=table_ids, column_ids=column_ids
+        )
         if table_ids is not None or column_ids is not None:
             return candidates
         return candidates[:bounded_limit]

@@ -177,6 +177,7 @@ class QueryMetadataAdapter:
             value_result = MetadataValueSearchResult(values=[], complete=False)
         return QueryContext(
             physical_schema=schema,
+            relationships_authoritative=False,
             candidates=[self._candidate(candidate) for candidate in retained.values()],
             values=[
                 QueryMetadataValue(

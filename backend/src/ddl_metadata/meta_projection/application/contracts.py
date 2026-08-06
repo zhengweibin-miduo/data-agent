@@ -37,9 +37,7 @@ class ProjectionWorkStore(Protocol):
         """领取至多指定数量的工作项。"""
         ...
 
-    def authority(
-        self, item: ClaimedMetadataIndexWork
-    ) -> AsyncContextManager[bool]:
+    def authority(self, item: ClaimedMetadataIndexWork) -> AsyncContextManager[bool]:
         """在投影锁内续租并返回完整 desired identity 是否仍权威。"""
         ...
 
@@ -94,6 +92,9 @@ class ProjectionReader(Protocol):
     async def authoritative_candidates(
         self,
         identities: list[MetadataSemanticHit],
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataCandidate]:
         """按派生索引顺序回读当前 Meta 候选。"""
         ...

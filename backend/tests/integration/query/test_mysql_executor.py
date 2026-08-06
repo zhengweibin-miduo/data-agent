@@ -11,6 +11,8 @@ from query.domain import (
     QueryContext,
     QueryDraft,
     QueryIntent,
+    QueryMetadataCandidate,
+    QueryMetadataKind,
     QueryType,
     validate_query,
 )
@@ -33,8 +35,26 @@ async def test_select_only_user_explains_and_streams_explicit_top_n() -> None:
             table_ids=[table.id],
             column_ids=[column.id],
         ),
-        QueryContext(physical_schema=schema),
-        QueryIntent(query_type=QueryType.DETAIL, limit=2),
+        QueryContext(
+            physical_schema=schema,
+            candidates=[
+                QueryMetadataCandidate(
+                    kind=QueryMetadataKind.COLUMN,
+                    object_id=column.id,
+                    table_id=table.id,
+                    name=column.name,
+                    description=column.name,
+                    matched_text=column.name,
+                )
+            ],
+            bindings={"地区编号": column.id},
+        ),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["地区编号"],
+            limit=2,
+            limit_quote="前2条",
+        ),
         dw_database=app_config.data_sync.dw_database,
     )
     assert result.validated is not None
