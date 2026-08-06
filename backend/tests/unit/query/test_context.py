@@ -154,6 +154,29 @@ async def test_context_returns_only_highest_impact_clarification() -> None:
     assert search.calls == ["metadata"]
 
 
+async def test_formula_metric_requires_physical_column_clarification() -> None:
+    """多相关字段的自然语言指标不能被当作可执行公式。"""
+    search = _Search(
+        [
+            _candidate(
+                MetadataObjectKind.METRIC,
+                "metric-sales",
+                "销售额",
+                related=["column-amount", "column-region"],
+            )
+        ]
+    )
+
+    result = await QueryMetadataAdapter(search).build_context(
+        "销售额",
+        QueryIntent(query_type=QueryType.AGGREGATE, measure_quotes=["销售额"]),
+        _schema(),
+    )
+
+    assert isinstance(result, QueryClarification)
+    assert result.slot == "measure"
+
+
 async def test_time_range_requires_an_explicit_time_column() -> None:
     """时间范围不能被误当字段绑定，缺少时间字段时必须澄清。"""
     search = _Search([])

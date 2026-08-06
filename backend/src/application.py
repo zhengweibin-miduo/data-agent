@@ -124,7 +124,11 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         intents=query_model,
         metadata=QueryMetadataAdapter(meta_projection.search),
         planner=query_model,
-        readiness=QueryReadinessAdapter(create_data_readiness_tool()),
+        readiness=QueryReadinessAdapter(
+            create_data_readiness_tool(),
+            dw_database=app_config.data_sync.dw_database,
+            lock_timeout=app_config.data_sync.generation_lock_timeout_seconds,
+        ),
         executor=query_executor,
         dw_database=app_config.data_sync.dw_database,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager
 from typing import Literal, Protocol
 
 from pydantic import Field
@@ -182,6 +183,12 @@ class QueryReadinessPort(Protocol):
 
     async def ready(self, target_tables: tuple[str, ...]) -> bool:
         """仅当全部实际目标表处于 streaming 时返回真。"""
+        ...
+
+    def hold(
+        self, target_tables: tuple[str, ...]
+    ) -> AbstractAsyncContextManager[None]:
+        """在就绪复核和完整执行期间固定目标表同步代次。"""
         ...
 
 

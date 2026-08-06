@@ -271,6 +271,29 @@ async def test_cte_validates_physical_column_but_allows_outer_projection() -> No
     assert invalid.issues[0].code == "column_unknown"
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH scoped AS (SELECT SUM(o.amount) AS amount FROM dw.orders AS o) "
+        "SELECT amount FROM scoped",
+        "WITH scoped AS (SELECT o.amount * 0 AS amount FROM dw.orders AS o) "
+        "SELECT amount FROM scoped",
+        "WITH scoped AS (SELECT o.amount FROM dw.orders AS o UNION ALL "
+        "SELECT o.amount FROM dw.orders AS o) SELECT amount FROM scoped",
+    ],
+)
+async def test_derived_outputs_require_direct_column_lineage(sql: str) -> None:
+    """派生输出只有直接透传物理列时才能参与结果形态验证。"""
+    result = await validate_query(
+        _draft(sql),
+        _context(),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "derived_lineage_unsupported"
+
+
 async def test_unbound_fk_join_is_rejected() -> None:
     """即使 JOIN 使用合法外键，也不能引入未受意图绑定的额外表。"""
     draft = QueryDraft(

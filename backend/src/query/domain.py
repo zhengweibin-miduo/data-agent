@@ -547,6 +547,21 @@ def _validate_query_sync(
     if root.find(exp.Distinct) is not None:
         return _failed("distinct_forbidden")
 
+    # 派生输出只有可证明的直接字段透传才可复用物理字段身份。聚合、算术、
+    # 集合运算等表达式没有结构化血缘契约，禁止按同名字段全局回退。
+    for scope in traverse_scope(root):
+        for source in scope.sources.values():
+            if not isinstance(source, Scope):
+                continue
+            if not isinstance(source.expression, exp.Select):
+                return _failed("derived_lineage_unsupported")
+            for projection in source.expression.expressions:
+                expression = (
+                    projection.this if isinstance(projection, exp.Alias) else projection
+                )
+                if not isinstance(expression, exp.Column):
+                    return _failed("derived_lineage_unsupported")
+
     # 步骤二：真实物理表必须显式位于 DW schema，并来自当前 DDL allowlist。
     tables_by_name = {table.name: table for table in context.physical_schema.tables}
     physical_tables = [

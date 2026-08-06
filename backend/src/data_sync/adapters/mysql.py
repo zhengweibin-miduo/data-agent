@@ -233,6 +233,27 @@ class MySQLMaterializationAdapter:
         *,
         limit: int,
     ) -> None:
+        """在 generation lock 内清理旧代次，避免与只读查询交错。"""
+        lock_name = generation_lock_name(
+            self._settings.dw_database,
+            task.desired.target_table,
+        )
+        try:
+            async with MySQLDatabase.advisory_locks(
+                [lock_name],
+                timeout_seconds=self._settings.generation_lock_timeout_seconds,
+            ):
+                await self._reset_generation(task, coordinate, limit=limit)
+        except AdvisoryLockUnavailableError as error:
+            raise SyncResourceBusyError("DW generation 资源被占用") from error
+
+    async def _reset_generation(
+        self,
+        task: ClaimedSyncTask,
+        coordinate: BinlogCoordinate,
+        *,
+        limit: int,
+    ) -> None:
         """在一个事务中有界清理旧 generation 并建立新基线。"""
         async with MySQLDatabase.session() as session:
             repository = DataSyncRepository(session)

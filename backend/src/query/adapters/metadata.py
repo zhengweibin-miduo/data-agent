@@ -127,6 +127,14 @@ class QueryMetadataAdapter:
                 for candidate in candidates
                 if candidate.kind in kinds and self._matches(quote, candidate)
             ]
+            # Meta 指标只有自然语言定义和相关字段提示；多个相关字段无法证明
+            # 公式、过滤口径或运算顺序，必须回到具体物理字段澄清。
+            matches = [
+                candidate
+                for candidate in matches
+                if candidate.kind != MetadataObjectKind.METRIC
+                or len(candidate.related_column_ids) == 1
+            ]
             # 物理字段同名是无需依赖截断语义召回即可证明的歧义。
             if slot != "measure":
                 exact_column_ids = {

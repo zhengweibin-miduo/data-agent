@@ -85,6 +85,13 @@
   `query_row_too_large`; never add a total-result `LIMIT` as a safety control.
 - The async driver fetches configured row batches; byte-budget splitting stays
   incremental in process so streaming does not degrade to one cursor await per row.
+- Derived-table outputs may inherit a physical column identity only through a
+  direct column projection; formulas and set operations fail closed without an
+  explicit lineage contract. Natural-language metrics with multiple related
+  columns require clarification instead of treating those columns as a formula.
+- The final readiness check, `EXPLAIN`, and streamed read hold the same ordered
+  generation locks used by schema/reset work, so a ready generation cannot be
+  replaced between validation and execution.
 
 ### 5. Good/Base/Bad Cases
 

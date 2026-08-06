@@ -1,6 +1,7 @@
 """自然语言查询应用 seam 的行为测试。"""
 
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import cast
 from unittest.mock import AsyncMock, Mock
@@ -313,6 +314,12 @@ class _Ready:
         del target_tables
         return True
 
+    @asynccontextmanager
+    async def hold(self, target_tables: tuple[str, ...]):
+        """模拟执行期间持有同步代次。"""
+        del target_tables
+        yield
+
 
 class _Executor:
     """从专用只读 seam 返回两个批次。"""
@@ -388,7 +395,8 @@ async def test_stream_explains_checks_readiness_and_keeps_all_batches() -> None:
     assert [event.kind for event in events] == ["metadata", "rows", "rows", "complete"]
     assert [row for event in events for row in event.rows] == [[1], [2], [3]]
     assert events[-1].row_count == 3
-    assert executor.explained == 1
+    # 规划预检后，在 generation lock 内再次预检以消除就绪检查竞态。
+    assert executor.explained == 2
     assert executor.executed == 1
     assert planner.repairs == 0
 

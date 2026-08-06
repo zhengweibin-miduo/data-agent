@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager
 from time import perf_counter
 
 from loguru import logger
@@ -102,6 +103,7 @@ class QueryApplication:
                 retryable=True,
                 http_status=409,
             )
+        generation_guard: AbstractAsyncContextManager[None] | None = None
         try:
             # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
             user_messages = [
@@ -154,6 +156,15 @@ class QueryApplication:
                 await self._complete(request, DATA_PREPARING_MESSAGE)
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                 return
+            # 最终复核与完整结果读取共享同步 generation lock，避免 readiness
+            # 通过后目标表切入重建并暴露空集或部分代次。
+            generation_guard = self._readiness.hold(validated.target_tables)
+            await generation_guard.__aenter__()
+            if not await self._readiness.ready(validated.target_tables):
+                await self._complete(request, DATA_PREPARING_MESSAGE)
+                yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
+                return
+            await self._executor.explain(validated)
             # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
             started_at = perf_counter()
             row_count = 0
@@ -220,6 +231,8 @@ class QueryApplication:
                 kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
             )
         finally:
+            if generation_guard is not None:
+                await generation_guard.__aexit__(None, None, None)
             try:
                 await self._conversations.abandon_turn(
                     request.user_id,
