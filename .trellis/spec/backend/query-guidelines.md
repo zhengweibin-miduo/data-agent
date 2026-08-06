@@ -68,6 +68,16 @@
 - Every filter operator requires verbatim user evidence. `WHERE` and `HAVING`
   fail closed unless their complete trees consist only of supported atoms
   joined by `AND`; detail projections exactly match bound result fields.
+- Unsupported negative operator phrases fail closed before planning. Scalar and
+  grouped result projections must be the exact trusted aggregate, dimension,
+  and time-bucket expressions; merely containing a trusted subtree is not
+  sufficient. Scoped Meta retrieval must not apply the global display Top-K
+  when its result is used to prove that a binding is unique.
+- Query execution emits a structured `started` audit event before invoking the
+  read-only executor and a structured terminal event independently of
+  Conversation completion. Audit identity includes user, conversation, turn,
+  SQL hash, table IDs, duration, row count, and outcome, but no parameters or
+  business rows.
 - `EXPLAIN` semantic rejection -> one repair; timeout, connection, permission,
   readiness, or execution failures -> no model repair.
 - Any target table not ready -> exactly `数据准备中，请稍后重试`.

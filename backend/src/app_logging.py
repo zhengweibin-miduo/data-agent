@@ -60,6 +60,13 @@ _APPLICATION_FIELDS = frozenset(
         "stage",
         "retryable",
         "worker_role",
+        "user_id",
+        "conversation_uid",
+        "turn_uid",
+        "sql_hash",
+        "table_ids",
+        "row_count",
+        "outcome",
     }
 )
 _MAX_STACK_TRACE_CHARACTERS = 16_384
@@ -77,6 +84,14 @@ _CONTEXT_FIELDS = frozenset(
         "revision",
         "worker_role",
         "error_type",
+        "user_id",
+        "conversation_uid",
+        "turn_uid",
+        "sql_hash",
+        "table_ids",
+        "row_count",
+        "outcome",
+        "duration_ms",
     }
 )
 _CONTEXT_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -93,13 +108,18 @@ _LOG_CONTEXT: ContextVar[Mapping[str, object]] = ContextVar(
 ContextFactory = Callable[..., Mapping[str, object]]
 
 
+def structured_log(level: str, message: str, **fields: object) -> None:
+    """通过统一白名单把业务事件写成扁平结构化日志。"""
+    with logging_context(**fields):
+        logger.log(level, message)
+
+
 def _safe_context(context: Mapping[str, object]) -> dict[str, object]:
     """只保留日志基础设施批准的有界上下文字段。"""
     return {
         key: value
         for key, value in context.items()
         if key in _CONTEXT_FIELDS
-        and not isinstance(value, list)
         and _json_field_value(value) is not None
     }
 

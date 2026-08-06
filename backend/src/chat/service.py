@@ -93,7 +93,7 @@ class ChatService:
                         "entrypoint": "chat",
                         "content": request.content,
                         "source": request.ddl_context.source,
-                        "schema_fingerprint": schema.schema_fingerprint,
+                        "ddl_hash": schema.ddl_hash,
                     },
                     ensure_ascii=False,
                     sort_keys=True,

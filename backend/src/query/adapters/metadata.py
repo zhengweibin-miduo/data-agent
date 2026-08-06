@@ -102,7 +102,7 @@ class QueryMetadataAdapter:
                 ("time", intent.time_column_quote, {MetadataObjectKind.COLUMN})
             )
         slots.extend(
-            ("dimension", quote, {MetadataObjectKind.TABLE, MetadataObjectKind.COLUMN})
+            ("dimension", quote, {MetadataObjectKind.COLUMN})
             for quote in intent.dimension_quotes
         )
         slots.extend(
@@ -127,6 +127,20 @@ class QueryMetadataAdapter:
                 for candidate in candidates
                 if candidate.kind in kinds and self._matches(quote, candidate)
             ]
+            # 物理字段同名是无需依赖截断语义召回即可证明的歧义。
+            if slot != "measure":
+                exact_column_ids = {
+                    column.id
+                    for table in schema.tables
+                    for column in table.columns
+                    if column.name.casefold() == quote.casefold().strip()
+                }
+                if len(exact_column_ids) > 1:
+                    matches = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.object_id in exact_column_ids
+                    ]
             if len(matches) != 1:
                 names = "、".join(candidate.name for candidate in matches[:3])
                 suffix = f"，候选为：{names}" if names else ""

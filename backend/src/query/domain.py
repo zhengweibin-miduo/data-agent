@@ -202,8 +202,13 @@ class QueryIntent(ContractModel):
             "in": ("属于", "在", "之一", "in"),
             "contains": ("包含", "含有", "like"),
         }
+        unsupported_negations = ("不包含", "不含", "不在", "not in", "not like")
         for item in [*self.filters, *([self.time_filter] if self.time_filter else [])]:
             quote = item.operator_quote
+            if quote is not None and any(
+                marker in quote.casefold() for marker in unsupported_negations
+            ):
+                raise ValueError("过滤操作包含尚未建模的否定语义")
             marker_matches = sorted(
                 (
                     (len(marker), operator)
@@ -283,6 +288,23 @@ class QueryIntent(ContractModel):
             )
         ):
             raise ValueError("时间粒度必须携带与枚举一致的用户原文证据")
+        shape_is_consistent = {
+            QueryType.DETAIL: self.aggregation is None and self.grain is None,
+            QueryType.AGGREGATE: (
+                self.aggregation is not None
+                and not self.dimension_quotes
+                and not self.sorts
+                and self.limit is None
+                and self.grain is None
+            ),
+            QueryType.RANKING: self.limit is not None and bool(self.sorts),
+            QueryType.TREND: self.aggregation is not None and self.grain is not None,
+            QueryType.COMPARISON: (
+                self.aggregation is not None and bool(self.dimension_quotes)
+            ),
+        }[self.query_type]
+        if not shape_is_consistent:
+            raise ValueError("查询形态必须与用户证据槽位确定性一致")
 
 
 QueryParameter = str | int | float | bool | None
@@ -868,9 +890,11 @@ def _validate_query_sync(
         return _failed("query_shape_mismatch")
     if intent.query_type == QueryType.AGGREGATE and (
         len(root.expressions) != 1
-        or not any(
-            aggregate.find_ancestor(exp.Select) is root
-            for aggregate in root.expressions[0].find_all(exp.AggFunc)
+        or not isinstance(
+            root.expressions[0].this
+            if isinstance(root.expressions[0], exp.Alias)
+            else root.expressions[0],
+            exp.AggFunc,
         )
     ):
         return _failed("projection_mismatch")
@@ -923,9 +947,20 @@ def _validate_query_sync(
             else set()
         )
         if required_measure_columns and (
-            len(operands) != 1 or operands != required_measure_columns
+            len(operands) != 1 or not operands.issubset(required_measure_columns)
         ):
             return _failed("aggregation_operand_mismatch")
+    actual_aggregate_operands = [
+        _column_id(node.this, columns_by_coordinate)
+        for node in top_level_aggregates
+        if not (isinstance(node, exp.Count) and node.find(exp.Star) is not None)
+        and isinstance(node.this, exp.Column)
+    ]
+    if top_level_aggregates and required_measure_columns and (
+        len(actual_aggregate_operands) != len(required_measure_columns)
+        or set(actual_aggregate_operands) != required_measure_columns
+    ):
+        return _failed("aggregation_operand_mismatch")
 
     projection_aliases = {
         projection.alias: projection.this
@@ -995,28 +1030,41 @@ def _validate_query_sync(
     if intent.grain is not None:
         time_column_id = context.bindings.get(intent.time_column_quote or "")
 
-        def bucket_matches(expression: exp.Expression, marker: str) -> bool:
-            columns = list(expression.find_all(exp.Column))
+        def bucket_matches(expression: exp.Expression, grain: str) -> bool:
+            operand: exp.Expression | None = None
+            if grain == "day" and isinstance(expression, exp.TsOrDsToDate):
+                operand = expression.this
+            elif (
+                grain == "week"
+                and isinstance(expression, exp.Anonymous)
+                and expression.name.upper() == "YEARWEEK"
+                and len(expression.expressions) == 1
+            ):
+                operand = expression.expressions[0]
+            elif (
+                grain == "month"
+                and isinstance(expression, exp.TimeToStr)
+                and isinstance(expression.args.get("format"), exp.Literal)
+                and "%Y-%m" in str(expression.args["format"].this)
+            ):
+                operand = expression.this
+            elif grain == "quarter" and isinstance(expression, exp.Quarter):
+                operand = expression.this
+            elif grain == "year" and isinstance(expression, exp.Year):
+                operand = expression.this
+                if isinstance(operand, exp.TsOrDsToDate):
+                    operand = operand.this
             return (
-                marker in expression.sql(dialect="mysql").upper()
-                and len(columns) == 1
-                and _column_id(columns[0], columns_by_coordinate) == time_column_id
+                isinstance(operand, exp.Column)
+                and _column_id(operand, columns_by_coordinate) == time_column_id
             )
-
-        markers = {
-            "day": "DATE(",
-            "week": "YEARWEEK(",
-            "month": "%Y-%M",
-            "quarter": "QUARTER(",
-            "year": "YEAR(",
-        }
         buckets = [
             item
             for item in group_expressions
-            if bucket_matches(item, markers[intent.grain])
+            if bucket_matches(item, intent.grain)
         ]
         quarter_years = [
-            item for item in group_expressions if bucket_matches(item, "YEAR(")
+            item for item in group_expressions if bucket_matches(item, "year")
         ]
         bucket_count = 2 if intent.grain == "quarter" else 1
         bucket_ids = {id(item) for item in (*buckets, *quarter_years)}
@@ -1036,6 +1084,24 @@ def _validate_query_sync(
             or business_group_ids != dimension_ids
         ):
             return _failed("time_grain_mismatch")
+    if intent.query_type in (QueryType.COMPARISON, QueryType.RANKING, QueryType.TREND):
+        allowed_projection_sql = {
+            expression.sql(dialect="mysql") for expression in group_expressions
+        } | {aggregate.sql(dialect="mysql") for aggregate in top_level_aggregates}
+        if intent.query_type == QueryType.RANKING and not group_expressions:
+            allowed_projection_sql.update(
+                projection.sql(dialect="mysql")
+                for projection in root.expressions
+                if isinstance(projection, exp.Column)
+                and _column_id(projection, columns_by_coordinate)
+                in required_column_ids
+            )
+        for projection in root.expressions:
+            expression = (
+                projection.this if isinstance(projection, exp.Alias) else projection
+            )
+            if expression.sql(dialect="mysql") not in allowed_projection_sql:
+                return _failed("projection_mismatch")
     validated = ValidatedQuery(
         sql=draft.sql,
         params=dict(draft.params),

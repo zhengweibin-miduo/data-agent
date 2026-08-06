@@ -859,3 +859,105 @@ def test_intent_requires_sort_and_grain_evidence() -> None:
             grain="day",
             grain_quote="按月",
         ).validate_evidence(["按月查看日期大于等于2025年"])
+
+
+def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:
+    """未建模否定词和与槽位矛盾的结果形态必须失败关闭。"""
+    with pytest.raises(ValueError, match="否定语义"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="contains",
+                    operator_quote="不包含",
+                    value_quotes=["华东"],
+                )
+            ],
+        ).validate_evidence(["地区不包含华东"])
+    with pytest.raises(ValueError, match="查询形态"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="max",
+            aggregation_quote="最高",
+            measure_quotes=["金额"],
+            limit=10,
+            limit_quote="10笔",
+        ).validate_evidence(["列出金额最高的10笔订单"])
+
+
+async def test_aggregate_and_grouped_projections_reject_outer_transformations() -> None:
+    """可信聚合和维度不能在顶层投影中再被算术篡改。"""
+    aggregate_context = _context().model_copy(
+        update={"bindings": {"金额": "column-amount"}}
+    )
+    aggregate = await validate_query(
+        _draft("SELECT SUM(o.amount) * 0 FROM dw.orders o"),
+        aggregate_context,
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+    assert aggregate.issues[0].code == "projection_mismatch"
+
+    comparison = await validate_query(
+        QueryDraft(
+            sql="SELECT o.id * 0, SUM(o.amount) FROM dw.orders o GROUP BY o.id",
+            table_ids=["table-orders"],
+            column_ids=["column-id", "column-amount"],
+        ),
+        aggregate_context.model_copy(
+            update={"bindings": {"订单": "column-id", "金额": "column-amount"}}
+        ),
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+            dimension_quotes=["订单"],
+        ),
+        dw_database="dw",
+    )
+    assert comparison.issues[0].code == "projection_mismatch"
+
+
+async def test_time_bucket_requires_exact_ast_shape() -> None:
+    """时间桶不能只因子树包含正确函数和字段就被接受。"""
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT DATE(o.created_at) * 0, SUM(o.amount) FROM dw.orders o "
+                "WHERE o.created_at >= :start GROUP BY DATE(o.created_at) * 0"
+            ),
+            params={"start": "2025-01-01"},
+            table_ids=["table-orders"],
+            column_ids=["column-created-at", "column-amount"],
+        ),
+        _context().model_copy(
+            update={
+                "bindings": {"金额": "column-amount", "日期": "column-created-at"}
+            }
+        ),
+        QueryIntent(
+            query_type=QueryType.TREND,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+            time_quote="2025年后",
+            time_column_quote="日期",
+            time_filter=FilterIntent(
+                column_quote="日期",
+                operator="gte",
+                operator_quote="大于等于",
+                value_quotes=["2025-01-01"],
+            ),
+            grain="day",
+            grain_quote="按日",
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "time_grain_mismatch"

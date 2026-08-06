@@ -83,15 +83,22 @@ class MetadataSearchService:
                 query, kinds, self._search_limit
             )
         else:
+            # 作用域内绑定必须看到完整候选集合，不能用全局展示 Top-K 证明唯一性。
+            scope_limit = max(
+                self._search_limit,
+                len(table_ids or set()) + 2 * len(column_ids or set()),
+            )
             identities = await self._semantic_index.search(
                 query,
                 kinds,
-                self._search_limit,
+                scope_limit,
                 table_ids=table_ids,
                 column_ids=column_ids,
             )
         # 步骤二：权威 reader 剔除删除、pending 或指纹过期的对象。
         candidates = await self._reader.authoritative_candidates(identities)
+        if table_ids is not None or column_ids is not None:
+            return candidates
         return candidates[:bounded_limit]
 
     async def search_values(

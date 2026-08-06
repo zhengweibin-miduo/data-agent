@@ -8,6 +8,7 @@ from time import perf_counter
 from loguru import logger
 
 from answer_readiness.service import DATA_PREPARING_MESSAGE
+from app_logging import structured_log
 from conversation.models import MessageRole
 from ddl_metadata.parsing import parse_ddl
 from errors import DataAgentError
@@ -156,6 +157,21 @@ class QueryApplication:
             # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
             started_at = perf_counter()
             row_count = 0
+            sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
+            audit_identity = {
+                "user_id": request.user_id,
+                "conversation_uid": request.conversation_uid,
+                "turn_uid": request.turn_uid,
+                "sql_hash": sql_hash,
+                "table_ids": list(validated.table_ids),
+            }
+            structured_log(
+                "INFO",
+                "只读查询执行已开始",
+                **audit_identity,
+                outcome="started",
+                row_count=0,
+            )
             stream = self._executor.execute(validated)
             try:
                 try:
@@ -177,39 +193,29 @@ class QueryApplication:
                     yield QueryEvent(kind="rows", rows=batch.rows)
             except BaseException as error:
                 elapsed_ms = round((perf_counter() - started_at) * 1000)
-                sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
-                logger.warning(
-                    "只读查询执行未完成，安全审计：user_id={} conversation_uid={} "
-                    "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
-                    "outcome=failed error_type={}",
-                    request.user_id,
-                    request.conversation_uid,
-                    request.turn_uid,
-                    sql_hash,
-                    ",".join(validated.table_ids),
-                    elapsed_ms,
-                    row_count,
-                    type(error).__name__,
+                structured_log(
+                    "WARNING",
+                    "只读查询执行未完成",
+                    **audit_identity,
+                    outcome="failed",
+                    row_count=row_count,
+                    duration_ms=elapsed_ms,
+                    error_type=type(error).__name__,
                 )
                 raise
             finally:
                 await stream.aclose()
             elapsed_ms = round((perf_counter() - started_at) * 1000)
             summary = f"查询完成，共返回 {row_count} 行。"
-            await self._complete(request, summary)
-            sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
-            logger.info(
-                "只读查询执行完成，安全审计：user_id={} conversation_uid={} "
-                "turn_uid={} sql_hash={} table_ids={} elapsed_ms={} row_count={} "
-                "outcome=success",
-                request.user_id,
-                request.conversation_uid,
-                request.turn_uid,
-                sql_hash,
-                ",".join(validated.table_ids),
-                elapsed_ms,
-                row_count,
+            structured_log(
+                "INFO",
+                "只读查询执行完成",
+                **audit_identity,
+                outcome="success",
+                row_count=row_count,
+                duration_ms=elapsed_ms,
             )
+            await self._complete(request, summary)
             yield QueryEvent(
                 kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
             )
