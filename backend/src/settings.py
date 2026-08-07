@@ -15,7 +15,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 from errors import DataAgentError
 
@@ -581,8 +581,25 @@ class AppSettings(SettingsModel):
             query_url.database.casefold() != self.data_sync.dw_database.casefold()
         ):
             raise ValueError("query.read_url 必须连接 data_sync.dw_database")
-        if query_url.username == make_url(self.mysql.url).username:
+        mysql_url = make_url(self.mysql.url)
+        if query_url.username == mysql_url.username:
             raise ValueError("query.read_url 必须使用独立于应用写连接的数据库账号")
+
+        def mysql_instance_identity(url: URL | str) -> tuple[str, int, str | None]:
+            parsed = make_url(url)
+            query = parsed.normalized_query
+            socket_values = query.get("unix_socket", ())
+            socket = socket_values[0] if socket_values else None
+            return (
+                (parsed.host or "localhost").casefold(),
+                parsed.port or 3306,
+                socket,
+            )
+
+        if mysql_instance_identity(query_url) != mysql_instance_identity(mysql_url):
+            raise ValueError(
+                "query.read_url 必须与 mysql.url 连接同一 MySQL 实例"
+            )
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")

@@ -161,6 +161,19 @@ async def test_swapped_detail_aliases_fail_closed() -> None:
     assert result.issues[0].code == "projection_alias_mismatch"
 
 
+def test_aggregate_question_is_not_mistaken_for_equality_filter() -> None:
+    """“是多少”疑问结构不得被完整性门禁误判为等值过滤。"""
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="合计",
+        aggregation="sum",
+        aggregation_quote="合计",
+        measure_quotes=["销售额"],
+    )
+
+    assert intent.validate_evidence(["销售额合计是多少"]) is None
+
+
 def test_explicit_equality_cannot_be_omitted_from_intent() -> None:
     """“是”表达的等值条件必须进入过滤槽位。"""
     with pytest.raises(ValueError, match="过滤条件"):

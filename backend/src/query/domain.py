@@ -395,7 +395,7 @@ class QueryIntent(ContractModel):
                     "包含",
                 )
             )
-            or re.search(r"\S+(?:是|为|属于)\S+", user_text)
+            or re.search(r"\S+(?:是|为|属于)(?!(?:多少|什么|否))\S+", user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
         if (

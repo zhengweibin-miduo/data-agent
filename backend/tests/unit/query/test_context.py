@@ -9,7 +9,7 @@ from ddl_metadata.meta_projection.models import (
 from models.physical import PhysicalColumn, PhysicalSchema, PhysicalTable
 from query.adapters.metadata import QueryMetadataAdapter
 from query.application.contracts import QueryClarification
-from query.domain import QueryIntent, QueryType
+from query.domain import FilterIntent, QueryIntent, QueryType
 
 
 class _Search:
@@ -30,7 +30,7 @@ class _Search:
         """返回预置的权威候选。"""
         del query
         assert table_ids == {"table-orders"}
-        assert column_ids == {"column-amount", "column-region"}
+        assert column_ids == {"column-amount", "column-region", "column-paid-at"}
         self.calls.append("metadata")
         return self.candidates
 
@@ -68,7 +68,7 @@ class _Search:
             source == "erp"
             and schema_fingerprint == "schema"
             and table_ids == {"table-orders"}
-            and column_ids == {"column-amount", "column-region"}
+            and column_ids == {"column-amount", "column-region", "column-paid-at"}
         )
 
 
@@ -76,7 +76,10 @@ def _schema() -> PhysicalSchema:
     """构造当前来源的表字段 allowlist。"""
     return PhysicalSchema(
         source="erp",
-        canonical_ddl="CREATE TABLE orders (amount DECIMAL(10,2), region VARCHAR(20))",
+        canonical_ddl=(
+            "CREATE TABLE orders (amount DECIMAL(10,2), region VARCHAR(20), "
+            "paid_at DATE)"
+        ),
         ddl_hash="ddl",
         schema_fingerprint="schema",
         tables=[
@@ -90,6 +93,9 @@ def _schema() -> PhysicalSchema:
                     ),
                     PhysicalColumn(
                         id="column-region", name="region", data_type="VARCHAR(20)"
+                    ),
+                    PhysicalColumn(
+                        id="column-paid-at", name="paid_at", data_type="DATE"
                     ),
                 ],
             )
@@ -256,3 +262,38 @@ async def test_context_marks_verified_schema_relationships_authoritative() -> No
     )
     assert not isinstance(result, QueryClarification)
     assert result.relationships_authoritative is True
+
+
+async def test_time_filter_column_is_bound_independently_from_bucket_column() -> None:
+    """时间过滤字段与分桶字段不同时也必须获得独立权威绑定。"""
+    search = _Search(
+        [
+            _candidate(MetadataObjectKind.COLUMN, "column-amount", "销售额"),
+            _candidate(MetadataObjectKind.COLUMN, "column-region", "下单日期"),
+            _candidate(MetadataObjectKind.COLUMN, "column-paid-at", "付款日期"),
+        ]
+    )
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        measure_quotes=["销售额"],
+        time_column_quote="下单日期",
+        grain="day",
+        grain_quote="按日",
+        aggregation="sum",
+        aggregation_quote="销售额总和",
+        time_filter=FilterIntent(
+            column_quote="付款日期",
+            operator="gte",
+            operator_quote="大于等于",
+            value_quotes=["2025-01-01"],
+        ),
+    )
+
+    result = await QueryMetadataAdapter(search).build_context(
+        "按下单日期展示销售额趋势，只统计付款日期大于等于 2025-01-01 的订单",
+        intent,
+        _schema(),
+    )
+
+    assert not isinstance(result, QueryClarification)
+    assert result.bindings["付款日期"] == "column-paid-at"

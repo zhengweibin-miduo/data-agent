@@ -143,6 +143,14 @@ class QueryMetadataAdapter:
             ("filter", item.column_quote, {MetadataObjectKind.COLUMN})
             for item in intent.filters
         )
+        if intent.time_filter is not None:
+            slots.append(
+                (
+                    "filter",
+                    intent.time_filter.column_quote,
+                    {MetadataObjectKind.COLUMN},
+                )
+            )
         slots.extend(
             ("sort", item.quote, {MetadataObjectKind.METRIC, MetadataObjectKind.COLUMN})
             for item in intent.sorts
