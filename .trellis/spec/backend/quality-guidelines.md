@@ -314,8 +314,9 @@ remaining active unresolved thread even if it was delegated previously.
 - Resolved threads are skipped. A thread with any existing reply beginning
   with `无法安全完成：` is skipped without another reply or resolve, regardless
   of the new task's outcome. Blocked replies never resolve a thread.
-- Fixed and no-change outcomes read the thread again immediately before their
-  final resolve; a concurrently published blocked reply keeps it unresolved.
+- Every outcome reads the thread again immediately before publishing; fixed and
+  no-change outcomes also read it immediately before their final resolve. A
+  concurrently published blocked reply prevents both the stale reply and resolve.
 
 ### 4. Validation & Error Matrix
 
@@ -324,6 +325,8 @@ remaining active unresolved thread even if it was delegated previously.
 - Thread is already resolved -> return `skipped_resolved`.
 - Thread already contains a blocked reply -> return `skipped_blocked` without
   calling the reply or resolve mutation.
+- Thread becomes blocked after the initial read but before a reply -> return
+  `skipped_blocked` without publishing the stale outcome.
 - Thread becomes blocked before a fixed/no-change resolve -> return
   `skipped_blocked` and leave it unresolved.
 - Matching marker exists on an unresolved fixed/no-change thread -> resolve
@@ -347,8 +350,8 @@ remaining active unresolved thread even if it was delegated previously.
   formatting with real newlines, forbidden content, fixed SHA validation,
   resolved-thread skipping, marker idempotency, reply-before-resolve ordering,
   reply failure, remote-head mismatch, existing blocked replies for all three
-  outcomes, paginated blocked replies, and a blocked reply racing the final
-  fixed/no-change resolve.
+  outcomes, paginated blocked replies, a blocked reply racing publication, and
+  a blocked reply racing the final fixed/no-change resolve.
 - The delegation script self-check proves its prompt requires the CLI for every
   thread outcome and forbids direct reply/resolve calls.
 - For a stale-PR recovery, record both the publisher checkout SHA and the target

@@ -332,6 +332,13 @@ function publishReply(rawInput, adapter = createGhAdapter()) {
         );
       }
     }
+    const latestThread = adapter.getThread(input.threadId);
+    if (latestThread.isResolved) {
+      return { status: "skipped_resolved", threadId: input.threadId };
+    }
+    if (hasBlockedReply(latestThread)) {
+      return { status: "skipped_blocked", threadId: input.threadId };
+    }
     adapter.addReply(input.threadId, body);
   }
 
@@ -463,7 +470,7 @@ function selfTest() {
   assert.equal(fixedResult.status, "published_and_resolved");
   assert.deepEqual(
     fixed.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "addReply", "getCurrentPr", "getThread", "resolveThread"],
+    ["getThread", "getCurrentPr", "getThread", "addReply", "getCurrentPr", "getThread", "resolveThread"],
   );
 
   const noChange = fakeAdapter();
@@ -474,7 +481,7 @@ function selfTest() {
   assert.equal(noChangeResult.status, "published_and_resolved");
   assert.deepEqual(
     noChange.calls.map((call) => call[0]),
-    ["getThread", "addReply", "getThread", "resolveThread"],
+    ["getThread", "getThread", "addReply", "getThread", "resolveThread"],
   );
 
   const blocked = fakeAdapter();
@@ -485,7 +492,7 @@ function selfTest() {
   assert.equal(blockedResult.status, "published_blocked");
   assert.deepEqual(
     blocked.calls.map((call) => call[0]),
-    ["getThread", "addReply"],
+    ["getThread", "getThread", "addReply"],
   );
 
   const existingBlockedComment = { body: "无法安全完成：需要架构决策。" };
@@ -540,9 +547,10 @@ function selfTest() {
     });
     assert.equal(publishReply(lateInput, lateBlocked).status, "skipped_blocked");
     assert.equal(
-      lateBlocked.calls.some(([operation]) => operation === "resolveThread"),
+      lateBlocked.calls.some(([operation]) =>
+        operation === "addReply" || operation === "resolveThread"),
       false,
-      `${lateInput.outcome} must keep a concurrently blocked thread unresolved`,
+      `${lateInput.outcome} must not mutate a concurrently blocked thread`,
     );
   }
 
@@ -580,7 +588,7 @@ function selfTest() {
   assert.throws(() => publishReply(fixedInput(), failedResolve), /resolve failed/);
   assert.deepEqual(
     failedResolve.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "addReply", "getCurrentPr", "getThread", "resolveThread"],
+    ["getThread", "getCurrentPr", "getThread", "addReply", "getCurrentPr", "getThread", "resolveThread"],
   );
 
   const changedHeadAfterReply = fakeAdapter({
