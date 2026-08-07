@@ -657,11 +657,15 @@ async function selfTest() {
               isResolved: false,
               isOutdated: false,
               comments: {
-                nodes: [
-                  { body: "review finding" },
-                  { body: "无法安全完成：扫描后、委派前新增的阻塞原因。" },
-                ],
-                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: variables.cursor
+                  ? [{ body: "无法安全完成：扫描后、委派前新增的第 101 条阻塞原因。" }]
+                  : [
+                      { body: "review finding" },
+                      ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                    ],
+                pageInfo: variables.cursor
+                  ? { hasNextPage: false, endCursor: null }
+                  : { hasNextPage: true, endCursor: "manual-race-page-2" },
               },
             },
           };
