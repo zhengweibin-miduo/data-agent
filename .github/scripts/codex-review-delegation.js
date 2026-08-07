@@ -209,9 +209,12 @@ async function scanUnresolvedCodexThreads(github, owner, repo, pullNumber, revie
         continue;
       }
       const summary = { id: thread.id, url: firstComment.url };
+      if (await hasBlockedReply(github, thread)) {
+        continue;
+      }
       if (thread.isOutdated) {
         outdated.push(summary);
-      } else if (!(await hasBlockedReply(github, thread))) {
+      } else {
         active.push(summary);
       }
     }
@@ -570,6 +573,19 @@ async function selfTest() {
         resolvedThreadIds.push(variables.threadId);
         return { resolveReviewThread: { thread: { isResolved: true } } };
       }
+      if (
+        query.includes("node(id:$threadId)") &&
+        variables.threadId === "PRRT_BLOCKED_PAGED_OUTDATED"
+      ) {
+        return {
+          node: {
+            comments: {
+              nodes: [{ body: "无法安全完成：第 101 条回复中的阻塞原因。" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        };
+      }
       return {
         repository: {
           pullRequest: {
@@ -652,6 +668,42 @@ async function selfTest() {
                 },
               },
               {
+                id: "PRRT_BLOCKED_OUTDATED",
+                isResolved: false,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_outdated",
+                      author: { login: "codex-reviewer" },
+                    },
+                    {
+                      body: "无法安全完成：需要产品决策。",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_outdated_reply",
+                      author: { login: "codex" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_BLOCKED_PAGED_OUTDATED",
+                isResolved: false,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_paged_outdated",
+                      author: { login: "codex-reviewer" },
+                    },
+                    ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                  ],
+                  pageInfo: { hasNextPage: true, endCursor: "blocked-page-2" },
+                },
+              },
+              {
                 id: "PRRT_OTHER_REVIEWER",
                 isResolved: false,
                 comments: {
@@ -731,6 +783,8 @@ async function selfTest() {
   assert.doesNotMatch(manualBodies[0], /PRRT_RESOLVED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED_OUTDATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED_PAGED_OUTDATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OTHER_REVIEWER/);
 
   manualComments.push({ body: manualBodies[0], user: { login: "trusted-user" } });

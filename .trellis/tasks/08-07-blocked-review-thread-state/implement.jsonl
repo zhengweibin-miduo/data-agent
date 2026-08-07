@@ -1,0 +1,3 @@
+{"file":"code_review.md","reason":"仓库唯一审查处理与 blocked 保持 unresolved 规范"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"审查委派、过期清理和结构化发布器契约"}
+{"file":".trellis/tasks/08-07-blocked-review-thread-state/research/state-flow.md","reason":"两个 resolve 路径、竞态和测试 seam 的本轮取证"}

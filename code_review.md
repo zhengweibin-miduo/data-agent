@@ -55,6 +55,11 @@ Codex 必须读取对应代码、PR diff 和 thread 上下文，自行判断是�
 - 需要修复时，完成最小修复和验证，推送到原 PR 分支，在原 thread 回复依据后 resolve。
 - 不需要修复时，在原 thread 说明依据后 resolve。
 - 无法安全完成修复或验证时，说明阻塞原因并保持 unresolved。
+- 任一后续回复以 `无法安全完成：` 开头后，该 thread 即进入终态 blocked：即使
+  后续变为 outdated 也必须保持 unresolved，不再自动 resolve 或重新委派。
+- 结构化发布器发现既有 blocked 回复时，任何晚到的 fixed、no_change 或 blocked
+  任务都不得继续回复或 resolve；fixed/no_change 在最终 resolve 前必须重新读取
+  thread，避免并发 blocked 回复被覆盖。
 - 回复正文禁止出现 `@codex` 字样，避免触发重新评审造成循环。
 - 自动委派任务必须通过
   `.github/scripts/codex-review-thread-reply.js` 发布原 thread 回复并变更

@@ -1,0 +1,3 @@
+{"file":"code_review.md","reason":"核对 blocked 状态不被后续任务覆盖"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核对 resolver、publisher 与 required tests"}
+{"file":".trellis/tasks/08-07-blocked-review-thread-state/research/state-flow.md","reason":"复核已确认根因和回归矩阵"}
