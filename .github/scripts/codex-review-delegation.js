@@ -260,6 +260,39 @@ async function resolveReviewThreads(github, core, threads) {
   }
 }
 
+async function refreshActiveReviewThreads(github, core, threads) {
+  const active = [];
+  for (const thread of threads) {
+    const result = await github.graphql(
+      `query($threadId:ID!) {
+        node(id:$threadId) {
+          ... on PullRequestReviewThread {
+            id
+            isResolved
+            isOutdated
+            comments(first:100) {
+              nodes { body }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { threadId: thread.id },
+    );
+    const currentThread = result.node;
+    if (!currentThread || currentThread.isResolved || currentThread.isOutdated) {
+      core.info(`Skipped inactive review thread ${thread.id} before manual delegation.`);
+      continue;
+    }
+    if (await hasBlockedReply(github, currentThread)) {
+      core.info(`Skipped blocked review thread ${thread.id} before manual delegation.`);
+      continue;
+    }
+    active.push(thread);
+  }
+  return active;
+}
+
 async function issueComments(github, owner, repo, pullNumber) {
   return github.paginate(github.rest.issues.listComments, {
     owner,
@@ -372,11 +405,17 @@ async function delegateManualReview(options) {
     throw new Error("Pull request head changed while preparing manual delegation.");
   }
 
+  const currentActive = await refreshActiveReviewThreads(github, core, active);
+  if (currentActive.length === 0) {
+    core.info("This pull request no longer has active unresolved Codex threads.");
+    return;
+  }
+
   await github.rest.issues.createComment({
     owner,
     repo,
     issue_number: pullNumber,
-    body: manualDelegationBody(pull.head.sha, pull.head.ref, active),
+    body: manualDelegationBody(pull.head.sha, pull.head.ref, currentActive),
   });
 }
 
@@ -584,6 +623,7 @@ async function selfTest() {
 
   const manualBodies = [];
   const resolvedThreadIds = [];
+  let manualRaceBlocked = false;
   const manualComments = [
     {
       body: `${marker(41, "older-sha")}\n- https://example.test/old (PRRT_ALREADY_DELEGATED)`,
@@ -610,6 +650,22 @@ async function selfTest() {
         };
       }
       if (query.includes("node(id:$threadId)")) {
+        if (variables.threadId === "PRRT_MANUAL" && manualRaceBlocked) {
+          return {
+            node: {
+              id: variables.threadId,
+              isResolved: false,
+              isOutdated: false,
+              comments: {
+                nodes: [
+                  { body: "review finding" },
+                  { body: "无法安全完成：扫描后、委派前新增的阻塞原因。" },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          };
+        }
         const racedBlockerPage =
           variables.threadId === "PRRT_OUTDATED_RACE" && variables.cursor;
         return {
@@ -866,6 +922,24 @@ async function selfTest() {
   );
   assert.match(manualBodies[1], /PRRT_ALREADY_DELEGATED/);
 
+  manualRaceBlocked = true;
+  await delegateManualReview({
+    github: manualGithub,
+    context: manualContext,
+    core,
+    prNumber: 7,
+    prAuthors: "allowed-author",
+    reviewBots: "codex-reviewer[bot]",
+  });
+  assert.equal(manualBodies.length, 3, "remaining active threads must still be delegated");
+  assert.doesNotMatch(
+    manualBodies[2],
+    /PRRT_MANUAL/,
+    "a thread blocked after scanning must be excluded before comment creation",
+  );
+  assert.match(manualBodies[2], /PRRT_ALREADY_DELEGATED/);
+  manualRaceBlocked = false;
+
   manualComments.length = 0;
   let pullReadCount = 0;
   manualGithub.rest.pulls.get = async () => ({
@@ -890,7 +964,7 @@ async function selfTest() {
     }),
     /Pull request head changed while preparing manual delegation/,
   );
-  assert.equal(manualBodies.length, 2, "a stale manual delegation must not be created");
+  assert.equal(manualBodies.length, 3, "a stale manual delegation must not be created");
 
   manualGithub.rest.pulls.get = async () => ({
     data: {
