@@ -239,14 +239,15 @@ class ConversationRepository:
                         agent_conversation.c.active_turn_uid.is_(None),
                         agent_conversation.c.active_turn_uid == turn_uid,
                         and_(
-                            agent_conversation.c.updated_at
+                            func.coalesce(
+                                agent_conversation.c.turn_abandoned_at,
+                                agent_conversation.c.updated_at,
+                            )
                             <= func.timestampadd(
                                 text("SECOND"),
                                 -app_config.conversation.turn_lease_seconds,
                                 func.now(),
                             ),
-                            func.year(agent_conversation.c.updated_at)
-                            != _ABANDONED_TURN_YEAR,
                         ),
                     ),
                 )
@@ -278,7 +279,11 @@ class ConversationRepository:
                 agent_conversation.c.id == conversation_id,
                 agent_conversation.c.user_id == user_id,
             )
-            .values(active_turn_uid=turn_uid, updated_at=func.now())
+            .values(
+                active_turn_uid=turn_uid,
+                turn_abandoned_at=None,
+                updated_at=func.now(),
+            )
         )
 
     async def _turn_lease_expired(self, conversation_id: int, user_id: str) -> bool:
@@ -547,7 +552,11 @@ class ConversationRepository:
                 agent_conversation.c.user_id == user_id,
                 agent_conversation.c.active_turn_uid == turn_uid,
             )
-            .values(active_turn_uid=turn_uid, updated_at=_ABANDONED_TURN_TIMESTAMP)
+            .values(
+                active_turn_uid=turn_uid,
+                turn_abandoned_at=func.now(),
+                updated_at=_ABANDONED_TURN_TIMESTAMP,
+            )
         )
 
     async def renew_turn(

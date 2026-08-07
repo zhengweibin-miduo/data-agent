@@ -1993,3 +1993,65 @@ async def test_numeric_aggregate_rejects_text_measure() -> None:
     )
 
     assert result.issues[0].code == "aggregation_type_mismatch"
+
+
+def test_grain_with_time_ambiguity_can_continue_clarification() -> None:
+    """已回答粒度但仍缺时间字段时可继续澄清。"""
+    QueryIntent(
+        query_type=QueryType.TREND,
+        aggregation="sum",
+        aggregation_quote="合计",
+        measure_quotes=["销售额"],
+        grain="month",
+        grain_quote="按月",
+        ambiguities=[
+            QueryAmbiguity(slot="time", quote="趋势", question="请选择时间字段")
+        ],
+    ).validate_evidence(["查看销售额趋势，按月", "合计"])
+
+
+@pytest.mark.parametrize("operator_text", ["=", "!=", "<>", " in ", " like "])
+def test_supported_symbolic_filter_cannot_be_omitted(operator_text: str) -> None:
+    """受支持的符号和英文过滤操作不得从意图中完全省略。"""
+    with pytest.raises(ValueError, match="过滤条件"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            query_type_quote="列出",
+            measure_quotes=["订单编号"],
+        ).validate_evidence([f"列出地区{operator_text}华东的订单编号"])
+
+
+def test_duplicate_filter_clause_cannot_replace_another_clause() -> None:
+    """重复首项过滤不能冒充原文中的另一项过滤。"""
+    duplicate = FilterIntent(
+        column_quote="地区",
+        operator="eq",
+        operator_quote="是",
+        value_quotes=["华东"],
+        clause_quote="地区是华东",
+    )
+    with pytest.raises(ValueError, match="一一对应"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[duplicate, duplicate.model_copy()],
+        ).validate_evidence(["地区是华东且状态是完成的订单数量"])
+
+
+async def test_aggregate_alias_cannot_claim_another_business_identity() -> None:
+    """聚合公开别名不能冒充另一业务指标或分组列。"""
+    result = await validate_query(
+        _draft("SELECT SUM(o.amount) AS profit FROM dw.orders AS o"),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is None
+    assert result.issues[0].code == "projection_alias_mismatch"

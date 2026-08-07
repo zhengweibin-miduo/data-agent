@@ -268,3 +268,7 @@ await fetch(`/api/v1/conversations/${conversationUid}/chat-turns`, {
 
 The server owns model credentials, bounded context, readiness, idempotency, and
 assistant-message persistence. The browser owns only explicit user interaction.
+
+- Failed turns keep an independent `turn_abandoned_at` lease coordinate: the
+  same `turn_uid` may retry immediately, while a different turn may take over
+  only after the configured finite lease expires.

@@ -27,6 +27,7 @@ agent_conversation = Table(
     Column("summary", Text, nullable=True),
     Column("summary_through_message_id", BigInteger, nullable=True),
     Column("active_turn_uid", String(64), nullable=True),
+    Column("turn_abandoned_at", DateTime, nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     Column(
         "updated_at",

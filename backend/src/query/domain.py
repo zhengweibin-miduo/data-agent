@@ -355,7 +355,7 @@ class QueryIntent(ContractModel):
         has_measure_ambiguity = any(item.slot == "measure" for item in self.ambiguities)
         if self.time_quote and self.time_filter is None and not has_time_ambiguity:
             raise ValueError("时间范围必须提供可验证的过滤契约")
-        if self.grain and self.time_column_quote is None:
+        if self.grain and self.time_column_quote is None and not has_time_ambiguity:
             raise ValueError("时间粒度必须提供时间字段契约")
         grain_markers = {
             "day": ("日", "天", "day"),
@@ -444,6 +444,9 @@ class QueryIntent(ContractModel):
             and ((self.time_column_quote and self.time_filter) or has_time_ambiguity)
         ):
             raise ValueError("用户明确表达的时间范围必须完整映射到查询意图")
+        explicit_operator_pattern = re.compile(
+            r"(?:!=|<>|>=|<=|(?<![<>!])=(?!=)|\b(?:in|like)\b)", re.IGNORECASE
+        )
         if (
             any(
                 marker in user_text
@@ -459,6 +462,7 @@ class QueryIntent(ContractModel):
                 )
             )
             or re.search(r"\S+(?:是|为|属于)(?!(?:多少|什么|否))\S+", user_text)
+            or explicit_operator_pattern.search(user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
         filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
@@ -471,6 +475,10 @@ class QueryIntent(ContractModel):
         )
         if len(explicit_filter_clauses) > len(all_filters):
             raise ValueError("用户明确表达的每项过滤条件必须完整映射到查询意图")
+        if len(all_filters) > 1:
+            clause_quotes = [item.clause_quote for item in all_filters]
+            if None in clause_quotes or len(set(clause_quotes)) != len(clause_quotes):
+                raise ValueError("每项过滤条件必须与不同的用户原文子句一一对应")
         if (
             any(
                 marker in user_text
@@ -1384,6 +1392,21 @@ def _validate_query_sync(
         )
     ):
         return _failed("projection_mismatch")
+
+    # 聚合结果的公开业务标签尚无可信意图契约；只允许无业务
+    # 身份的稳定通用标签，并拒绝与其他结果列重名。
+    public_labels = [
+        projection.alias_or_name.casefold()
+        for projection in root.expressions
+        if projection.alias_or_name
+    ]
+    if len(public_labels) != len(set(public_labels)):
+        return _failed("projection_alias_mismatch")
+    for projection in root.expressions:
+        if isinstance(projection, exp.Alias) and isinstance(
+            projection.this, exp.AggFunc
+        ) and projection.alias.casefold() != "total":
+            return _failed("projection_alias_mismatch")
 
     if intent.query_type == QueryType.DETAIL:
         expected_projection_ids = {

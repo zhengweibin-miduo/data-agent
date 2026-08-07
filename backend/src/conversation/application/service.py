@@ -120,6 +120,17 @@ class ConversationService:
                 content,
                 semantic_fingerprint=semantic_fingerprint,
             )
+        # 已完成轮次的幂等回放不依赖长期记忆或远程检索。
+        if not started.execution_owner:
+            existing_assistant = await self._store.assistant_message(
+                user_id, conversation_uid, turn_uid
+            )
+            if existing_assistant is not None:
+                return StartTurnResponse(
+                    message=started.message,
+                    context=ConversationContext(summary=None, messages=[], memories=[]),
+                    execution_owner=False,
+                )
         # 步骤二：提交完成后再召回消息与长期记忆，模型或索引延迟不持有行锁。
         try:
             context = await self._context(
