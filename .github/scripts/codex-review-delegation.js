@@ -260,7 +260,7 @@ async function resolveReviewThreads(github, core, threads) {
   }
 }
 
-async function refreshActiveReviewThreads(github, core, threads) {
+async function refreshActiveReviewThreads(github, core, threads, delegationKind = "manual") {
   const active = [];
   for (const thread of threads) {
     const result = await github.graphql(
@@ -281,11 +281,11 @@ async function refreshActiveReviewThreads(github, core, threads) {
     );
     const currentThread = result.node;
     if (!currentThread || currentThread.isResolved || currentThread.isOutdated) {
-      core.info(`Skipped inactive review thread ${thread.id} before manual delegation.`);
+      core.info(`Skipped inactive review thread ${thread.id} before ${delegationKind} delegation.`);
       continue;
     }
     if (await hasBlockedReply(github, currentThread)) {
-      core.info(`Skipped blocked review thread ${thread.id} before manual delegation.`);
+      core.info(`Skipped blocked review thread ${thread.id} before ${delegationKind} delegation.`);
       continue;
     }
     active.push(thread);
@@ -334,11 +334,17 @@ async function delegateReview({ github, context, core }) {
     return;
   }
 
+  const currentThreads = await refreshActiveReviewThreads(github, core, threads, "automatic");
+  if (currentThreads.length === 0) {
+    core.info("This review no longer has active unresolved Codex threads.");
+    return;
+  }
+
   await github.rest.issues.createComment({
     owner,
     repo,
     issue_number: pull.number,
-    body: delegationBody(review.id, pull.head.sha, pull.head.ref, threads),
+    body: delegationBody(review.id, pull.head.sha, pull.head.ref, currentThreads),
   });
 }
 
@@ -480,7 +486,38 @@ async function selfTest() {
   assert.equal(createdBodies.length, 0, "no unresolved threads must not create a comment");
 
   let page = 0;
-  github.graphql = async () => {
+  let automaticRaceBlocked = false;
+  github.graphql = async (query, variables) => {
+    if (variables.cursor === "automatic-race-page-2") {
+      return {
+        node: {
+          comments: {
+            nodes: [{ body: "无法安全完成：扫描后、自动委派前新增的第 101 条阻塞原因。" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      };
+    }
+    if (query.includes("node(id:$threadId)")) {
+      return {
+        node: {
+          id: variables.threadId,
+          isResolved: false,
+          isOutdated: false,
+          comments: {
+            nodes: automaticRaceBlocked
+              ? [
+                  { body: "review finding" },
+                  ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                ]
+              : [{ body: "review finding" }],
+            pageInfo: automaticRaceBlocked
+              ? { hasNextPage: true, endCursor: "automatic-race-page-2" }
+              : { hasNextPage: false, endCursor: null },
+          },
+        },
+      };
+    }
     page++;
     return {
       repository: {
@@ -550,6 +587,16 @@ async function selfTest() {
     1,
     "a different review on the same head must still be delegated",
   );
+
+  page = 0;
+  automaticRaceBlocked = true;
+  await delegateReview({ github, context, core });
+  assert.equal(
+    createdBodies.length,
+    1,
+    "a thread blocked after automatic scanning must not be delegated",
+  );
+  automaticRaceBlocked = false;
 
   page = 0;
   github.paginate = async () => [

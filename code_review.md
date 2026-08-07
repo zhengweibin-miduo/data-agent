@@ -59,6 +59,8 @@ Codex 必须读取对应代码、PR diff 和 thread 上下文，自行判断是�
   后续变为 outdated 也必须保持 unresolved，不再自动 resolve 或重新委派。
 - 手动委派在创建评论前必须重新分页读取每个候选 thread；期间新增 blocked 回复、
   已 resolved 或已 outdated 的 thread 必须从委派正文排除。
+- 自动委派在创建评论前也必须重新分页读取每个候选 thread，并按相同规则排除
+  blocked、resolved 或 outdated 状态，避免重跑旧 review event 覆盖终态。
 - 结构化发布器发现既有 blocked 回复时，任何晚到的 fixed、no_change 或 blocked
   任务都不得继续回复或 resolve；发布任何回复前以及 fixed/no_change 最终 resolve
   前都必须重新读取 thread，避免并发 blocked 回复被覆盖或产生错误的终态回复。

@@ -239,6 +239,9 @@ original PR branch.
 - A thread that becomes blocked, resolved, or outdated after scanning but
   before the manual delegation comment mutation -> exclude it after a
   paginated final thread read; delegate only candidates that remain active.
+- A thread that becomes blocked, resolved, or outdated after an automatic
+  review-event scan but before its comment mutation -> exclude it after the
+  same paginated final read, including when an earlier event is rerun.
 
 ### 5. Good/Base/Bad Cases
 
@@ -254,7 +257,8 @@ original PR branch.
 
 - The standalone Node self-check covers outdated-thread resolution,
   blocked-thread exclusion before scanning and immediately before resolution,
-  blocked-thread exclusion immediately before manual comment creation,
+  blocked-thread exclusion immediately before both automatic and manual
+  comment creation,
   comment pagination, reviewer filtering, resolved thread exclusion,
   unfinished-thread redelegation, invalid PR rejection, and the rule that the
   PAT-backed delegation path never calls `resolveReviewThread`.
