@@ -114,6 +114,28 @@ async def test_valid_aggregate_keeps_complete_result_without_forced_limit() -> N
     assert result.validated.target_tables == ("orders",)
 
 
+@pytest.mark.parametrize(
+    "question", ["列出订单编号，订单金额", "列出订单编号,订单金额"]
+)
+def test_detail_result_fields_split_on_commas(question: str) -> None:
+    """中英文逗号列举的明细字段必须逐项进入可信意图。"""
+    with pytest.raises(ValueError, match="每个明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+        ).validate_evidence([question])
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_english_sort_direction_cannot_be_omitted(direction: str) -> None:
+    """英文排序方向必须反向覆盖到排序槽位。"""
+    with pytest.raises(ValueError, match="排序必须完整映射"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+        ).validate_evidence([f"订单编号 {direction}"])
+
+
 async def test_text_filter_preserves_leading_zeroes() -> None:
     """文本标识符不得被数值规范化后丢失前导零。"""
     context = _context().model_copy(update={"bindings": {"编号": "column-code"}})

@@ -160,8 +160,11 @@ class QueryMetadataAdapter:
                 question="请明确要计数的业务主体或字段？",
             )
         # 步骤三：每个关键槽位必须唯一命中权威对象，分数不能消除歧义。
+        measure_kinds = {MetadataObjectKind.METRIC, MetadataObjectKind.COLUMN}
+        if intent.aggregation == "count":
+            measure_kinds.add(MetadataObjectKind.TABLE)
         slots: list[tuple[str, str, set[MetadataObjectKind]]] = [
-            ("measure", quote, {MetadataObjectKind.METRIC, MetadataObjectKind.COLUMN})
+            ("measure", quote, measure_kinds)
             for quote in intent.measure_quotes
         ]
         if intent.time_column_quote:

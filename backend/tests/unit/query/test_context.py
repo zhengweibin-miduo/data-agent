@@ -157,6 +157,27 @@ async def test_context_does_not_execute_natural_language_metric_definition() -> 
     assert search.calls == ["metadata"]
 
 
+async def test_count_subject_can_bind_to_authoritative_table() -> None:
+    """计数主体可唯一绑定表对象并支持后续 COUNT(*) 规划。"""
+    search = _Search(
+        [_candidate(MetadataObjectKind.TABLE, "table-orders", "订单")]
+    )
+
+    result = await QueryMetadataAdapter(search).build_context(
+        "查询订单数量",
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+        ),
+        _schema(),
+    )
+
+    assert not isinstance(result, QueryClarification)
+    assert result.bindings == {"订单": "table-orders"}
+
+
 async def test_context_rejects_non_authoritative_schema_for_single_table() -> None:
     """单表查询也不得消费请求 DDL 伪造的字段类型。"""
     search = _Search([_candidate(MetadataObjectKind.COLUMN, "column-amount", "金额")])

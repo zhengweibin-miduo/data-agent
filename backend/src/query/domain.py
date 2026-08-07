@@ -505,11 +505,13 @@ class QueryIntent(ContractModel):
                 marker in user_text
                 for marker in ("升序", "降序", "从低到高", "从高到低")
             )
-            and not self.sorts
-        ):
+            or re.search(r"\b(?:asc|desc)\b", user_text, re.IGNORECASE)
+        ) and not self.sorts:
             raise ValueError("用户明确表达的排序必须完整映射到查询意图")
         explicit_sorts = re.findall(
-            r"([^，。,.；;、]+?)(升序|降序|从低到高|从高到低)", user_text
+            r"([^，。,.；;、]+?)(升序|降序|从低到高|从高到低|\basc\b|\bdesc\b)",
+            user_text,
+            re.IGNORECASE,
         )
         if len(explicit_sorts) > len(self.sorts):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
@@ -533,7 +535,7 @@ class QueryIntent(ContractModel):
             if detail_match:
                 explicit_results = [
                     item.strip(" 的")
-                    for item in re.split(r"(?:和|与|及|、)", detail_match.group(1))
+                    for item in re.split(r"(?:和|与|及|、|，|,)", detail_match.group(1))
                     if item.strip(" 的")
                 ]
                 result_quotes = [*self.measure_quotes, *self.dimension_quotes]
