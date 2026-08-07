@@ -60,6 +60,7 @@ def _context() -> QueryContext:
                     id="table-customers",
                     name="customers",
                     qualified_name="customers",
+                    primary_key=["id"],
                     columns=[
                         PhysicalColumn(
                             id="column-customer-id", name="id", data_type="BIGINT"
@@ -138,6 +139,99 @@ async def test_text_filter_preserves_leading_zeroes() -> None:
         dw_database="dw",
     )
     assert result.validated is not None
+
+
+def test_intent_requires_all_supported_explicit_slots() -> None:
+    """周期、等值过滤、排序、明细字段和分组动作都不能被缩水。"""
+    with pytest.raises(ValueError, match="趋势形态"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+        ).validate_evidence(["每月销售额合计"])
+    with pytest.raises(ValueError, match="每项过滤"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["华东"],
+                    clause_quote="地区是华东",
+                )
+            ],
+        ).validate_evidence(["列出地区是华东且状态是完成的订单编号"])
+    with pytest.raises(ValueError, match="每项排序"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            measure_quotes=["订单编号"],
+            sorts=[
+                SortIntent(quote="销售额", direction="desc", direction_quote="降序")
+            ],
+            limit=10,
+            limit_quote="前10条",
+        ).validate_evidence(["销售额降序、下单时间升序的前10条订单编号"])
+    with pytest.raises(ValueError, match="明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+        ).validate_evidence(["列出订单编号和订单金额"])
+    with pytest.raises(ValueError, match="动作证据"):
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            dimension_quotes=["销售额"],
+        ).validate_evidence(["销售额合计"])
+
+
+def test_top_n_sort_ambiguity_can_reach_clarification() -> None:
+    """缺少排序键的 Top-N 可携带排序歧义进入 Meta 澄清。"""
+    intent = QueryIntent(
+        query_type=QueryType.RANKING,
+        query_type_quote="前10个",
+        measure_quotes=["订单"],
+        limit=10,
+        limit_quote="前10个",
+        ambiguities=[
+            query_domain.QueryAmbiguity(
+                slot="sort", quote="前10个", question="请明确排序依据？"
+            )
+        ],
+    )
+
+    assert intent.validate_evidence(["列出前10个订单"]) is None
+
+
+async def test_join_target_must_be_proven_unique() -> None:
+    """目标列未由主键证明唯一时不能授权聚合 JOIN。"""
+    context = _context()
+    customers = context.physical_schema.tables[1].model_copy(update={"primary_key": []})
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={"tables": [context.physical_schema.tables[0], customers]}
+            ),
+            "relationships_authoritative": True,
+            "bindings": {"金额": "column-amount", "客户": "table-customers"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.amount FROM dw.orders o JOIN dw.customers c ON o.id = c.id",
+            table_ids=["table-orders", "table-customers"],
+            column_ids=["column-amount", "column-id", "column-customer-id"],
+        ),
+        context,
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "join_unsupported"
 
 
 async def test_swapped_detail_aliases_fail_closed() -> None:
@@ -1071,6 +1165,7 @@ async def test_join_rejects_sibling_fact_fanout_from_measure_grain() -> None:
                 id="table-customers",
                 name="customers",
                 qualified_name="customers",
+                primary_key=["id"],
                 columns=[
                     PhysicalColumn(id="customer-id", name="id", data_type="BIGINT"),
                     PhysicalColumn(
@@ -1455,9 +1550,7 @@ def test_intent_requires_grouping_and_limit_semantics_without_false_or() -> None
             query_type=QueryType.RANKING,
             measure_quotes=["订单编号"],
             sorts=[
-                SortIntent(
-                    quote="订单编号", direction="desc", direction_quote="降序"
-                )
+                SortIntent(quote="订单编号", direction="desc", direction_quote="降序")
             ],
             limit=2026,
             limit_quote="2026",

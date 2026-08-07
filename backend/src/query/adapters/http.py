@@ -1,5 +1,6 @@
 """自然语言查询的 NDJSON HTTP 适配器。"""
 
+import asyncio
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Request
@@ -57,6 +58,19 @@ async def _remaining(
                     code=error.code,
                     stage=error.stage,
                     retryable=error.retryable,
+                ),
+            )
+        )
+    except asyncio.CancelledError as error:
+        if error.args != ("query_lease_lost",):
+            raise
+        yield _line(
+            QueryEvent(
+                kind="stream_error",
+                error=QueryStreamError(
+                    code="query_lease_lost",
+                    stage="conversation_turn",
+                    retryable=True,
                 ),
             )
         )

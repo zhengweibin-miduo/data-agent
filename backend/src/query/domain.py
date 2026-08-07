@@ -274,9 +274,7 @@ class QueryIntent(ContractModel):
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
         if any(marker in user_text for marker in ("不同", "去重", "唯一", "distinct")):
             raise ValueError("去重语义尚未建模，必须先澄清")
-        boolean_text = re.sub(
-            r"(?:大于|小于)\s*或\s*等于", "", user_text
-        )
+        boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", user_text)
         if len(all_filters) > 1 and any(
             marker in boolean_text for marker in ("或", "或者", " or ")
         ):
@@ -384,7 +382,20 @@ class QueryIntent(ContractModel):
             for marker in shape_markers[self.query_type]
         ):
             raise ValueError("查询形态必须与用户原文动作证据一致")
-        trend_markers = ("趋势", "按日", "按周", "按月", "按季", "按年")
+        trend_markers = (
+            "趋势",
+            "按日",
+            "按周",
+            "按月",
+            "按季",
+            "按年",
+            "每日",
+            "每周",
+            "每月",
+            "每季",
+            "每季度",
+            "每年",
+        )
         if any(marker in user_text for marker in trend_markers) and (
             self.query_type != QueryType.TREND
             or self.grain is None
@@ -398,7 +409,7 @@ class QueryIntent(ContractModel):
             dimension
             for match in grouping_matches
             for dimension in re.split(
-                r"(?:和|与|、)", re.split(r"(?:统计|查看|展示|比较|对比)", match)[0]
+                r"(?:和|与|及|、)", re.split(r"(?:统计|查看|展示|比较|对比)", match)[0]
             )
             if dimension
         ]
@@ -410,8 +421,11 @@ class QueryIntent(ContractModel):
             for dimension in explicit_dimensions
         ):
             raise ValueError("用户明确表达的分组维度必须完整映射到查询意图")
+        has_sort_ambiguity = any(item.slot == "sort" for item in self.ambiguities)
         if re.search(r"(?:前\s*\d+|top\s*\d+)", user_text) and (
-            self.query_type != QueryType.RANKING or self.limit is None or not self.sorts
+            self.query_type != QueryType.RANKING
+            or self.limit is None
+            or (not self.sorts and not has_sort_ambiguity)
         ):
             raise ValueError("用户明确表达的 Top-N 形态必须完整映射到查询意图")
         if (
@@ -431,11 +445,12 @@ class QueryIntent(ContractModel):
             or re.search(r"\S+(?:是|为|属于)(?!(?:多少|什么|否))\S+", user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
+        filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
         explicit_filter_clauses = re.findall(
             r"[^且，。,.；;]+(?:大于或等于|小于或等于|大于等于|小于等于|"
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
-            r"等于|属于|包含)[^且，。,.；;]+",
-            user_text,
+            r"等于|属于|包含|是|为)[^且，。,.；;]+",
+            filter_evidence_text,
         )
         if len(explicit_filter_clauses) > len(all_filters):
             raise ValueError("用户明确表达的每项过滤条件必须完整映射到查询意图")
@@ -463,6 +478,41 @@ class QueryIntent(ContractModel):
             and not self.sorts
         ):
             raise ValueError("用户明确表达的排序必须完整映射到查询意图")
+        explicit_sorts = re.findall(
+            r"([^，。,.；;、]+?)(升序|降序|从低到高|从高到低)", user_text
+        )
+        if len(explicit_sorts) > len(self.sorts):
+            raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
+        if self.query_type == QueryType.DETAIL and not all_filters:
+            detail_match = re.search(
+                r"(?:列出|展示|查看)(.+?)(?=(?:大于|小于|等于|属于|包含|"
+                r"升序|降序|前\s*\d+|top\s*\d+|的记录|的订单|$))",
+                user_text,
+            )
+            if detail_match:
+                explicit_results = [
+                    item.strip(" 的")
+                    for item in re.split(r"(?:和|与|及|、)", detail_match.group(1))
+                    if item.strip(" 的")
+                ]
+                result_quotes = [*self.measure_quotes, *self.dimension_quotes]
+                if any(
+                    not any(item in quote or quote in item for quote in result_quotes)
+                    for item in explicit_results
+                ):
+                    raise ValueError("用户明确表达的每个明细结果字段必须进入查询意图")
+        if (
+            self.dimension_quotes
+            and not explicit_dimensions
+            and not (
+                self.query_type_quote
+                and any(
+                    marker in self.query_type_quote.casefold()
+                    for marker in ("按", "比较", "对比", "趋势", "排名")
+                )
+            )
+        ):
+            raise ValueError("分组查询必须携带明确的用户动作证据")
         shape_is_consistent = {
             QueryType.DETAIL: self.aggregation is None and self.grain is None,
             QueryType.AGGREGATE: (
@@ -472,7 +522,8 @@ class QueryIntent(ContractModel):
                 and self.limit is None
                 and self.grain is None
             ),
-            QueryType.RANKING: self.limit is not None and bool(self.sorts),
+            QueryType.RANKING: self.limit is not None
+            and (bool(self.sorts) or has_sort_ambiguity),
             QueryType.TREND: self.aggregation is not None and self.grain is not None,
             QueryType.COMPARISON: (
                 self.aggregation is not None and bool(self.dimension_quotes)
@@ -925,6 +976,7 @@ def _validate_query_sync(
     fk_edges: set[frozenset[str]] = set()
     fk_constraints: dict[str, set[frozenset[str]]] = {}
     fk_constraint_tables: dict[str, tuple[str, str]] = {}
+    fk_constraint_targets: dict[str, set[str]] = {}
     table_by_qualified = {
         key.casefold(): table
         for table in context.physical_schema.tables
@@ -942,17 +994,34 @@ def _validate_query_sync(
             ),
             None,
         )
-        if target_column is not None:
+        target_primary_key = {name.casefold() for name in target_table.primary_key}
+        if (
+            target_column is not None
+            and target_column.name.casefold() in target_primary_key
+        ):
             edge = frozenset((relation.source_column_id, target_column.id))
             fk_edges.add(edge)
             constraint_id = (
                 relation.constraint_id or f"legacy:{relation.source_column_id}"
             )
             fk_constraints.setdefault(constraint_id, set()).add(edge)
+            fk_constraint_targets.setdefault(constraint_id, set()).add(
+                target_column.name.casefold()
+            )
             fk_constraint_tables[constraint_id] = (
                 relation.source_table_id,
                 target_table.id,
             )
+    for constraint_id in list(fk_constraints):
+        target_table = next(
+            table
+            for table in context.physical_schema.tables
+            if table.id == fk_constraint_tables[constraint_id][1]
+        )
+        if fk_constraint_targets[constraint_id] != {
+            name.casefold() for name in target_table.primary_key
+        }:
+            del fk_constraints[constraint_id]
     aliases = {
         table.alias_or_name: tables_by_name[table.name] for table in physical_tables
     }

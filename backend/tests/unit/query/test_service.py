@@ -302,6 +302,38 @@ async def test_planner_receives_configured_dw_database() -> None:
     assert payload["dw_database"] == "analytics"
 
 
+@pytest.mark.parametrize("method", ["draft", "repair"])
+async def test_planner_maps_malformed_structured_draft(method: str) -> None:
+    """初稿和修复稿的结构化契约异常都收敛为稳定 Query 错误。"""
+    model = Mock(spec=BaseChatModel)
+    runnable = AsyncMock()
+    runnable.ainvoke.return_value = object()
+    model.with_structured_output.return_value = runnable
+    adapter = QueryLLMAdapter(cast(BaseChatModel, model), dw_database="dw")
+    context = QueryContext(
+        physical_schema=PhysicalSchema(
+            source="erp",
+            canonical_ddl="",
+            ddl_hash="ddl",
+            schema_fingerprint="schema",
+            tables=[],
+        )
+    )
+    intent = QueryIntent(query_type=QueryType.DETAIL)
+
+    with pytest.raises(DataAgentError, match="SQL 草稿|修复草稿") as captured:
+        if method == "draft":
+            await adapter.draft(context, intent)
+        else:
+            await adapter.repair(
+                context,
+                intent,
+                QueryDraft(sql="SELECT 1", table_ids=["table"]),
+                (SQLValidationIssue(code="invalid"),),
+            )
+    assert captured.value.code == "query_model_invalid"
+
+
 async def test_stream_completes_only_one_authoritative_clarification() -> None:
     """权威绑定歧义只完成一个澄清轮次且不生成或执行 SQL。"""
     conversations = _Conversations()

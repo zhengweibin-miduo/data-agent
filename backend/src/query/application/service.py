@@ -136,8 +136,7 @@ class QueryApplication:
                     index
                     for index in range(clarification_index)
                     if messages[index].role == MessageRole.ASSISTANT
-                    and messages[index].semantic_fingerprint
-                    != "query:clarification"
+                    and messages[index].semantic_fingerprint != "query:clarification"
                 ]
                 terminal_index = (
                     prior_terminal_indexes[-1] if prior_terminal_indexes else -1
@@ -148,9 +147,7 @@ class QueryApplication:
                     if messages[index].role == MessageRole.USER
                 ]
                 chain_start = (
-                    prior_user_indexes[0]
-                    if prior_user_indexes
-                    else clarification_index
+                    prior_user_indexes[0] if prior_user_indexes else clarification_index
                 )
                 evidence_chain = messages[chain_start:]
             else:
@@ -350,7 +347,7 @@ class QueryApplication:
                 renewed = False
             if not renewed:
                 if owner_task is not None:
-                    owner_task.cancel()
+                    owner_task.cancel("query_lease_lost")
                 return
 
     async def _plan(
@@ -397,9 +394,7 @@ class QueryApplication:
                             retryable=True,
                             http_status=409,
                         )
-                    if not await self._readiness.ready(
-                        result.validated.target_tables
-                    ):
+                    if not await self._readiness.ready(result.validated.target_tables):
                         structured_log(
                             "INFO",
                             "只读查询预检未执行",

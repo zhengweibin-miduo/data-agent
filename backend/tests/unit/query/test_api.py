@@ -1,5 +1,6 @@
 """自然语言查询 NDJSON HTTP seam 测试。"""
 
+import asyncio
 import json
 
 import httpx
@@ -32,6 +33,14 @@ class _FailingQuery:
             retryable=True,
             http_status=504,
         )
+
+
+class _LeaseLostQuery:
+    """模拟首事件后内部轮次续租 fencing。"""
+
+    async def stream(self, _request: object):
+        yield QueryEvent(kind="metadata", sql="SELECT 1", columns=["value"])
+        raise asyncio.CancelledError("query_lease_lost")
 
 
 class _PreResponseStream:
@@ -141,3 +150,29 @@ async def test_query_route_handles_stream_errors_and_cleanup() -> None:
         )
     assert failed.status_code == 500
     assert pre_response.result.closed is True
+
+
+async def test_query_route_maps_internal_lease_loss_to_stream_error() -> None:
+    """内部续租丢失产生安全流错误，而不冒充客户端取消。"""
+    app = FastAPI()
+    app.state.query = _LeaseLostQuery()
+    app.include_router(router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/conversations/conversation-1/query-turns",
+            json={
+                "user_id": "user-1",
+                "turn_uid": "turn-1",
+                "question": "查询订单",
+                "ddl_context": {
+                    "source": "erp",
+                    "dialect": "mysql",
+                    "ddl": "CREATE TABLE orders (id BIGINT)",
+                },
+            },
+        )
+
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[-1]["error"]["code"] == "query_lease_lost"

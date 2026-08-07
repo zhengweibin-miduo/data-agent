@@ -87,15 +87,23 @@ class QueryLLMAdapter:
 
     async def draft(self, context: QueryContext, intent: QueryIntent) -> QueryDraft:
         """从有界权威上下文生成首个不可直接执行的 QueryDraft。"""
-        return await self._invoke(
-            QueryDraft,
-            _DRAFT_PROMPT,
-            {
-                "intent": intent.model_dump(mode="json"),
-                "context": context.model_dump(mode="json"),
-                "dw_database": self._dw_database,
-            },
-        )
+        try:
+            return await self._invoke(
+                QueryDraft,
+                _DRAFT_PROMPT,
+                {
+                    "intent": intent.model_dump(mode="json"),
+                    "context": context.model_dump(mode="json"),
+                    "dw_database": self._dw_database,
+                },
+            )
+        except (TypeError, ValueError) as error:
+            raise DataAgentError(
+                "query_model_invalid",
+                "query_model",
+                "查询模型返回的 SQL 草稿不符合结构化契约",
+                http_status=502,
+            ) from error
 
     async def repair(
         self,
@@ -105,20 +113,28 @@ class QueryLLMAdapter:
         issues: tuple[SQLValidationIssue, ...],
     ) -> QueryDraft:
         """仅以稳定问题代码和对象名修复一次 SQL 草稿。"""
-        return await self._invoke(
-            QueryDraft,
-            _DRAFT_PROMPT,
-            {
-                "intent": intent.model_dump(mode="json"),
-                "context": context.model_dump(mode="json"),
-                "dw_database": self._dw_database,
-                "previous_draft": draft.model_dump(mode="json"),
-                "validation_feedback": [
-                    issue.model_dump(mode="json") for issue in issues
-                ],
-                "repair_budget_remaining": 0,
-            },
-        )
+        try:
+            return await self._invoke(
+                QueryDraft,
+                _DRAFT_PROMPT,
+                {
+                    "intent": intent.model_dump(mode="json"),
+                    "context": context.model_dump(mode="json"),
+                    "dw_database": self._dw_database,
+                    "previous_draft": draft.model_dump(mode="json"),
+                    "validation_feedback": [
+                        issue.model_dump(mode="json") for issue in issues
+                    ],
+                    "repair_budget_remaining": 0,
+                },
+            )
+        except (TypeError, ValueError) as error:
+            raise DataAgentError(
+                "query_model_invalid",
+                "query_model",
+                "查询模型返回的修复草稿不符合结构化契约",
+                http_status=502,
+            ) from error
 
     async def _invoke(
         self,
