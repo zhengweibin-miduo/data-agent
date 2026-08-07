@@ -1,11 +1,14 @@
 """当前 DDL 权威 Meta 上下文构建测试。"""
 
+import pytest
+
 from ddl_metadata.meta_projection.models import (
     MetadataCandidate,
     MetadataObjectKind,
     MetadataValueCandidate,
     MetadataValueSearchResult,
 )
+from errors import DataAgentError
 from models.physical import PhysicalColumn, PhysicalSchema, PhysicalTable
 from query.adapters.metadata import QueryMetadataAdapter
 from query.application.contracts import QueryClarification
@@ -152,6 +155,23 @@ async def test_context_does_not_execute_natural_language_metric_definition() -> 
     assert isinstance(result, QueryClarification)
     assert result.slot == "measure"
     assert search.calls == ["metadata"]
+
+
+async def test_context_rejects_non_authoritative_schema_for_single_table() -> None:
+    """单表查询也不得消费请求 DDL 伪造的字段类型。"""
+    search = _Search([_candidate(MetadataObjectKind.COLUMN, "column-amount", "金额")])
+
+    async def not_authoritative(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    search.schema_is_authoritative = not_authoritative  # type: ignore[method-assign]
+    with pytest.raises(DataAgentError) as captured:
+        await QueryMetadataAdapter(search).build_context(
+            "查询金额",
+            QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+            _schema(),
+        )
+    assert captured.value.code == "query_schema_changed"
 
 
 async def test_context_returns_only_highest_impact_clarification() -> None:

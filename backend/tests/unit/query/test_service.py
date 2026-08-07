@@ -393,6 +393,11 @@ class _GroundedMetadata:
         del question, intent
         return QueryContext(physical_schema=schema)
 
+    async def relationships_are_authoritative(self, schema: PhysicalSchema) -> bool:
+        """测试上下文始终对应当前权威快照。"""
+        del schema
+        return True
+
 
 class _Planner:
     """返回一条不带业务总量 LIMIT 的权威对象草稿。"""
@@ -486,12 +491,33 @@ class _ClosableExecutor(_Executor):
 class _ReleaseFailingReadiness(_Ready):
     """模拟业务异常清理期间 generation owner 连接释放失败。"""
 
+    def __init__(self) -> None:
+        self.holds = 0
+
     @asynccontextmanager
     async def hold(self, target_tables: tuple[str, ...]):
         """进入临界区后在退出时抛出锁清理错误。"""
         del target_tables
+        self.holds += 1
         yield
-        raise AdvisoryLockReleaseError("release failed")
+        if self.holds > 1:
+            raise AdvisoryLockReleaseError("release failed")
+
+
+class _ContendedReadiness(_Ready):
+    """模拟 generation guard 在进入阶段竞争失败。"""
+
+    @asynccontextmanager
+    async def hold(self, target_tables: tuple[str, ...]):
+        del target_tables
+        raise DataAgentError(
+            "generation_lock_unavailable",
+            "query_readiness",
+            "generation 正在变更",
+            retryable=True,
+            http_status=409,
+        )
+        yield
 
 
 class _FailingExecuteExecutor(_Executor):
@@ -538,6 +564,36 @@ async def test_stream_explains_checks_readiness_and_keeps_all_batches() -> None:
     assert executor.explained == 2
     assert executor.executed == 1
     assert planner.repairs == 0
+
+
+async def test_guard_entry_failure_preserves_error_and_abandons_turn() -> None:
+    """锁竞争错误不得被未进入 guard 的清理覆盖，轮次必须立即释放。"""
+    conversations = _Conversations()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, conversations),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _GroundedMetadata()),
+        planner=cast(QueryPlannerPort, _Planner()),
+        readiness=cast(QueryReadinessPort, _ContendedReadiness()),
+        executor=cast(QueryExecutorPort, _Executor()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额",
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    with pytest.raises(DataAgentError) as captured:
+        _ = [event async for event in application.stream(request)]
+
+    assert captured.value.code == "generation_lock_unavailable"
+    assert conversations.abandoned == 1
 
 
 @pytest.mark.parametrize("executor_type", [_EmptyExecutor, _ClosableExecutor])

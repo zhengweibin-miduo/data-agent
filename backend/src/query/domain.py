@@ -274,14 +274,21 @@ class QueryIntent(ContractModel):
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
         if any(marker in user_text for marker in ("不同", "去重", "唯一", "distinct")):
             raise ValueError("去重语义尚未建模，必须先澄清")
+        boolean_text = re.sub(
+            r"(?:大于|小于)\s*或\s*等于", "", user_text
+        )
         if len(all_filters) > 1 and any(
-            marker in user_text for marker in ("或", "或者", " or ")
+            marker in boolean_text for marker in ("或", "或者", " or ")
         ):
             raise ValueError("过滤条件包含尚未建模的 OR 关系")
         if len(all_filters) > 1 and any(
             item.clause_quote
             and any(
-                marker in item.clause_quote for marker in ("或", "或者", "OR", "or")
+                marker
+                in re.sub(
+                    r"(?:大于|小于)\s*或\s*等于", "", item.clause_quote.casefold()
+                )
+                for marker in ("或", "或者", " or ")
             )
             for item in all_filters
         ):
@@ -320,6 +327,13 @@ class QueryIntent(ContractModel):
             and (len(limit_numbers) != 1 or limit_numbers[0] != self.limit)
         ):
             raise ValueError("Top-N 数量必须有包含同值的用户原文证据")
+        if self.limit_quote is not None and not re.search(
+            r"(?:前\s*\d+|top\s*\d+|\d+\s*(?:笔|条|个|名|行))",
+            self.limit_quote.casefold(),
+        ):
+            raise ValueError("Top-N 数量必须包含明确的结果截断语义")
+        if self.limit is not None and self.query_type != QueryType.RANKING:
+            raise ValueError("只有可信排名意图可以限制结果数量")
         if (self.aggregation is None) != (self.aggregation_quote is None):
             raise ValueError("聚合运算必须携带用户原文证据")
         if self.aggregation is not None and len(self.measure_quotes) > 1:
@@ -377,6 +391,11 @@ class QueryIntent(ContractModel):
             or self.aggregation is None
         ):
             raise ValueError("用户明确表达的趋势形态必须完整映射到查询意图")
+        grouping_matches = re.findall(
+            r"按(?!照|日|周|月|季|季度|年)([^，。,.；;\s]+)", user_text
+        )
+        if grouping_matches and not self.dimension_quotes:
+            raise ValueError("用户明确表达的分组维度必须完整映射到查询意图")
         if re.search(r"(?:前\s*\d+|top\s*\d+)", user_text) and (
             self.query_type != QueryType.RANKING or self.limit is None or not self.sorts
         ):

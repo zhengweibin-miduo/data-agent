@@ -1441,6 +1441,49 @@ def test_intent_rejects_ambiguous_grain_evidence() -> None:
         ).validate_evidence(["最近7天按月查看日期和金额"])
 
 
+def test_intent_requires_grouping_and_limit_semantics_without_false_or() -> None:
+    """显式维度和截断动作不得省略，复合不等式中的“或”不是布尔 OR。"""
+    with pytest.raises(ValueError, match="分组维度"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+        ).validate_evidence(["按地区统计销售额合计"])
+    with pytest.raises(ValueError, match="结果截断语义"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            measure_quotes=["订单编号"],
+            sorts=[
+                SortIntent(
+                    quote="订单编号", direction="desc", direction_quote="降序"
+                )
+            ],
+            limit=2026,
+            limit_quote="2026",
+        ).validate_evidence(["2026年订单编号降序"])
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        measure_quotes=["订单编号"],
+        filters=[
+            FilterIntent(
+                column_quote="金额",
+                operator="gte",
+                operator_quote="大于或等于",
+                value_quotes=["100"],
+                clause_quote="金额大于或等于100",
+            ),
+            FilterIntent(
+                column_quote="库存",
+                operator="lt",
+                operator_quote="小于",
+                value_quotes=["10"],
+                clause_quote="库存小于10",
+            ),
+        ],
+    ).validate_evidence(["列出金额大于或等于100且库存小于10的订单编号"])
+
+
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:
     """未建模否定词和与槽位矛盾的结果形态必须失败关闭。"""
     with pytest.raises(ValueError, match="否定语义"):
@@ -1455,7 +1498,7 @@ def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> No
                 )
             ],
         ).validate_evidence(["地区不包含华东"])
-    with pytest.raises(ValueError, match="查询形态"):
+    with pytest.raises(ValueError, match="排名意图|查询形态"):
         QueryIntent(
             query_type=QueryType.AGGREGATE,
             aggregation="max",

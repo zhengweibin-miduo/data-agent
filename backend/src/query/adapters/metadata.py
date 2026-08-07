@@ -7,6 +7,7 @@ from ddl_metadata.meta_projection.models import (
     MetadataObjectKind,
     MetadataValueSearchResult,
 )
+from errors import DataAgentError
 from models.physical import PhysicalSchema
 from query.application.contracts import QueryClarification
 from query.domain import (
@@ -97,6 +98,14 @@ class QueryMetadataAdapter:
             table_ids=table_ids,
             column_ids=column_ids,
         )
+        if not relationships_authoritative:
+            raise DataAgentError(
+                "query_schema_changed",
+                "query_metadata",
+                "请求物理模式不是当前权威快照，请重试",
+                retryable=True,
+                http_status=409,
+            )
         candidates = [
             candidate
             for candidate in recalled

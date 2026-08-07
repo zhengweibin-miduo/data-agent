@@ -2,9 +2,7 @@
 
 import hashlib
 import json
-import sys
 from collections.abc import AsyncGenerator
-from contextlib import AbstractAsyncContextManager
 from time import perf_counter
 
 from loguru import logger
@@ -111,7 +109,6 @@ class QueryApplication:
                 retryable=True,
                 http_status=409,
             )
-        generation_guard: AbstractAsyncContextManager[None] | None = None
         try:
             # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
             messages = started.context.messages
@@ -200,95 +197,88 @@ class QueryApplication:
                 return
             # 最终复核与完整结果读取共享同步 generation lock，避免 readiness
             # 通过后目标表切入重建并暴露空集或部分代次。
-            generation_guard = self._readiness.hold(validated.target_tables)
-            await generation_guard.__aenter__()
-            if (
-                len(validated.target_tables) > 1
-                and context.relationships_authoritative
-                and not await self._metadata.relationships_are_authoritative(
+            async with self._readiness.hold(validated.target_tables):
+                if not await self._metadata.relationships_are_authoritative(
                     context.physical_schema
-                )
-            ):
-                raise DataAgentError(
-                    "query_schema_changed",
-                    "query_metadata",
-                    "查询使用的物理模式已变化，请重试",
-                    retryable=True,
-                    http_status=409,
-                )
-            if not await self._readiness.ready(validated.target_tables):
-                await self._complete(request, DATA_PREPARING_MESSAGE)
-                yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
-                return
-            await self._executor.explain(validated)
-            # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
-            started_at = perf_counter()
-            row_count = 0
-            sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
-            audit_identity = {
-                "user_id": request.user_id,
-                "conversation_uid": request.conversation_uid,
-                "turn_uid": request.turn_uid,
-                "sql_hash": sql_hash,
-                "table_ids": list(validated.table_ids),
-            }
-            structured_log(
-                "INFO",
-                "只读查询执行已开始",
-                **audit_identity,
-                outcome="started",
-                row_count=0,
-            )
-            stream = self._executor.execute(validated)
-            try:
-                try:
-                    first = await anext(stream)
-                except StopAsyncIteration:
-                    first = None
-                columns = first.columns if first is not None else []
-                yield QueryEvent(
-                    kind="metadata",
-                    sql=validated.sql,
-                    columns=columns,
-                    result_scope="all_sources",
-                )
-                if first is not None and first.rows:
-                    row_count += len(first.rows)
-                    yield QueryEvent(kind="rows", rows=first.rows)
-                async for batch in stream:
-                    row_count += len(batch.rows)
-                    yield QueryEvent(kind="rows", rows=batch.rows)
-            except BaseException as error:
-                elapsed_ms = round((perf_counter() - started_at) * 1000)
+                ):
+                    raise DataAgentError(
+                        "query_schema_changed",
+                        "query_metadata",
+                        "查询使用的物理模式已变化，请重试",
+                        retryable=True,
+                        http_status=409,
+                    )
+                if not await self._readiness.ready(validated.target_tables):
+                    await self._complete(request, DATA_PREPARING_MESSAGE)
+                    yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
+                    return
+                await self._executor.explain(validated)
+                # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
+                started_at = perf_counter()
+                row_count = 0
+                sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
+                audit_identity = {
+                    "user_id": request.user_id,
+                    "conversation_uid": request.conversation_uid,
+                    "turn_uid": request.turn_uid,
+                    "sql_hash": sql_hash,
+                    "table_ids": list(validated.table_ids),
+                }
                 structured_log(
-                    "WARNING",
-                    "只读查询执行未完成",
+                    "INFO",
+                    "只读查询执行已开始",
                     **audit_identity,
-                    outcome="failed",
+                    outcome="started",
+                    row_count=0,
+                )
+                stream = self._executor.execute(validated)
+                try:
+                    try:
+                        first = await anext(stream)
+                    except StopAsyncIteration:
+                        first = None
+                    columns = first.columns if first is not None else []
+                    yield QueryEvent(
+                        kind="metadata",
+                        sql=validated.sql,
+                        columns=columns,
+                        result_scope="all_sources",
+                    )
+                    if first is not None and first.rows:
+                        row_count += len(first.rows)
+                        yield QueryEvent(kind="rows", rows=first.rows)
+                    async for batch in stream:
+                        row_count += len(batch.rows)
+                        yield QueryEvent(kind="rows", rows=batch.rows)
+                except BaseException as error:
+                    elapsed_ms = round((perf_counter() - started_at) * 1000)
+                    structured_log(
+                        "WARNING",
+                        "只读查询执行未完成",
+                        **audit_identity,
+                        outcome="failed",
+                        row_count=row_count,
+                        duration_ms=elapsed_ms,
+                        error_type=type(error).__name__,
+                    )
+                    raise
+                finally:
+                    await stream.aclose()
+                elapsed_ms = round((perf_counter() - started_at) * 1000)
+                summary = f"查询完成，共返回 {row_count} 行。"
+                structured_log(
+                    "INFO",
+                    "只读查询执行完成",
+                    **audit_identity,
+                    outcome="success",
                     row_count=row_count,
                     duration_ms=elapsed_ms,
-                    error_type=type(error).__name__,
                 )
-                raise
-            finally:
-                await stream.aclose()
-            elapsed_ms = round((perf_counter() - started_at) * 1000)
-            summary = f"查询完成，共返回 {row_count} 行。"
-            structured_log(
-                "INFO",
-                "只读查询执行完成",
-                **audit_identity,
-                outcome="success",
-                row_count=row_count,
-                duration_ms=elapsed_ms,
-            )
-            await self._complete(request, summary)
-            yield QueryEvent(
-                kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
-            )
+                await self._complete(request, summary)
+                yield QueryEvent(
+                    kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
+                )
         finally:
-            if generation_guard is not None:
-                await generation_guard.__aexit__(*sys.exc_info())
             try:
                 await self._conversations.abandon_turn(
                     request.user_id,
@@ -338,46 +328,59 @@ class QueryApplication:
                     outcome="started",
                     row_count=0,
                 )
-                if not await self._readiness.ready(result.validated.target_tables):
-                    structured_log(
-                        "INFO",
-                        "只读查询预检未执行",
-                        **audit_identity,
-                        outcome="not_ready",
-                        row_count=0,
-                    )
-                    return None
-                try:
-                    await self._executor.explain(result.validated)
-                except QueryExplainRejected as error:
-                    structured_log(
-                        "WARNING",
-                        "只读查询预检未通过",
-                        **audit_identity,
-                        outcome="explain_rejected",
-                        row_count=0,
-                        error_type=type(error).__name__,
-                    )
-                    issues = (error.issue,)
-                except BaseException as error:
-                    structured_log(
-                        "WARNING",
-                        "只读查询预检失败",
-                        **audit_identity,
-                        outcome="failed",
-                        row_count=0,
-                        error_type=type(error).__name__,
-                    )
-                    raise
-                else:
-                    structured_log(
-                        "INFO",
-                        "只读查询预检通过",
-                        **audit_identity,
-                        outcome="explain_passed",
-                        row_count=0,
-                    )
-                    return result.validated
+                async with self._readiness.hold(result.validated.target_tables):
+                    if not await self._metadata.relationships_are_authoritative(
+                        context.physical_schema
+                    ):
+                        raise DataAgentError(
+                            "query_schema_changed",
+                            "query_metadata",
+                            "查询使用的物理模式已变化，请重试",
+                            retryable=True,
+                            http_status=409,
+                        )
+                    if not await self._readiness.ready(
+                        result.validated.target_tables
+                    ):
+                        structured_log(
+                            "INFO",
+                            "只读查询预检未执行",
+                            **audit_identity,
+                            outcome="not_ready",
+                            row_count=0,
+                        )
+                        return None
+                    try:
+                        await self._executor.explain(result.validated)
+                    except QueryExplainRejected as error:
+                        structured_log(
+                            "WARNING",
+                            "只读查询预检未通过",
+                            **audit_identity,
+                            outcome="explain_rejected",
+                            row_count=0,
+                            error_type=type(error).__name__,
+                        )
+                        issues = (error.issue,)
+                    except BaseException as error:
+                        structured_log(
+                            "WARNING",
+                            "只读查询预检失败",
+                            **audit_identity,
+                            outcome="failed",
+                            row_count=0,
+                            error_type=type(error).__name__,
+                        )
+                        raise
+                    else:
+                        structured_log(
+                            "INFO",
+                            "只读查询预检通过",
+                            **audit_identity,
+                            outcome="explain_passed",
+                            row_count=0,
+                        )
+                        return result.validated
             if attempt == 0:
                 draft = await self._planner.repair(
                     context,
