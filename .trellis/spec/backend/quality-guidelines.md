@@ -234,6 +234,8 @@ original PR branch.
   including threads present in historical delegation comments.
 - A blocked thread that is also outdated -> keep it unresolved and exclude it
   from both the resolver queue and the delegation comment.
+- A thread that gains a blocked reply after scanning but before the resolver
+  mutation -> keep it unresolved after a paginated final thread read.
 
 ### 5. Good/Base/Bad Cases
 
@@ -248,10 +250,10 @@ original PR branch.
 ### 6. Tests Required
 
 - The standalone Node self-check covers outdated-thread resolution,
-  blocked-thread exclusion, comment pagination, reviewer filtering, resolved
-  thread exclusion, unfinished-thread redelegation, invalid PR rejection, and
-  the rule that the PAT-backed delegation path never calls
-  `resolveReviewThread`.
+  blocked-thread exclusion before scanning and immediately before resolution,
+  comment pagination, reviewer filtering, resolved thread exclusion,
+  unfinished-thread redelegation, invalid PR rejection, and the rule that the
+  PAT-backed delegation path never calls `resolveReviewThread`.
 - Parse the workflow YAML and verify the resolver uses `CODEX_TRIGGER_TOKEN`
   with `continue-on-error: true`; run `git diff --check` and `actionlint` when
   it is available.

@@ -225,6 +225,29 @@ async function scanUnresolvedCodexThreads(github, owner, repo, pullNumber, revie
 
 async function resolveReviewThreads(github, core, threads) {
   for (const thread of threads) {
+    const result = await github.graphql(
+      `query($threadId:ID!) {
+        node(id:$threadId) {
+          ... on PullRequestReviewThread {
+            id
+            isResolved
+            comments(first:100) {
+              nodes { body }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { threadId: thread.id },
+    );
+    const currentThread = result.node;
+    if (!currentThread || currentThread.isResolved) {
+      continue;
+    }
+    if (await hasBlockedReply(github, currentThread)) {
+      core.info(`Skipped blocked outdated review thread ${thread.id}.`);
+      continue;
+    }
     await github.graphql(
       `mutation($threadId:ID!) {
         resolveReviewThread(input:{threadId:$threadId}) {
@@ -586,6 +609,30 @@ async function selfTest() {
           },
         };
       }
+      if (query.includes("node(id:$threadId)")) {
+        const racedBlockerPage =
+          variables.threadId === "PRRT_OUTDATED_RACE" && variables.cursor;
+        return {
+          node: {
+            id: variables.threadId,
+            isResolved: false,
+            comments: {
+              nodes: racedBlockerPage
+                ? [{ body: "无法安全完成：扫描后新增的第 101 条阻塞原因。" }]
+                : variables.threadId === "PRRT_OUTDATED_RACE"
+                  ? [
+                      { body: "review finding" },
+                      ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                    ]
+                  : [{ body: "review finding" }],
+              pageInfo:
+                variables.threadId === "PRRT_OUTDATED_RACE" && !variables.cursor
+                  ? { hasNextPage: true, endCursor: "race-page-2" }
+                  : { hasNextPage: false, endCursor: null },
+            },
+          },
+        };
+      }
       return {
         repository: {
           pullRequest: {
@@ -642,6 +689,21 @@ async function selfTest() {
                     {
                       body: "review finding",
                       url: "https://github.com/owner/repo/pull/7#discussion_outdated",
+                      author: { login: "codex-reviewer" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_OUTDATED_RACE",
+                isResolved: false,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_outdated_race",
                       author: { login: "codex-reviewer" },
                     },
                   ],
@@ -782,6 +844,7 @@ async function selfTest() {
   assert.match(manualBodies[0], /PRRT_ALREADY_DELEGATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_RESOLVED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED_RACE/);
   assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED_OUTDATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED_PAGED_OUTDATED/);
