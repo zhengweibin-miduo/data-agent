@@ -1,0 +1,29 @@
+{
+  "id": "blocked-review-thread-state",
+  "name": "blocked-review-thread-state",
+  "title": "阻塞审查意见保持未解决状态",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-07",
+  "completedAt": "2026-08-07",
+  "branch": "fix/blocked-review-thread-state-20260807",
+  "base_branch": "master",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-07-blocked-review-thread-state",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

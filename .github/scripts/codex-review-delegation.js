@@ -209,9 +209,12 @@ async function scanUnresolvedCodexThreads(github, owner, repo, pullNumber, revie
         continue;
       }
       const summary = { id: thread.id, url: firstComment.url };
+      if (await hasBlockedReply(github, thread)) {
+        continue;
+      }
       if (thread.isOutdated) {
         outdated.push(summary);
-      } else if (!(await hasBlockedReply(github, thread))) {
+      } else {
         active.push(summary);
       }
     }
@@ -222,6 +225,29 @@ async function scanUnresolvedCodexThreads(github, owner, repo, pullNumber, revie
 
 async function resolveReviewThreads(github, core, threads) {
   for (const thread of threads) {
+    const result = await github.graphql(
+      `query($threadId:ID!) {
+        node(id:$threadId) {
+          ... on PullRequestReviewThread {
+            id
+            isResolved
+            comments(first:100) {
+              nodes { body }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { threadId: thread.id },
+    );
+    const currentThread = result.node;
+    if (!currentThread || currentThread.isResolved) {
+      continue;
+    }
+    if (await hasBlockedReply(github, currentThread)) {
+      core.info(`Skipped blocked outdated review thread ${thread.id}.`);
+      continue;
+    }
     await github.graphql(
       `mutation($threadId:ID!) {
         resolveReviewThread(input:{threadId:$threadId}) {
@@ -232,6 +258,39 @@ async function resolveReviewThreads(github, core, threads) {
     );
     core.info(`Resolved outdated review thread ${thread.id}.`);
   }
+}
+
+async function refreshActiveReviewThreads(github, core, threads, delegationKind = "manual") {
+  const active = [];
+  for (const thread of threads) {
+    const result = await github.graphql(
+      `query($threadId:ID!) {
+        node(id:$threadId) {
+          ... on PullRequestReviewThread {
+            id
+            isResolved
+            isOutdated
+            comments(first:100) {
+              nodes { body }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { threadId: thread.id },
+    );
+    const currentThread = result.node;
+    if (!currentThread || currentThread.isResolved || currentThread.isOutdated) {
+      core.info(`Skipped inactive review thread ${thread.id} before ${delegationKind} delegation.`);
+      continue;
+    }
+    if (await hasBlockedReply(github, currentThread)) {
+      core.info(`Skipped blocked review thread ${thread.id} before ${delegationKind} delegation.`);
+      continue;
+    }
+    active.push(thread);
+  }
+  return active;
 }
 
 async function issueComments(github, owner, repo, pullNumber) {
@@ -275,11 +334,17 @@ async function delegateReview({ github, context, core }) {
     return;
   }
 
+  const currentThreads = await refreshActiveReviewThreads(github, core, threads, "automatic");
+  if (currentThreads.length === 0) {
+    core.info("This review no longer has active unresolved Codex threads.");
+    return;
+  }
+
   await github.rest.issues.createComment({
     owner,
     repo,
     issue_number: pull.number,
-    body: delegationBody(review.id, pull.head.sha, pull.head.ref, threads),
+    body: delegationBody(review.id, pull.head.sha, pull.head.ref, currentThreads),
   });
 }
 
@@ -346,11 +411,17 @@ async function delegateManualReview(options) {
     throw new Error("Pull request head changed while preparing manual delegation.");
   }
 
+  const currentActive = await refreshActiveReviewThreads(github, core, active);
+  if (currentActive.length === 0) {
+    core.info("This pull request no longer has active unresolved Codex threads.");
+    return;
+  }
+
   await github.rest.issues.createComment({
     owner,
     repo,
     issue_number: pullNumber,
-    body: manualDelegationBody(pull.head.sha, pull.head.ref, active),
+    body: manualDelegationBody(pull.head.sha, pull.head.ref, currentActive),
   });
 }
 
@@ -415,7 +486,38 @@ async function selfTest() {
   assert.equal(createdBodies.length, 0, "no unresolved threads must not create a comment");
 
   let page = 0;
-  github.graphql = async () => {
+  let automaticRaceBlocked = false;
+  github.graphql = async (query, variables) => {
+    if (variables.cursor === "automatic-race-page-2") {
+      return {
+        node: {
+          comments: {
+            nodes: [{ body: "无法安全完成：扫描后、自动委派前新增的第 101 条阻塞原因。" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      };
+    }
+    if (query.includes("node(id:$threadId)")) {
+      return {
+        node: {
+          id: variables.threadId,
+          isResolved: false,
+          isOutdated: false,
+          comments: {
+            nodes: automaticRaceBlocked
+              ? [
+                  { body: "review finding" },
+                  ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                ]
+              : [{ body: "review finding" }],
+            pageInfo: automaticRaceBlocked
+              ? { hasNextPage: true, endCursor: "automatic-race-page-2" }
+              : { hasNextPage: false, endCursor: null },
+          },
+        },
+      };
+    }
     page++;
     return {
       repository: {
@@ -485,6 +587,16 @@ async function selfTest() {
     1,
     "a different review on the same head must still be delegated",
   );
+
+  page = 0;
+  automaticRaceBlocked = true;
+  await delegateReview({ github, context, core });
+  assert.equal(
+    createdBodies.length,
+    1,
+    "a thread blocked after automatic scanning must not be delegated",
+  );
+  automaticRaceBlocked = false;
 
   page = 0;
   github.paginate = async () => [
@@ -558,6 +670,7 @@ async function selfTest() {
 
   const manualBodies = [];
   const resolvedThreadIds = [];
+  let manualRaceBlocked = false;
   const manualComments = [
     {
       body: `${marker(41, "older-sha")}\n- https://example.test/old (PRRT_ALREADY_DELEGATED)`,
@@ -569,6 +682,63 @@ async function selfTest() {
       if (query.includes("resolveReviewThread")) {
         resolvedThreadIds.push(variables.threadId);
         return { resolveReviewThread: { thread: { isResolved: true } } };
+      }
+      if (
+        query.includes("node(id:$threadId)") &&
+        variables.threadId === "PRRT_BLOCKED_PAGED_OUTDATED"
+      ) {
+        return {
+          node: {
+            comments: {
+              nodes: [{ body: "无法安全完成：第 101 条回复中的阻塞原因。" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        };
+      }
+      if (query.includes("node(id:$threadId)")) {
+        if (variables.threadId === "PRRT_MANUAL" && manualRaceBlocked) {
+          return {
+            node: {
+              id: variables.threadId,
+              isResolved: false,
+              isOutdated: false,
+              comments: {
+                nodes: variables.cursor
+                  ? [{ body: "无法安全完成：扫描后、委派前新增的第 101 条阻塞原因。" }]
+                  : [
+                      { body: "review finding" },
+                      ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                    ],
+                pageInfo: variables.cursor
+                  ? { hasNextPage: false, endCursor: null }
+                  : { hasNextPage: true, endCursor: "manual-race-page-2" },
+              },
+            },
+          };
+        }
+        const racedBlockerPage =
+          variables.threadId === "PRRT_OUTDATED_RACE" && variables.cursor;
+        return {
+          node: {
+            id: variables.threadId,
+            isResolved: false,
+            comments: {
+              nodes: racedBlockerPage
+                ? [{ body: "无法安全完成：扫描后新增的第 101 条阻塞原因。" }]
+                : variables.threadId === "PRRT_OUTDATED_RACE"
+                  ? [
+                      { body: "review finding" },
+                      ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                    ]
+                  : [{ body: "review finding" }],
+              pageInfo:
+                variables.threadId === "PRRT_OUTDATED_RACE" && !variables.cursor
+                  ? { hasNextPage: true, endCursor: "race-page-2" }
+                  : { hasNextPage: false, endCursor: null },
+            },
+          },
+        };
       }
       return {
         repository: {
@@ -633,6 +803,21 @@ async function selfTest() {
                 },
               },
               {
+                id: "PRRT_OUTDATED_RACE",
+                isResolved: false,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_outdated_race",
+                      author: { login: "codex-reviewer" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
                 id: "PRRT_BLOCKED",
                 isResolved: false,
                 comments: {
@@ -649,6 +834,42 @@ async function selfTest() {
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_BLOCKED_OUTDATED",
+                isResolved: false,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_outdated",
+                      author: { login: "codex-reviewer" },
+                    },
+                    {
+                      body: "无法安全完成：需要产品决策。",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_outdated_reply",
+                      author: { login: "codex" },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              {
+                id: "PRRT_BLOCKED_PAGED_OUTDATED",
+                isResolved: false,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      body: "review finding",
+                      url: "https://github.com/owner/repo/pull/7#discussion_blocked_paged_outdated",
+                      author: { login: "codex-reviewer" },
+                    },
+                    ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+                  ],
+                  pageInfo: { hasNextPage: true, endCursor: "blocked-page-2" },
                 },
               },
               {
@@ -730,7 +951,10 @@ async function selfTest() {
   assert.match(manualBodies[0], /PRRT_ALREADY_DELEGATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_RESOLVED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_OUTDATED_RACE/);
   assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED_OUTDATED/);
+  assert.doesNotMatch(manualBodies[0], /PRRT_BLOCKED_PAGED_OUTDATED/);
   assert.doesNotMatch(manualBodies[0], /PRRT_OTHER_REVIEWER/);
 
   manualComments.push({ body: manualBodies[0], user: { login: "trusted-user" } });
@@ -748,6 +972,24 @@ async function selfTest() {
     "previously delegated active unresolved threads must be delegated again",
   );
   assert.match(manualBodies[1], /PRRT_ALREADY_DELEGATED/);
+
+  manualRaceBlocked = true;
+  await delegateManualReview({
+    github: manualGithub,
+    context: manualContext,
+    core,
+    prNumber: 7,
+    prAuthors: "allowed-author",
+    reviewBots: "codex-reviewer[bot]",
+  });
+  assert.equal(manualBodies.length, 3, "remaining active threads must still be delegated");
+  assert.doesNotMatch(
+    manualBodies[2],
+    /PRRT_MANUAL/,
+    "a thread blocked after scanning must be excluded before comment creation",
+  );
+  assert.match(manualBodies[2], /PRRT_ALREADY_DELEGATED/);
+  manualRaceBlocked = false;
 
   manualComments.length = 0;
   let pullReadCount = 0;
@@ -773,7 +1015,7 @@ async function selfTest() {
     }),
     /Pull request head changed while preparing manual delegation/,
   );
-  assert.equal(manualBodies.length, 2, "a stale manual delegation must not be created");
+  assert.equal(manualBodies.length, 3, "a stale manual delegation must not be created");
 
   manualGithub.rest.pulls.get = async () => ({
     data: {
