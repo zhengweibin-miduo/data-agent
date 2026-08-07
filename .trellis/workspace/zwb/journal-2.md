@@ -108,3 +108,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 62: 阻塞审查线程终态修复
+
+**Date**: 2026-08-07
+**Task**: 阻塞审查线程终态修复
+**Branch**: `fix/blocked-review-thread-state-20260807`
+
+### Summary
+
+blocked 回复优先于 outdated；晚到任务在 resolve 前复核线程，保持无法安全完成的审查意见 unresolved；已创建 PR #86。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3536b30` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 61
-- **Last Active**: 2026-08-02
+- **Total Sessions**: 62
+- **Last Active**: 2026-08-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~110 | Active |
+| `journal-2.md` | ~143 | Active |
 | `journal-1.md` | ~1987 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 62 | 2026-08-07 | 阻塞审查线程终态修复 | `3536b30` | `fix/blocked-review-thread-state-20260807` |
 | 61 | 2026-08-02 | 完成前后端双根结构迁移 | `db73176` | `refactor/separate-backend-frontend-roots-20260802` |
 | 60 | 2026-08-02 | 补齐项目结构集成 diff 门禁 | `addba92` | `refactor/align-project-structure-tests-20260802` |
 | 59 | 2026-08-02 | 完成项目结构、DDD 边界与测试重构 | `743a895`, `c4f979c`, `2d5c003`, `1b53ccf`, `b86ebb7` | `refactor/align-project-structure-tests-20260802` |
