@@ -1,5 +1,6 @@
 """四张 Meta 业务表的原子快照同步。"""
 
+import hashlib
 from collections.abc import Iterable
 
 from sqlalchemy import Table, delete, exists, select
@@ -18,6 +19,12 @@ from models.semantic import (
     MetricMetadata,
     SemanticMetadata,
 )
+
+
+def authority_scope_key(table_ids: Iterable[str]) -> str:
+    """返回 accepted 局部表集合的稳定权威槽位标识。"""
+    canonical_scope = "\n".join(sorted(table_ids))
+    return hashlib.sha256(canonical_scope.encode()).hexdigest()
 
 
 class MetadataRepository:
@@ -89,6 +96,7 @@ class MetadataRepository:
             [
                 {
                     "source": schema.source,
+                    "scope_key": authority_scope_key(submitted_table_ids),
                     "schema_fingerprint": schema.schema_fingerprint,
                 }
             ],

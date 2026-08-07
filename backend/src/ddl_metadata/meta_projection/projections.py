@@ -168,11 +168,12 @@ class MetadataProjectionRepository:
         from ddl_metadata.persistence.tables import physical_schema_authority
 
         current = await self._session.scalar(
-            select(physical_schema_authority.c.schema_fingerprint).where(
-                physical_schema_authority.c.source == source
+            select(physical_schema_authority.c.source).where(
+                physical_schema_authority.c.source == source,
+                physical_schema_authority.c.schema_fingerprint == schema_fingerprint,
             )
         )
-        return current == schema_fingerprint
+        return current is not None
 
     async def semantic_projection(
         self,

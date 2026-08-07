@@ -483,11 +483,19 @@ class QueryIntent(ContractModel):
         )
         if len(explicit_sorts) > len(self.sorts):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
-        if self.query_type == QueryType.DETAIL and not all_filters:
+        if self.query_type == QueryType.DETAIL:
+            detail_evidence_text = user_text
+            clause_offsets = [
+                detail_evidence_text.find(item.clause_quote)
+                for item in all_filters
+                if item.clause_quote and item.clause_quote in detail_evidence_text
+            ]
+            if clause_offsets:
+                detail_evidence_text = detail_evidence_text[: min(clause_offsets)]
             detail_match = re.search(
                 r"(?:列出|展示|查看)(.+?)(?=(?:大于|小于|等于|属于|包含|"
                 r"升序|降序|前\s*\d+|top\s*\d+|的记录|的订单|$))",
-                user_text,
+                detail_evidence_text.rstrip(" ，,。"),
             )
             if detail_match:
                 explicit_results = [

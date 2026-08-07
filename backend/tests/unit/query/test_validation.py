@@ -189,6 +189,24 @@ def test_intent_requires_all_supported_explicit_slots() -> None:
         ).validate_evidence(["销售额合计"])
 
 
+def test_detail_result_fields_remain_complete_before_filter_clause() -> None:
+    """带过滤的明细请求也必须保留过滤子句前的全部结果字段。"""
+    with pytest.raises(ValueError, match="明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["华东"],
+                    clause_quote="地区是华东",
+                )
+            ],
+        ).validate_evidence(["列出订单编号和订单金额，地区是华东"])
+
+
 def test_top_n_sort_ambiguity_can_reach_clarification() -> None:
     """缺少排序键的 Top-N 可携带排序歧义进入 Meta 澄清。"""
     intent = QueryIntent(

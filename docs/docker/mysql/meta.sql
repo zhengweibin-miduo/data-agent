@@ -6,8 +6,11 @@ USE meta;
 
 CREATE TABLE IF NOT EXISTS physical_schema_authority
 (
-    source             VARCHAR(128) PRIMARY KEY COMMENT 'accepted DDL 来源',
-    schema_fingerprint CHAR(64) NOT NULL COMMENT '完整物理模式 SHA-256 指纹'
+    source             VARCHAR(128) NOT NULL COMMENT 'accepted DDL 来源',
+    scope_key          CHAR(64) NOT NULL COMMENT '本次 accepted 表集合 SHA-256 标识',
+    schema_fingerprint CHAR(64) NOT NULL COMMENT '局部物理模式 SHA-256 指纹',
+    PRIMARY KEY (source, scope_key),
+    UNIQUE KEY uq_physical_schema_authority_fingerprint (source, schema_fingerprint)
 ) ENGINE = InnoDB COMMENT = 'Query JOIN 授权使用的 accepted 物理模式版本';
 
 DROP TABLE IF EXISTS table_info;

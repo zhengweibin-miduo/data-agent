@@ -128,6 +128,9 @@
   clarification messages do not advance the memory-summary cursor.
 - Explicit filters and non-temporal grouping dimensions must be covered item by
   item by the trusted intent; a non-empty partial slot list is not sufficient.
+- Accepted physical-schema authority is scoped by the submitted table set, so
+  independently accepted table snapshots for one source coexist; detail result
+  fields remain item-complete even when the same request also has filters.
 
 ### 5. Good/Base/Bad Cases
 

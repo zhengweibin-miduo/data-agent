@@ -53,5 +53,6 @@ physical_schema_authority = Table(
     "physical_schema_authority",
     metadata,
     Column("source", String(128), primary_key=True),
+    Column("scope_key", String(64), primary_key=True),
     Column("schema_fingerprint", String(64), nullable=False),
 )
