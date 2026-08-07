@@ -226,11 +226,29 @@ async def test_empty_semantic_intent_fails_closed_before_planning() -> None:
     assert search.calls == ["metadata"]
 
 
+async def test_count_without_subject_requires_clarification() -> None:
+    """仅有分组维度的数量请求必须先明确计数主体。"""
+    search = _Search([_candidate(MetadataObjectKind.COLUMN, "column-region", "地区")])
+
+    result = await QueryMetadataAdapter(search).build_context(
+        "按地区统计数量",
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="count",
+            aggregation_quote="数量",
+            dimension_quotes=["地区"],
+        ),
+        _schema(),
+    )
+
+    assert isinstance(result, QueryClarification)
+    assert result.slot == "measure"
+    assert "计数" in result.question
+
+
 async def test_context_marks_verified_schema_relationships_authoritative() -> None:
     """Meta seam 核验完整结构指纹后才可授权关系。"""
-    search = _Search(
-        [_candidate(MetadataObjectKind.COLUMN, "column-amount", "金额")]
-    )
+    search = _Search([_candidate(MetadataObjectKind.COLUMN, "column-amount", "金额")])
     result = await QueryMetadataAdapter(search).build_context(
         "查询金额",
         QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),

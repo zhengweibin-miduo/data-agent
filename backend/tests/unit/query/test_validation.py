@@ -169,6 +169,14 @@ def test_explicit_equality_cannot_be_omitted_from_intent() -> None:
         ).validate_evidence(["列出地区是华东的订单编号"])
 
 
+def test_unmodeled_negated_filter_cannot_be_omitted_from_intent() -> None:
+    """未建模否定过滤即使被模型省略也必须在规划前失败关闭。"""
+    with pytest.raises(ValueError, match="否定语义"):
+        QueryIntent(
+            query_type=QueryType.DETAIL, measure_quotes=["订单编号"]
+        ).validate_evidence(["列出地区不在华东的订单编号"])
+
+
 @pytest.mark.parametrize(
     ("sql", "issue"),
     [
@@ -806,8 +814,10 @@ async def test_time_bucket_requires_temporal_physical_column() -> None:
     context.bindings = {"金额": "column-amount", "日期": "column-created-at"}
     result = await validate_query(
         QueryDraft(
-            sql=("SELECT DATE(o.created_at), SUM(o.amount) FROM dw.orders o "
-                 "GROUP BY DATE(o.created_at)"),
+            sql=(
+                "SELECT DATE(o.created_at), SUM(o.amount) FROM dw.orders o "
+                "GROUP BY DATE(o.created_at)"
+            ),
             table_ids=["table-orders"],
             column_ids=["column-created-at", "column-amount"],
         ),
@@ -1021,6 +1031,110 @@ async def test_join_rejects_every_unauthorized_condition(sql: str) -> None:
         dw_database="dw",
     )
     assert result.issues[0].code == "join_unsupported"
+
+
+async def test_join_rejects_sibling_fact_fanout_from_measure_grain() -> None:
+    """度量只能沿多对一方向扩展，不能再从共同父表进入另一子表。"""
+    schema = PhysicalSchema(
+        source="erp",
+        canonical_ddl="schema",
+        ddl_hash="ddl",
+        schema_fingerprint="schema",
+        tables=[
+            PhysicalTable(
+                id="table-orders",
+                name="orders",
+                qualified_name="orders",
+                columns=[
+                    PhysicalColumn(
+                        id="order-customer", name="customer_id", data_type="BIGINT"
+                    ),
+                    PhysicalColumn(
+                        id="order-amount", name="amount", data_type="DECIMAL(10,2)"
+                    ),
+                ],
+            ),
+            PhysicalTable(
+                id="table-customers",
+                name="customers",
+                qualified_name="customers",
+                columns=[
+                    PhysicalColumn(id="customer-id", name="id", data_type="BIGINT"),
+                    PhysicalColumn(
+                        id="customer-region", name="region", data_type="VARCHAR(20)"
+                    ),
+                ],
+            ),
+            PhysicalTable(
+                id="table-refunds",
+                name="refunds",
+                qualified_name="refunds",
+                columns=[
+                    PhysicalColumn(
+                        id="refund-customer", name="customer_id", data_type="BIGINT"
+                    ),
+                    PhysicalColumn(
+                        id="refund-reason", name="reason", data_type="VARCHAR(20)"
+                    ),
+                ],
+            ),
+        ],
+        relationships=[
+            PhysicalRelationship(
+                source_table_id="table-orders",
+                source_column_id="order-customer",
+                target_table="customers",
+                target_column="id",
+                constraint_id="orders-customer",
+            ),
+            PhysicalRelationship(
+                source_table_id="table-refunds",
+                source_column_id="refund-customer",
+                target_table="customers",
+                target_column="id",
+                constraint_id="refunds-customer",
+            ),
+        ],
+    )
+    context = QueryContext(
+        physical_schema=schema,
+        relationships_authoritative=True,
+        bindings={
+            "金额": "order-amount",
+            "地区": "customer-region",
+            "退款原因": "refund-reason",
+        },
+    )
+    draft = QueryDraft(
+        sql=(
+            "SELECT c.region, r.reason, SUM(o.amount) FROM dw.orders o "
+            "JOIN dw.customers c ON o.customer_id = c.id "
+            "JOIN dw.refunds r ON r.customer_id = c.id "
+            "GROUP BY c.region, r.reason"
+        ),
+        table_ids=["table-orders", "table-customers", "table-refunds"],
+        column_ids=[
+            "order-customer",
+            "order-amount",
+            "customer-id",
+            "customer-region",
+            "refund-customer",
+            "refund-reason",
+        ],
+    )
+    result = await validate_query(
+        draft,
+        context,
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["金额"],
+            dimension_quotes=["地区", "退款原因"],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_cardinality_unsupported"
 
 
 async def test_join_cannot_merge_two_independent_foreign_keys() -> None:
@@ -1391,9 +1505,7 @@ async def test_time_bucket_requires_exact_ast_shape() -> None:
             column_ids=["column-created-at", "column-amount"],
         ),
         _context().model_copy(
-            update={
-                "bindings": {"金额": "column-amount", "日期": "column-created-at"}
-            }
+            update={"bindings": {"金额": "column-amount", "日期": "column-created-at"}}
         ),
         QueryIntent(
             query_type=QueryType.TREND,
@@ -1463,9 +1575,7 @@ async def test_numeric_aggregate_rejects_text_measure() -> None:
     context = context.model_copy(
         update={
             "physical_schema": context.physical_schema.model_copy(
-                update={
-                    "tables": [text_orders, *context.physical_schema.tables[1:]]
-                }
+                update={"tables": [text_orders, *context.physical_schema.tables[1:]]}
             ),
             "bindings": {"金额": "column-amount"},
         }

@@ -5,6 +5,7 @@ from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import httpx
+import pytest
 from fastapi.routing import APIRoute
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -280,3 +281,16 @@ async def test_chat_turn_releases_execution_owner_after_model_failure() -> None:
         pass
 
     check_equal("模型失败释放执行权", conversations.abandon_turn.await_count, 1)
+
+
+async def test_chat_turn_releases_owner_when_assistant_replay_read_fails() -> None:
+    """取得执行权后的助手消息回读失败必须立即释放轮次。"""
+    service, conversations, _, _ = _service()
+    conversations.assistant_message = AsyncMock(side_effect=RuntimeError("read failed"))
+
+    with pytest.raises(RuntimeError, match="read failed"):
+        await service.run_turn("conversation-1", _request())
+
+    conversations.abandon_turn.assert_awaited_once_with(
+        "user-1", "conversation-1", "turn-1"
+    )

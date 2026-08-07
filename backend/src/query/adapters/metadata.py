@@ -120,6 +120,12 @@ class QueryMetadataAdapter:
                 quote=intent.time_quote,
                 question=f"请明确“{intent.time_quote}”使用哪个时间字段？",
             )
+        if intent.aggregation == "count" and not intent.measure_quotes:
+            return QueryClarification(
+                slot="measure",
+                quote=question,
+                question="请明确要计数的业务主体或字段？",
+            )
         # 步骤三：每个关键槽位必须唯一命中权威对象，分数不能消除歧义。
         slots: list[tuple[str, str, set[MetadataObjectKind]]] = [
             ("measure", quote, {MetadataObjectKind.METRIC, MetadataObjectKind.COLUMN})

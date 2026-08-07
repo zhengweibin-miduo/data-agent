@@ -216,6 +216,9 @@ class QueryIntent(ContractModel):
             "contains": ("包含", "含有", "like"),
         }
         unsupported_negations = ("不包含", "不含", "不在", "not in", "not like")
+        user_text = " ".join(user_messages).casefold()
+        if any(marker in user_text for marker in unsupported_negations):
+            raise ValueError("过滤操作包含尚未建模的否定语义")
         normalized_inequalities = {
             "大于等于": "gte",
             "大于或等于": "gte",
@@ -269,7 +272,6 @@ class QueryIntent(ContractModel):
             if evidenced_operator != item.operator:
                 raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
-        user_text = " ".join(user_messages).casefold()
         if any(marker in user_text for marker in ("不同", "去重", "唯一", "distinct")):
             raise ValueError("去重语义尚未建模，必须先澄清")
         if len(all_filters) > 1 and any(
@@ -881,6 +883,7 @@ def _validate_query_sync(
     # 步骤七：JOIN 的完整 ON 树只能由 AND 连接当前 DDL 的 FK 等式。
     fk_edges: set[frozenset[str]] = set()
     fk_constraints: dict[str, set[frozenset[str]]] = {}
+    fk_constraint_tables: dict[str, tuple[str, str]] = {}
     table_by_qualified = {
         key.casefold(): table
         for table in context.physical_schema.tables
@@ -905,6 +908,10 @@ def _validate_query_sync(
                 relation.constraint_id or f"legacy:{relation.source_column_id}"
             )
             fk_constraints.setdefault(constraint_id, set()).add(edge)
+            fk_constraint_tables[constraint_id] = (
+                relation.source_table_id,
+                target_table.id,
+            )
     aliases = {
         table.alias_or_name: tables_by_name[table.name] for table in physical_tables
     }
@@ -918,6 +925,7 @@ def _validate_query_sync(
     # 因此在建立该契约前对 JOIN 失败关闭。
     if joins and not context.relationships_authoritative:
         return _failed("join_authority_unavailable")
+    actual_join_directions: set[tuple[str, str]] = set()
     for join in joins:
         if (
             join.kind.upper() == "CROSS"
@@ -962,8 +970,16 @@ def _validate_query_sync(
             )
         ):
             return _failed("join_unsupported")
-        if not any(edges == join_pairs for edges in fk_constraints.values()):
+        matched_constraints = [
+            constraint_id
+            for constraint_id, edges in fk_constraints.items()
+            if edges == join_pairs
+        ]
+        if not matched_constraints:
             return _failed("join_unsupported")
+        actual_join_directions.update(
+            fk_constraint_tables[constraint_id] for constraint_id in matched_constraints
+        )
 
     # 步骤八：模型声明必须与 AST 实际引用以及当前权威指标完全一致。
     referenced_tables = {tables_by_name[table.name].id for table in physical_tables}
@@ -987,12 +1003,6 @@ def _validate_query_sync(
         if candidate.object_id in required_metric_ids:
             required_column_ids.update(candidate.related_column_ids)
     if list(root.find_all(exp.Join)):
-        referenced_side_tables = {
-            target.id
-            for relation in context.physical_schema.relationships
-            if (target := table_by_qualified.get(relation.target_table.casefold()))
-            is not None
-        }
         result_column_ids = {
             context.bindings[quote]
             for quote in intent.measure_quotes
@@ -1014,8 +1024,20 @@ def _validate_query_sync(
             )
             is not None
         }
-        if measure_owner_tables & referenced_side_tables:
-            return _failed("join_cardinality_unsupported")
+        parent_tables_by_child: dict[str, set[str]] = {}
+        for child_table, parent_table in actual_join_directions:
+            parent_tables_by_child.setdefault(child_table, set()).add(parent_table)
+        for measure_table in measure_owner_tables:
+            reachable = {measure_table}
+            pending = [measure_table]
+            while pending:
+                current = pending.pop()
+                for parent in parent_tables_by_child.get(current, set()):
+                    if parent not in reachable:
+                        reachable.add(parent)
+                        pending.append(parent)
+            if not referenced_tables.issubset(reachable):
+                return _failed("join_cardinality_unsupported")
     if not required_metric_ids.issubset(draft.metric_ids):
         return _failed("binding_missing")
     if not required_table_ids.issubset(referenced_tables):

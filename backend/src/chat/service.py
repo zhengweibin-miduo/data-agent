@@ -103,11 +103,23 @@ class ChatService:
         )
 
         # 步骤三：完成轮次的幂等回放直接返回现有助手消息，不重复调用门禁或模型。
-        existing = await self._conversations.assistant_message(
-            request.user_id,
-            conversation_uid,
-            request.turn_uid,
-        )
+        try:
+            existing = await self._conversations.assistant_message(
+                request.user_id,
+                conversation_uid,
+                request.turn_uid,
+            )
+        except Exception:
+            if started.execution_owner:
+                try:
+                    await self._conversations.abandon_turn(
+                        request.user_id,
+                        conversation_uid,
+                        request.turn_uid,
+                    )
+                except Exception:
+                    pass
+            raise
         if existing is not None:
             return ChatTurnResponse(
                 message=existing,
