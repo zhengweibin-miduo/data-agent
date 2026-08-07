@@ -236,6 +236,117 @@ def test_explicit_year_range_cannot_be_omitted_from_intent() -> None:
         ).validate_evidence(["查询2025年销售额合计"])
 
 
+def test_explicit_year_without_time_column_can_reach_clarification() -> None:
+    """显式年份缺少时间字段时可携带 time ambiguity 进入 Meta 澄清。"""
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        aggregation="sum",
+        aggregation_quote="合计",
+        measure_quotes=["销售额"],
+        time_quote="2025年",
+        ambiguities=[
+            query_domain.QueryAmbiguity(
+                slot="time", quote="2025年", question="请明确时间字段？"
+            )
+        ],
+    )
+
+    assert intent.validate_evidence(["查询2025年销售额合计"]) is None
+
+
+def test_or_is_rejected_even_when_model_extracts_only_one_branch() -> None:
+    """未建模 OR 不能通过只抽取一个过滤分支绕过。"""
+    with pytest.raises(ValueError, match="OR"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["华东"],
+                    clause_quote="地区是华东",
+                )
+            ],
+        ).validate_evidence(["查询地区是华东或状态是完成的订单编号"])
+
+
+@pytest.mark.parametrize("unit", ["条", "笔", "个"])
+def test_result_count_unit_cannot_be_omitted_from_ranking(unit: str) -> None:
+    """明确数量单位的截断请求必须形成可信排名与 LIMIT。"""
+    with pytest.raises(ValueError, match="Top-N"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["记录"],
+            sorts=[
+                SortIntent(
+                    quote="销售额", direction="desc", direction_quote="降序"
+                )
+            ],
+        ).validate_evidence([f"销售额降序的10{unit}记录"])
+
+
+@pytest.mark.parametrize("marker", ["个数", "最大", "最高", "最小", "最低"])
+def test_all_supported_aggregation_actions_must_enter_intent(marker: str) -> None:
+    """计数与极值动作不得被降级为明细意图。"""
+    with pytest.raises(ValueError, match="聚合"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+        ).validate_evidence([f"查询订单编号{marker}"])
+
+
+async def test_date_only_equality_on_timestamp_fails_closed() -> None:
+    """时间戳列的自然日不能被错误表达为午夜等值比较。"""
+    context = _context()
+    orders = context.physical_schema.tables[0]
+    timestamp_column = next(
+        column for column in orders.columns if column.id == "column-created-at"
+    ).model_copy(update={"data_type": "TIMESTAMP"})
+    columns = [
+        timestamp_column if column.id == timestamp_column.id else column
+        for column in orders.columns
+    ]
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [
+                        orders.model_copy(update={"columns": columns}),
+                        *context.physical_schema.tables[1:],
+                    ]
+                }
+            ),
+            "bindings": {"下单日期": "column-created-at"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.created_at FROM dw.orders o WHERE o.created_at = :day",
+            params={"day": "2026-08-01"},
+            table_ids=["table-orders"],
+            column_ids=["column-created-at"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["下单日期"],
+            filters=[
+                FilterIntent(
+                    column_quote="下单日期",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["2026年8月1日"],
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+
+    assert [issue.code for issue in result.issues] == ["filter_value_type_mismatch"]
+
+
 @pytest.mark.parametrize("connector", ["和", "以及"])
 def test_all_conjunctive_filter_clauses_must_enter_intent(connector: str) -> None:
     """和、以及连接的每项正向过滤都不得被模型省略。"""

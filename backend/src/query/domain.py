@@ -275,7 +275,7 @@ class QueryIntent(ContractModel):
         if any(marker in user_text for marker in ("不同", "去重", "唯一", "distinct")):
             raise ValueError("去重语义尚未建模，必须先澄清")
         boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", user_text)
-        if len(all_filters) > 1 and any(
+        if any(
             marker in boolean_text for marker in ("或", "或者", " or ")
         ):
             raise ValueError("过滤条件包含尚未建模的 OR 关系")
@@ -351,7 +351,8 @@ class QueryIntent(ContractModel):
             }
             if matched != {self.aggregation}:
                 raise ValueError("聚合运算必须与用户原文精确一致")
-        if self.time_quote and self.time_filter is None:
+        has_time_ambiguity = any(item.slot == "time" for item in self.ambiguities)
+        if self.time_quote and self.time_filter is None and not has_time_ambiguity:
             raise ValueError("时间范围必须提供可验证的过滤契约")
         if self.grain and self.time_column_quote is None:
             raise ValueError("时间粒度必须提供时间字段契约")
@@ -422,7 +423,10 @@ class QueryIntent(ContractModel):
         ):
             raise ValueError("用户明确表达的分组维度必须完整映射到查询意图")
         has_sort_ambiguity = any(item.slot == "sort" for item in self.ambiguities)
-        if re.search(r"(?:前\s*\d+|top\s*\d+)", user_text) and (
+        if re.search(
+            r"(?:前\s*\d+|top\s*\d+|\d+\s*(?:条|笔|个|名|行|项))",
+            user_text,
+        ) and (
             self.query_type != QueryType.RANKING
             or self.limit is None
             or (not self.sorts and not has_sort_ambiguity)
@@ -435,7 +439,8 @@ class QueryIntent(ContractModel):
             user_text,
         )
         if explicit_time_range and not (
-            self.time_quote and self.time_column_quote and self.time_filter
+            self.time_quote
+            and ((self.time_column_quote and self.time_filter) or has_time_ambiguity)
         ):
             raise ValueError("用户明确表达的时间范围必须完整映射到查询意图")
         if (
@@ -474,8 +479,13 @@ class QueryIntent(ContractModel):
                     "平均",
                     "均值",
                     "数量",
+                    "个数",
                     "最大值",
+                    "最大",
+                    "最高",
                     "最小值",
+                    "最小",
+                    "最低",
                 )
             )
             and self.aggregation is None
@@ -1271,6 +1281,16 @@ def _validate_query_sync(
         if temporal_type.match(data_type) and any(
             not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
             for value in values
+        ):
+            return _failed("filter_value_type_mismatch")
+        if (
+            re.match(r"^(?:DATETIME|TIMESTAMP)\b", data_type)
+            and item.operator in {"eq", "ne"}
+            and all(
+                isinstance(value, str)
+                and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+                for value in values
+            )
         ):
             return _failed("filter_value_type_mismatch")
 

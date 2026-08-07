@@ -528,6 +528,11 @@ class _GroundedMetadata:
         del schema
         return True
 
+    async def bindings_are_authoritative(self, context: QueryContext) -> bool:
+        """测试上下文的语义绑定始终保持稳定。"""
+        del context
+        return True
+
 
 class _Planner:
     """返回一条不带业务总量 LIMIT 的权威对象草稿。"""

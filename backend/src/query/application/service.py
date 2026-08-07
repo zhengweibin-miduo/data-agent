@@ -237,6 +237,14 @@ class QueryApplication:
                         retryable=True,
                         http_status=409,
                     )
+                if not await self._metadata.bindings_are_authoritative(context):
+                    raise DataAgentError(
+                        "query_metadata_changed",
+                        "query_metadata",
+                        "查询使用的业务语义绑定已变化，请重试",
+                        retryable=True,
+                        http_status=409,
+                    )
                 if not await self._readiness.ready(validated.target_tables):
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)

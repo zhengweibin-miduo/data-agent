@@ -174,6 +174,21 @@ async def test_context_rejects_non_authoritative_schema_for_single_table() -> No
     assert captured.value.code == "query_schema_changed"
 
 
+async def test_context_rejects_binding_after_semantic_candidate_changes() -> None:
+    """执行锁内语义召回改绑时旧 QueryContext 不再权威。"""
+    search = _Search([_candidate(MetadataObjectKind.COLUMN, "column-amount", "金额")])
+    adapter = QueryMetadataAdapter(search)
+    context = await adapter.build_context(
+        "查询金额",
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        _schema(),
+    )
+    assert not isinstance(context, QueryClarification)
+    search.candidates = [_candidate(MetadataObjectKind.COLUMN, "column-region", "金额")]
+
+    assert await adapter.bindings_are_authoritative(context) is False
+
+
 async def test_context_returns_only_highest_impact_clarification() -> None:
     """多个指标候选先于后续槽位只产生一个澄清。"""
     search = _Search(

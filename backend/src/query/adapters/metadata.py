@@ -79,6 +79,30 @@ class QueryMetadataAdapter:
             },
         )
 
+    async def bindings_are_authoritative(self, context: QueryContext) -> bool:
+        """重新召回并证明每个已选语义对象仍是唯一相同候选。"""
+        schema = context.physical_schema
+        table_ids = {table.id for table in schema.tables}
+        column_ids = {column.id for table in schema.tables for column in table.columns}
+        candidates = await self._search.search_metadata(
+            " ".join(context.bindings), table_ids=table_ids, column_ids=column_ids
+        )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if self._in_scope(candidate, table_ids, column_ids)
+            and candidate.kind != MetadataObjectKind.METRIC
+        ]
+        return all(
+            [
+                candidate.object_id
+                for candidate in candidates
+                if self._matches(quote, candidate)
+            ]
+            == [object_id]
+            for quote, object_id in context.bindings.items()
+        )
+
     async def build_context(
         self,
         question: str,

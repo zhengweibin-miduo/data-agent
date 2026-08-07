@@ -174,6 +174,10 @@ class QueryMetadataPort(Protocol):
         """在最终执行协调区内重新核验 accepted 关系快照。"""
         ...
 
+    async def bindings_are_authoritative(self, context: QueryContext) -> bool:
+        """在最终执行协调区内重新核验语义绑定仍指向相同对象。"""
+        ...
+
 
 class QueryPlannerPort(Protocol):
     """生成严格 QueryDraft 并消费唯一一次修复预算。"""
