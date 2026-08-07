@@ -3,6 +3,7 @@ const { createHash } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
 const OUTCOMES = new Set(["fixed", "no_change", "blocked"]);
+const BLOCKED_REPLY_PREFIX = "无法安全完成：";
 const FIELD_LIMITS = {
   threadId: 200,
   reason: 500,
@@ -185,6 +186,12 @@ function formatReply(input) {
   ].join("\n");
 }
 
+function hasBlockedReply(thread) {
+  return thread.comments
+    .slice(1)
+    .some((comment) => comment.body?.trimStart().startsWith(BLOCKED_REPLY_PREFIX));
+}
+
 function runGh(args) {
   const result = spawnSync("gh", args, {
     encoding: "utf8",
@@ -306,6 +313,9 @@ function publishReply(rawInput, adapter = createGhAdapter()) {
   if (thread.isResolved) {
     return { status: "skipped_resolved", threadId: input.threadId };
   }
+  if (hasBlockedReply(thread)) {
+    return { status: "skipped_blocked", threadId: input.threadId };
+  }
 
   const alreadyPublished = thread.comments.some((comment) =>
     comment.body?.includes(marker),
@@ -321,6 +331,13 @@ function publishReply(rawInput, adapter = createGhAdapter()) {
           `commitSha 与当前 PR head 不一致：${input.commitSha} != ${pull.headRefOid}`,
         );
       }
+    }
+    const latestThread = adapter.getThread(input.threadId);
+    if (latestThread.isResolved) {
+      return { status: "skipped_resolved", threadId: input.threadId };
+    }
+    if (hasBlockedReply(latestThread)) {
+      return { status: "skipped_blocked", threadId: input.threadId };
     }
     adapter.addReply(input.threadId, body);
   }
@@ -343,6 +360,13 @@ function publishReply(rawInput, adapter = createGhAdapter()) {
       );
     }
   }
+  const latestThread = adapter.getThread(input.threadId);
+  if (latestThread.isResolved) {
+    return { status: "skipped_resolved", threadId: input.threadId };
+  }
+  if (hasBlockedReply(latestThread)) {
+    return { status: "skipped_blocked", threadId: input.threadId };
+  }
   adapter.resolveThread(input.threadId);
   return {
     status: alreadyPublished ? "resolved_existing_reply" : "published_and_resolved",
@@ -350,12 +374,18 @@ function publishReply(rawInput, adapter = createGhAdapter()) {
   };
 }
 
-function fakeAdapter({ thread, pull, addError, resolveError } = {}) {
+function fakeAdapter({ thread, threads, pull, addError, resolveError } = {}) {
   const calls = [];
+  let threadReadIndex = 0;
   return {
     calls,
     getThread(threadId) {
       calls.push(["getThread", threadId]);
+      if (threads) {
+        const nextThread = threads[Math.min(threadReadIndex, threads.length - 1)];
+        threadReadIndex += 1;
+        return nextThread;
+      }
       return thread || { id: threadId, isResolved: false, comments: [] };
     },
     getCurrentPr() {
@@ -440,7 +470,7 @@ function selfTest() {
   assert.equal(fixedResult.status, "published_and_resolved");
   assert.deepEqual(
     fixed.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "addReply", "getCurrentPr", "resolveThread"],
+    ["getThread", "getCurrentPr", "getThread", "addReply", "getCurrentPr", "getThread", "resolveThread"],
   );
 
   const noChange = fakeAdapter();
@@ -451,7 +481,7 @@ function selfTest() {
   assert.equal(noChangeResult.status, "published_and_resolved");
   assert.deepEqual(
     noChange.calls.map((call) => call[0]),
-    ["getThread", "addReply", "resolveThread"],
+    ["getThread", "getThread", "addReply", "getThread", "resolveThread"],
   );
 
   const blocked = fakeAdapter();
@@ -462,8 +492,67 @@ function selfTest() {
   assert.equal(blockedResult.status, "published_blocked");
   assert.deepEqual(
     blocked.calls.map((call) => call[0]),
-    ["getThread", "addReply"],
+    ["getThread", "getThread", "addReply"],
   );
+
+  const existingBlockedComment = { body: "无法安全完成：需要架构决策。" };
+  const blockedInputs = [
+    fixedInput({ threadId: "PRRT_existing_blocked_fixed" }),
+    {
+      threadId: "PRRT_existing_blocked_no_change",
+      outcome: "no_change",
+      reason: "现有实现已覆盖该边界",
+    },
+    {
+      threadId: "PRRT_existing_blocked_again",
+      outcome: "blocked",
+      reason: "仍缺少外部依赖",
+    },
+  ];
+  for (const blockedInput of blockedInputs) {
+    const existingBlocked = fakeAdapter({
+      thread: {
+        id: blockedInput.threadId,
+        isResolved: false,
+        comments: [{ body: "review finding" }, existingBlockedComment],
+      },
+    });
+    assert.equal(publishReply(blockedInput, existingBlocked).status, "skipped_blocked");
+    assert.equal(
+      existingBlocked.calls.some(([operation]) =>
+        operation === "addReply" || operation === "resolveThread"),
+      false,
+      `${blockedInput.outcome} must not mutate a thread with an existing blocked reply`,
+    );
+  }
+
+  const lateBlockedThread = {
+    id: "PRRT_late_blocked",
+    isResolved: false,
+    comments: [{ body: "review finding" }, existingBlockedComment],
+  };
+  for (const lateInput of [
+    fixedInput({ threadId: "PRRT_late_blocked" }),
+    {
+      threadId: "PRRT_late_blocked",
+      outcome: "no_change",
+      reason: "现有实现已覆盖该边界",
+    },
+  ]) {
+    const lateBlocked = fakeAdapter({
+      threads: [
+        { id: lateInput.threadId, isResolved: false, comments: [] },
+        lateBlockedThread,
+      ],
+    });
+    assert.equal(publishReply(lateInput, lateBlocked).status, "skipped_blocked");
+    assert.equal(
+      lateBlocked.calls.some(([operation]) =>
+        operation === "addReply" || operation === "resolveThread"),
+      false,
+      `${lateInput.outcome} must not mutate a concurrently blocked thread`,
+    );
+  }
 
   const resolved = fakeAdapter({
     thread: { id: "PRRT_resolved", isResolved: true, comments: [] },
@@ -485,7 +574,7 @@ function selfTest() {
   assert.equal(publishReply(existingInput, existing).status, "resolved_existing_reply");
   assert.deepEqual(
     existing.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "resolveThread"],
+    ["getThread", "getCurrentPr", "getThread", "resolveThread"],
   );
 
   const failedReply = fakeAdapter({ addError: new Error("reply failed") });
@@ -499,7 +588,7 @@ function selfTest() {
   assert.throws(() => publishReply(fixedInput(), failedResolve), /resolve failed/);
   assert.deepEqual(
     failedResolve.calls.map((call) => call[0]),
-    ["getThread", "getCurrentPr", "addReply", "getCurrentPr", "resolveThread"],
+    ["getThread", "getCurrentPr", "getThread", "addReply", "getCurrentPr", "getThread", "resolveThread"],
   );
 
   const changedHeadAfterReply = fakeAdapter({
@@ -574,7 +663,10 @@ function selfTest() {
           id: "PRRT_paged",
           isResolved: false,
           comments: {
-            nodes: [{ body: "first" }],
+            nodes: [
+              { body: "review finding" },
+              ...Array.from({ length: 99 }, () => ({ body: "follow-up" })),
+            ],
             pageInfo: { hasNextPage: true, endCursor: "CURSOR_1" },
           },
         },
@@ -586,7 +678,7 @@ function selfTest() {
           id: "PRRT_paged",
           isResolved: false,
           comments: {
-            nodes: [{ body: "second" }],
+            nodes: [{ body: "无法安全完成：第 101 条回复中的阻塞原因。" }],
             pageInfo: { hasNextPage: false, endCursor: null },
           },
         },
@@ -597,9 +689,12 @@ function selfTest() {
     graphqlCalls.push(args);
     return JSON.stringify(graphqlPages.shift());
   });
-  assert.deepEqual(
-    pagedAdapter.getThread("PRRT_paged").comments.map((comment) => comment.body),
-    ["first", "second"],
+  assert.equal(
+    publishReply(
+      { threadId: "PRRT_paged", outcome: "no_change", reason: "现有实现已覆盖该边界" },
+      pagedAdapter,
+    ).status,
+    "skipped_blocked",
   );
   assert.equal(
     graphqlCalls[1].includes("commentsCursor=CURSOR_1"),

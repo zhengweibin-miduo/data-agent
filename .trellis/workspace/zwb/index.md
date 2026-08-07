@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 62
-- **Last Active**: 2026-08-06
+- **Total Sessions**: 63
+- **Last Active**: 2026-08-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 63 | 2026-08-07 | 阻塞审查线程终态修复 | `3536b30` | `fix/blocked-review-thread-state-20260807` |
 | 62 | 2026-08-06 | 实现自然语言只读查询流程 | `0ebbc73` | `feature/query-sql-flow-20260805` |
 | 61 | 2026-08-02 | 完成前后端双根结构迁移 | `db73176` | `refactor/separate-backend-frontend-roots-20260802` |
 | 60 | 2026-08-02 | 补齐项目结构集成 diff 门禁 | `addba92` | `refactor/align-project-structure-tests-20260802` |

@@ -212,8 +212,10 @@ original PR branch.
   still active and unresolved must be eligible for manual delegation again.
 - An unresolved thread with a later reply beginning with
   `无法安全完成：` is terminally blocked and must not be delegated again.
+- Blocked classification takes precedence over `isOutdated`; a blocked thread
+  remains unresolved and never enters the outdated-thread resolver queue.
 - An unresolved Codex thread with `isOutdated=true` is resolved directly and
-  never enters the delegation comment.
+  never enters the delegation comment only when it has no blocked reply.
 - Completion is derived from current thread state: resolved threads are done,
   explicitly blocked threads are terminally excluded, and remaining active
   unresolved threads are unfinished.
@@ -230,6 +232,16 @@ original PR branch.
 - No active unresolved Codex thread -> complete without a comment.
 - A changed head with active unresolved threads -> permit a new delegation,
   including threads present in historical delegation comments.
+- A blocked thread that is also outdated -> keep it unresolved and exclude it
+  from both the resolver queue and the delegation comment.
+- A thread that gains a blocked reply after scanning but before the resolver
+  mutation -> keep it unresolved after a paginated final thread read.
+- A thread that becomes blocked, resolved, or outdated after scanning but
+  before the manual delegation comment mutation -> exclude it after a
+  paginated final thread read; delegate only candidates that remain active.
+- A thread that becomes blocked, resolved, or outdated after an automatic
+  review-event scan but before its comment mutation -> exclude it after the
+  same paginated final read, including when an earlier event is rerun.
 
 ### 5. Good/Base/Bad Cases
 
@@ -244,10 +256,12 @@ original PR branch.
 ### 6. Tests Required
 
 - The standalone Node self-check covers outdated-thread resolution,
-  blocked-thread exclusion, comment pagination, reviewer filtering, resolved
-  thread exclusion, unfinished-thread redelegation, invalid PR rejection, and
-  the rule that the PAT-backed delegation path never calls
-  `resolveReviewThread`.
+  blocked-thread exclusion before scanning and immediately before resolution,
+  blocked-thread exclusion immediately before both automatic and manual
+  comment creation,
+  comment pagination, reviewer filtering, resolved thread exclusion,
+  unfinished-thread redelegation, invalid PR rejection, and the rule that the
+  PAT-backed delegation path never calls `resolveReviewThread`.
 - Parse the workflow YAML and verify the resolver uses `CODEX_TRIGGER_TOKEN`
   with `continue-on-error: true`; run `git diff --check` and `actionlint` when
   it is available.
@@ -305,15 +319,27 @@ remaining active unresolved thread even if it was delegated previously.
   paths, pytest documentation links, and long log separators are rejected.
 - A hidden marker makes publication idempotent. An existing fixed/no-change
   reply may resume resolution without posting a duplicate.
-- Resolved threads are skipped. Blocked replies never resolve a thread.
+- Resolved threads are skipped. A thread with any existing reply beginning
+  with `无法安全完成：` is skipped without another reply or resolve, regardless
+  of the new task's outcome. Blocked replies never resolve a thread.
+- Every outcome reads the thread again immediately before publishing; fixed and
+  no-change outcomes also read it immediately before their final resolve. A
+  concurrently published blocked reply prevents both the stale reply and resolve.
 
 ### 4. Validation & Error Matrix
 
 - Invalid or missing outcome fields -> fail before any GitHub mutation.
 - Fixed SHA differs from the current PR head -> fail without a reply.
 - Thread is already resolved -> return `skipped_resolved`.
+- Thread already contains a blocked reply -> return `skipped_blocked` without
+  calling the reply or resolve mutation.
+- Thread becomes blocked after the initial read but before a reply -> return
+  `skipped_blocked` without publishing the stale outcome.
+- Thread becomes blocked before a fixed/no-change resolve -> return
+  `skipped_blocked` and leave it unresolved.
 - Matching marker exists on an unresolved fixed/no-change thread -> resolve
-  without another reply.
+  without another reply only after the final thread read confirms it is not
+  blocked.
 - Reply mutation fails -> propagate the error and never call resolve.
 - Resolve fails after a successful reply -> leave the reply as an idempotent
   recovery marker; the next identical invocation retries only resolve.
@@ -331,7 +357,9 @@ remaining active unresolved thread even if it was delegated previously.
 - The standalone Node self-check covers argument parsing, three outcomes,
   formatting with real newlines, forbidden content, fixed SHA validation,
   resolved-thread skipping, marker idempotency, reply-before-resolve ordering,
-  reply failure, and remote-head mismatch.
+  reply failure, remote-head mismatch, existing blocked replies for all three
+  outcomes, paginated blocked replies, a blocked reply racing publication, and
+  a blocked reply racing the final fixed/no-change resolve.
 - The delegation script self-check proves its prompt requires the CLI for every
   thread outcome and forbids direct reply/resolve calls.
 - For a stale-PR recovery, record both the publisher checkout SHA and the target
