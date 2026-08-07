@@ -32,9 +32,16 @@ docker compose -f docs/docker/docker-compose.yml ps
 ```
 
 MySQL 官方镜像只会在全新的 `mysql_data` 卷上运行
-`docs/docker/mysql/` 中的初始化脚本，自动创建 `data_agent`、`dw` 和 `meta`
-数据库。已有卷不会重新执行脚本；这些 SQL 是空白环境 bootstrap，不是升级
-迁移，手工重放可能覆盖本地表，不要对包含有用数据的共享卷执行。
+`docs/docker/mysql/` 中的初始化脚本，自动安装 MySQL 8.4 Locking Service 的
+`service_get_read_locks`、`service_get_write_locks`、`service_release_locks`，并创建
+`data_agent`、`data_sync`、`dw`、`meta` 和 `source_demo` 数据库。API、DDL worker
+和 Data Sync worker 启动时会探测这些函数，缺失时失败关闭。
+
+已有卷不会重新执行脚本；这些 SQL 是空白环境 bootstrap，不是升级迁移。若既有
+实例缺少三个函数，必须先停止所有应用进程，再由管理员显式执行
+`docs/docker/mysql/locking_service.sql`，或在确认无须保留数据后重建一次性卷。
+运行时不会以高权限安装函数，也不会降级回只能串行读者的 `GET_LOCK()`。其他建表
+脚本手工重放可能覆盖本地表，不要对包含有用数据的共享卷执行。
 
 应用连接、索引名称和服务地址位于 `backend/conf/app_config.yaml`。配置文件位置按以下顺序
 解析，命中即停止：

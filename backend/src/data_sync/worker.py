@@ -23,6 +23,7 @@ async def run_worker() -> None:
     """初始化资源并持续执行有界数据同步步骤。"""
     setup_logging()
     MySQLDatabase.initialize()
+    await MySQLDatabase.check_locking_service()
     sources = {
         name: MySQLSourceClient(
             name,

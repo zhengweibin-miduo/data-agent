@@ -63,6 +63,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     # 步骤二：按依赖顺序初始化共享外部资源，全部就绪后才允许装配业务服务。
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
+    await MySQLDatabase.check_locking_service()
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     embeddings = TEIEmbeddingClient.initialize()

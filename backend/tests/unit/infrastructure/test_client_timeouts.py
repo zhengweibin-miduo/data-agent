@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 from redis.asyncio.connection import AbstractConnection
@@ -257,6 +258,11 @@ async def test_api_queue_pool_declares_socket_timeouts(
     ):
         monkeypatch.setattr(manager, "initialize", lambda: object())
         monkeypatch.setattr(manager, "close", _noop_close)
+    monkeypatch.setattr(
+        application.MySQLDatabase,
+        "check_locking_service",
+        AsyncMock(),
+    )
 
     app = FastAPI()
     async with application._lifespan(app):

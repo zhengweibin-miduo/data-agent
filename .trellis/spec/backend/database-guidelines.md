@@ -57,6 +57,26 @@ and `close()` detaches the current engine and Session factory before awaiting
 `AsyncEngine.dispose()`. This preserves a replacement created concurrently
 while the old engine is disposing.
 
+Generation coordination uses the MySQL 8.4 Locking Service through three
+additional manager-owned boundaries:
+
+```python
+await MySQLDatabase.check_locking_service()
+async with MySQLDatabase.shared_service_locks(names, timeout_seconds=2): ...
+async with MySQLDatabase.exclusive_service_locks(names, timeout_seconds=2): ...
+```
+
+The probe runs during API, DDL worker, and Data Sync worker startup. It acquires
+one READ and one WRITE lock with timeout zero under per-probe unique resource
+names in a dedicated capability namespace, then always releases that namespace,
+so concurrent process startup cannot create false contention and a partial
+function install fails closed without touching generation resources. Each business lock context
+owns one dedicated connection, sorts and deduplicates names, and sends all names
+in one SQL function call under the fixed generation namespace. Query
+uses shared READ locks; accepted snapshots, schema synchronization, and
+generation reset use exclusive WRITE locks. Commit and rollback do not release
+these locks. Namespace release or owner-session termination does.
+
 ## Session and Transaction Lifecycle
 
 Business code uses the manager-owned async context instead of sharing an
@@ -498,22 +518,25 @@ await ValueProjectionParticipant.prepare(table_ref) -> PreparedValueProjection
   contention is normal scheduling pressure: release the task lease and delay
   the same phase without incrementing its failure attempts or moving it toward
   `dead`.
-- Accepted-snapshot publishers and DDL workers share one generation advisory
-  lock derived from the binary `(dw_database, target_table)` identity. A
-  publisher acquires every target lock in deterministic UTF-8 byte order before
-  opening its managed transaction and releases them only after commit or
-  rollback. A worker holds the same lock across its DDL Session, schema-lock
-  acquisition, same-Session authority checks, auto-commit DDL, phase settlement,
-  and managed Session commit. The global order is `generation -> schema ->
-  task`; no path may acquire those resources in reverse.
-- `MySQLDatabase.advisory_locks()` owns locks on one dedicated engine
-  connection, independent of the protected business Session. It releases
-  acquired locks in reverse order. A partial acquisition releases the earlier
-  locks; a release failure invalidates the owner connection so a connection
-  carrying an advisory lock cannot return to the pool. If an accepted-snapshot
-  transaction has already committed, a subsequent release failure is an
-  operational warning and must not reverse the authoritative snapshot or mark
-  its DDL Job failed. The YAML key
+- Accepted-snapshot publishers and DDL workers share one generation Locking
+  Service WRITE identity derived from binary `(dw_database, target_table)`.
+  Query holds the corresponding READ identities across final readiness,
+  relationship revalidation, `EXPLAIN`, and the complete streamed SELECT. A
+  publisher acquires every target in one atomic call before opening its managed
+  transaction and releases them only after commit or rollback. A worker holds
+  WRITE across its DDL Session, schema-lock acquisition, same-Session authority
+  checks, auto-commit DDL, phase settlement, and managed Session commit. The
+  global order is `generation -> schema -> task`; no path may acquire those
+  resources in reverse.
+- `shared_service_locks()` and `exclusive_service_locks()` own one dedicated
+  engine connection and release the complete fixed namespace on exit. MySQL
+  guarantees one acquisition call is all-or-nothing, so a failed multi-target
+  request leaves no partial generation lock. A release failure invalidates the
+  owner connection; an active business exception remains authoritative. If an
+  accepted-snapshot transaction already committed, a later release failure is
+  an operational warning and must not reverse it. `advisory_locks()` remains the
+  owner for unrelated schema, Binlog-source, and Meta Projection `GET_LOCK()`
+  resources. The YAML key
   `data_sync.generation_lock_timeout_seconds` is an integer in `1..300`.
 - The DDL Session uses `READ COMMITTED` and one `DataSyncRepository` for every
   authority check and final phase settlement. The schema synchronizer checks
@@ -574,7 +597,7 @@ await ValueProjectionParticipant.prepare(table_ref) -> PreparedValueProjection
 | Cross-source primary-key collision | Preserve existing DW row and enter `conflict` |
 | Lease expires or desired hash changes | Stale settlement updates zero rows |
 | Publisher or worker cannot acquire a generation lock in time | Retry/reschedule without publishing partial state or consuming the worker failure budget |
-| Generation-lock acquisition stops after some targets | Release every previously acquired lock in reverse order |
+| Generation-lock acquisition conflicts on any target | Atomic SQL call acquires no target and returns resource busy |
 | Advisory- or schema-lock release fails | Invalidate the owner connection before it can return to the pool |
 | DDL worker loses authority after acquiring the schema lock | Release locks and execute no later DDL or phase settlement |
 | Locked `mysql-replication` private decoder signature changes | Fail fast at import/startup; do not silently collapse JSON SQL `NULL` |
@@ -603,7 +626,9 @@ uv run pytest tests/integration/answer_readiness
 Tests assert DDL idempotency and widening rules, composite-PK continuation,
 INSERT/UPDATE/DELETE convergence, captured/applied offset separation,
 cross-source collision without overwrite, retry/dead-letter state, and scoped
-cleanup. Advisory-lock tests assert deterministic acquisition, reverse release,
+cleanup. Generation tests prove concurrent READ owners, READ/WRITE exclusion,
+atomic multi-target failure, commit survival, and owner-session release.
+Advisory-lock tests retain deterministic acquisition, reverse release,
 partial-acquisition cleanup, active-exception preservation, and owner-connection
 invalidation. ROW-decoder tests pin the private dependency signature and cover
 SQL `NULL` versus JSON literal `null` for INSERT, UPDATE before/after images, and
@@ -642,7 +667,7 @@ if await authority_repository.has_authority(task):
 
 # Correct: publisher and worker share the same outer generation lock; the
 # worker rechecks authority inside the schema lock with its DDL Session.
-async with MySQLDatabase.advisory_locks(
+async with MySQLDatabase.exclusive_service_locks(
     [generation_lock_name(dw_database, target_table)],
     timeout_seconds=settings.generation_lock_timeout_seconds,
 ):
@@ -657,8 +682,9 @@ async with MySQLDatabase.advisory_locks(
 
 ## Schema and Migrations
 
-No migration tool or migration directory exists. Local MySQL bootstrap
-initializes `data_agent`, `data_sync`, `dw`, `meta`, and the local
+No migration tool or migration directory exists. Local MySQL bootstrap installs
+the three MySQL 8.4 Locking Service functions and initializes `data_agent`,
+`data_sync`, `dw`, `meta`, and the local
 `source_demo` database from
 `docs/docker/mysql/`. `meta.sql` contains only `table_info`, `column_info`,
 `metric_info`, and `column_metric`; `data_agent.sql` defines the fresh
@@ -691,7 +717,7 @@ volumes:
 ```
 
 The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
-`dw.sql`, `meta.sql`, then `source_demo.sql`.
+`dw.sql`, `locking_service.sql`, `meta.sql`, then `source_demo.sql`.
 
 ### 3. Contracts
 
@@ -699,6 +725,10 @@ The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
 - Container target: `/docker-entrypoint-initdb.d`, mounted read-only.
 - Execution boundary: the official `mysql:8.4` entrypoint processes the scripts
   only when `/var/lib/mysql` is uninitialized.
+- Capability: `locking_service.sql` registers `service_get_read_locks`,
+  `service_get_write_locks`, and `service_release_locks` from
+  `locking_service.so`. Runtime processes only probe these functions and never
+  install them with elevated privileges.
 - Persistence: normal restarts reuse `mysql_data` and do not rerun the scripts.
 - Identity: `MYSQL_USER=data_agent`; application grants target
   `'data_agent'@'%'`. The local source additionally creates
@@ -728,7 +758,7 @@ The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
 
 | Condition | Expected result |
 |-----------|-----------------|
-| Empty `mysql_data` | Execute all five scripts in lexical order |
+| Empty `mysql_data` | Execute all six scripts in lexical order |
 | Initialized `mysql_data` | Skip bootstrap scripts and preserve data |
 | Missing init-directory mount | Start MySQL without creating the five local databases |
 | `GRANT` user differs from `MYSQL_USER` and does not exist | Initialization fails at `GRANT` |
@@ -754,6 +784,9 @@ The current script order is lexical: `data_agent.sql`, `data_sync.sql`,
 - Run `docker compose -f ../docs/docker/docker-compose.yml config` and assert that
   both `/var/lib/mysql` and the read-only `/docker-entrypoint-initdb.d` mount
   are present.
+- Statically assert CI executes the same `locking_service.sql` before backend
+  checks. A live MySQL integration must prove READ sharing, WRITE exclusion,
+  atomic multi-target failure, commit survival, and session-exit release.
 - Assert application grants target `'data_agent'@'%'`; the replica account has
   source `SELECT` plus replication privileges and no source DDL/DML grants.
 - Statically assert that every bootstrap table and business column carries a
@@ -865,6 +898,9 @@ targets.
   fixture/finally cleanup and always awaits `MySQLDatabase.close()`.
 - Do not introduce an ORM or migration convention in a spec before the
   corresponding implementation exists.
+- Do not install or silently downgrade Locking Service functions at runtime.
+  Existing volumes require an administrator-run bootstrap while all application
+  processes are stopped, or explicit disposable-volume reprovisioning.
 - Do not commit inside a repository; the calling service owns atomic
   multi-repository work.
 - Do not delete by all known IDs or by logical source when the contract is a

@@ -224,7 +224,7 @@ class DataSyncSettings(SettingsModel):
     generation_lock_timeout_seconds: int = Field(
         gt=0,
         le=300,
-        description="发布或执行同一 DW generation 前等待共享命名锁的最大秒数。",
+        description="Query 共享读或 generation 写侧独占协调的最大等待秒数。",
     )
     retry_base_seconds: int = Field(
         gt=0,

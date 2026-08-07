@@ -380,6 +380,72 @@ async def _test_advisory_lock_survives_business_commit() -> None:
         await MySQLDatabase.close()
 
 
+async def _test_locking_service_read_write_semantics() -> None:
+    """真实 MySQL 证明 generation READ 共享、WRITE 排他与原子多锁。"""
+    MySQLDatabase.initialize()
+    prefix = f"generation-integration:{uuid4().hex}"
+    shared_name = f"{prefix}:shared"
+    first_atomic_name = f"{prefix}:atomic-a"
+    second_atomic_name = f"{prefix}:atomic-b"
+    try:
+        await MySQLDatabase.check_locking_service()
+
+        # 步骤一：两个独立 owner 连接必须能同时进入同一 READ 临界区。
+        barrier = asyncio.Barrier(2)
+
+        async def hold_shared() -> None:
+            async with MySQLDatabase.shared_service_locks(
+                [shared_name], timeout_seconds=1
+            ):
+                await barrier.wait()
+
+        await asyncio.wait_for(
+            asyncio.gather(hold_shared(), hold_shared()),
+            timeout=2,
+        )
+
+        # 步骤二：READ 与 WRITE 双向排他，业务事务 commit 不提前释放 owner 锁。
+        async with MySQLDatabase.shared_service_locks([shared_name], timeout_seconds=1):
+            async with MySQLDatabase.session() as session:
+                assert await session.scalar(text("SELECT 1")) == 1
+            with pytest.raises(AdvisoryLockUnavailableError):
+                async with MySQLDatabase.exclusive_service_locks(
+                    [shared_name], timeout_seconds=0
+                ):
+                    pytest.fail("READ 持有期间 WRITE 不得进入")
+
+        async with MySQLDatabase.exclusive_service_locks(
+            [shared_name], timeout_seconds=1
+        ):
+            with pytest.raises(AdvisoryLockUnavailableError):
+                async with MySQLDatabase.shared_service_locks(
+                    [shared_name], timeout_seconds=0
+                ):
+                    pytest.fail("WRITE 持有期间 READ 不得进入")
+
+        # 步骤三：多 target 任一冲突时一个也不取得；退出 owner session 后全部释放。
+        async with MySQLDatabase.exclusive_service_locks(
+            [second_atomic_name], timeout_seconds=1
+        ):
+            with pytest.raises(AdvisoryLockUnavailableError):
+                async with MySQLDatabase.shared_service_locks(
+                    [first_atomic_name, second_atomic_name],
+                    timeout_seconds=0,
+                ):
+                    pytest.fail("原子多锁冲突时不得进入")
+            async with MySQLDatabase.exclusive_service_locks(
+                [first_atomic_name], timeout_seconds=0
+            ):
+                pass
+
+        async with MySQLDatabase.shared_service_locks(
+            [second_atomic_name], timeout_seconds=1
+        ):
+            pass
+    finally:
+        await MySQLDatabase.close()
+
+
 @pytest.mark.integration
 async def test_mysql_database_configuration() -> None:
     """运行不依赖 MySQL 服务的数据库生命周期测试。"""
@@ -392,3 +458,4 @@ async def test_mysql_client() -> None:
     """运行真实 MySQL 集成测试。"""
     await _test_mysql_client_integration()
     await _test_advisory_lock_survives_business_commit()
+    await _test_locking_service_read_write_semantics()

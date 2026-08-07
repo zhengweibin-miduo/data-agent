@@ -1,4 +1,4 @@
-"""Accepted snapshot generation 串行锁边界检查。"""
+"""Accepted snapshot generation WRITE lock 边界检查。"""
 
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -174,10 +174,10 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
     async def generation_locks(
         names: Iterable[str],
         *,
-        timeout_seconds: float,
+        timeout_seconds: int,
     ) -> AsyncIterator[None]:
         check_equal(
-            "publisher 使用目标共享 generation 锁",
+            "publisher 使用目标 generation WRITE 锁",
             set(names),
             {
                 generation_lock_name("dw", "a_table"),
@@ -205,7 +205,9 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
         "build_desired_tables",
         lambda *args, **kwargs: desired,
     )
-    monkeypatch.setattr(snapshots.MySQLDatabase, "advisory_locks", generation_locks)
+    monkeypatch.setattr(
+        snapshots.MySQLDatabase, "exclusive_service_locks", generation_locks
+    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
@@ -241,7 +243,7 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
     async def generation_locks(
         names: Iterable[str],
         *,
-        timeout_seconds: float,
+        timeout_seconds: int,
     ) -> AsyncIterator[None]:
         del names, timeout_seconds
         events.append("generation_enter")
@@ -270,7 +272,9 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
         "build_desired_tables",
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
-    monkeypatch.setattr(snapshots.MySQLDatabase, "advisory_locks", generation_locks)
+    monkeypatch.setattr(
+        snapshots.MySQLDatabase, "exclusive_service_locks", generation_locks
+    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     with pytest.raises(LookupError) as captured:
@@ -297,7 +301,7 @@ async def test_snapshot_release_failure_after_commit_does_not_reverse_success(
     async def generation_locks(
         names: Iterable[str],
         *,
-        timeout_seconds: float,
+        timeout_seconds: int,
     ) -> AsyncIterator[None]:
         del names, timeout_seconds
         yield
@@ -320,7 +324,9 @@ async def test_snapshot_release_failure_after_commit_does_not_reverse_success(
         "build_desired_tables",
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
-    monkeypatch.setattr(snapshots.MySQLDatabase, "advisory_locks", generation_locks)
+    monkeypatch.setattr(
+        snapshots.MySQLDatabase, "exclusive_service_locks", generation_locks
+    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
     monkeypatch.setattr(snapshots.logger, "warning", warnings.append)
 
@@ -342,7 +348,7 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
     async def unavailable_lock(
         names: Iterable[str],
         *,
-        timeout_seconds: float,
+        timeout_seconds: int,
     ) -> AsyncIterator[None]:
         del names, timeout_seconds
         raise snapshots.AdvisoryLockUnavailableError("busy")
@@ -363,7 +369,9 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
         "build_desired_tables",
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
-    monkeypatch.setattr(snapshots.MySQLDatabase, "advisory_locks", unavailable_lock)
+    monkeypatch.setattr(
+        snapshots.MySQLDatabase, "exclusive_service_locks", unavailable_lock
+    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     with pytest.raises(DataAgentError) as captured:

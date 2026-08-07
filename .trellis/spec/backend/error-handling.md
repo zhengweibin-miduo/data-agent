@@ -115,6 +115,14 @@ unknown conversation/memory identifiers both return `404`;
 payloads remain FastAPI/Pydantic `422` errors. Extraction failures are worker
 retries and never hide or roll back already committed messages.
 
+Query generation-lock timeout or deadlock is
+`generation_lock_unavailable/query_readiness`, retryable, and HTTP `409` before
+the NDJSON response starts. Data Sync translates the same infrastructure error
+to `SyncResourceBusyError` and reschedules without consuming failure attempts;
+accepted snapshot publication retains its retryable `503` projection. Missing
+Locking Service SQL functions are startup capability failures, not per-request
+business errors.
+
 ## Worker Retry and Terminal Errors
 
 `DataAgentError.retryable` is the authoritative source of retryability. The

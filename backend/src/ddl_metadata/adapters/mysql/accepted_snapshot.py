@@ -103,7 +103,7 @@ class MySQLAcceptedSnapshotPublisher:
         }
         try:
             # 步骤四：先持有本次全部 target generation locks，再开启唯一发布事务。
-            async with MySQLDatabase.advisory_locks(
+            async with MySQLDatabase.exclusive_service_locks(
                 generation_locks,
                 timeout_seconds=(app_config.data_sync.generation_lock_timeout_seconds),
             ):
@@ -194,7 +194,7 @@ class MySQLAcceptedSnapshotPublisher:
                 http_status=503,
             ) from error
         except AdvisoryLockReleaseError:
-            # 业务 Session 已在 advisory lock 上下文退出前提交；owner 连接也已
+            # 业务 Session 已在 generation WRITE lock 上下文退出前提交；owner 连接也已
             # 失效。此时锁清理故障只能降级为运维告警，不能反转权威快照结果。
             logger.warning(
                 "accepted snapshot 已提交，但 generation lock owner 连接"

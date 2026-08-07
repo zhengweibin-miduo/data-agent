@@ -89,9 +89,18 @@
   direct column projection; formulas and set operations fail closed without an
   explicit lineage contract. Natural-language metrics with multiple related
   columns require clarification instead of treating those columns as a formula.
-- The final readiness check, `EXPLAIN`, and streamed read hold the same ordered
-  generation locks used by schema/reset work, so a ready generation cannot be
-  replaced between validation and execution.
+- The final readiness check, relationship-authority revalidation, `EXPLAIN`,
+  and streamed read hold one atomic ordered set of Locking Service READ locks.
+  Accepted snapshot publication, schema synchronization, and generation reset
+  use the matching WRITE locks, so queries can share a stable generation while
+  no generation can be replaced between validation and execution.
+- Locking Service timeout or deadlock maps to retryable
+  `generation_lock_unavailable` at `query_readiness` with HTTP 409 before the
+  first event, or the same safe code in `stream_error` after response start.
+- A generation READ-lock release failure invalidates the owner connection. If
+  the Query body already completed, log the operational warning without
+  appending `stream_error` after the terminal `complete` event; an active Query
+  exception remains authoritative.
 - Evidence normalization must reject ambiguous operator or grain phrases and
   must validate a time filter's complete clause quote just like ordinary filters.
 - Derived output aliases cannot inherit an unrelated physical-column identity;

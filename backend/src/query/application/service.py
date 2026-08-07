@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from time import perf_counter
@@ -154,8 +155,7 @@ class QueryApplication:
                 if message.role == MessageRole.USER
             ]
             intent_context = [
-                f"{message.role.value}: {message.content}"
-                for message in evidence_chain
+                f"{message.role.value}: {message.content}" for message in evidence_chain
             ]
             intent = await self._intents.parse(request.question, intent_context)
             intent.validate_evidence(user_messages)
@@ -288,7 +288,7 @@ class QueryApplication:
             )
         finally:
             if generation_guard is not None:
-                await generation_guard.__aexit__(None, None, None)
+                await generation_guard.__aexit__(*sys.exc_info())
             try:
                 await self._conversations.abandon_turn(
                     request.user_id,

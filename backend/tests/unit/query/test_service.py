@@ -18,6 +18,7 @@ from conversation.models import (
     StartTurnResponse,
 )
 from errors import DataAgentError
+from infrastructure.mysql import AdvisoryLockReleaseError
 from models.jobs import DDLJobRequest
 from models.physical import PhysicalSchema
 from query.adapters.llm import QueryLLMAdapter
@@ -482,6 +483,27 @@ class _ClosableExecutor(_Executor):
             self.closed = True
 
 
+class _ReleaseFailingReadiness(_Ready):
+    """模拟业务异常清理期间 generation owner 连接释放失败。"""
+
+    @asynccontextmanager
+    async def hold(self, target_tables: tuple[str, ...]):
+        """进入临界区后在退出时抛出锁清理错误。"""
+        del target_tables
+        yield
+        raise AdvisoryLockReleaseError("release failed")
+
+
+class _FailingExecuteExecutor(_Executor):
+    """在 generation 临界区内抛出原始查询异常。"""
+
+    async def execute(self, query: ValidatedQuery):
+        """在首批结果前失败。"""
+        del query
+        raise ValueError("query failed")
+        yield
+
+
 async def test_stream_explains_checks_readiness_and_keeps_all_batches() -> None:
     """门禁通过后自动执行并把全部只读批次流式返回。"""
     conversations = _Conversations()
@@ -552,6 +574,32 @@ async def test_stream_preserves_empty_metadata_and_closes_early_stream(
     assert metadata.columns == ["total"]
     if isinstance(executor, _ClosableExecutor):
         assert executor.closed is True
+
+
+async def test_generation_cleanup_failure_does_not_replace_query_error() -> None:
+    """Generation 清理失败不得覆盖临界区内的原始查询异常。"""
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _Conversations()),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _GroundedMetadata()),
+        planner=cast(QueryPlannerPort, _Planner()),
+        readiness=cast(QueryReadinessPort, _ReleaseFailingReadiness()),
+        executor=cast(QueryExecutorPort, _FailingExecuteExecutor()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额",
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="query failed"):
+        _ = [event async for event in application.stream(request)]
 
 
 class _RepairPlanner(_Planner):

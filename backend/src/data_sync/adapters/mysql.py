@@ -194,7 +194,7 @@ class MySQLMaterializationAdapter:
         )
         try:
             # 步骤一：generation lock 跨越 DDL Session 提交，保持全局锁顺序。
-            async with MySQLDatabase.advisory_locks(
+            async with MySQLDatabase.exclusive_service_locks(
                 [lock_name],
                 timeout_seconds=self._settings.generation_lock_timeout_seconds,
             ):
@@ -239,7 +239,7 @@ class MySQLMaterializationAdapter:
             task.desired.target_table,
         )
         try:
-            async with MySQLDatabase.advisory_locks(
+            async with MySQLDatabase.exclusive_service_locks(
                 [lock_name],
                 timeout_seconds=self._settings.generation_lock_timeout_seconds,
             ):

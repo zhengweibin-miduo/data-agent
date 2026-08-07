@@ -77,6 +77,7 @@ async def _wait_for_queue(queue: ArqRedis) -> None:
             logger.warning("arq 队列连接暂不可用，按启动重试策略等待后重试")
             await asyncio.sleep(settings.conn_retry_delay)
 
+
 def is_fatal_index_error(error: BaseException) -> bool:
     """判定索引初始化异常是否必须阻断 worker 启动。
 
@@ -105,6 +106,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
     await _wait_for_queue(cast(ArqRedis, ctx["redis"]))
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
+    await MySQLDatabase.check_locking_service()
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     embeddings = TEIEmbeddingClient.initialize()

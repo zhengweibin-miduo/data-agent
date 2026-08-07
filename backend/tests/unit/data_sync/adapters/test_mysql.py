@@ -38,7 +38,7 @@ async def test_materialization_holds_generation_lock_through_commit(
     async def generation_locks(
         names: Iterable[str],
         *,
-        timeout_seconds: float,
+        timeout_seconds: int,
     ) -> AsyncIterator[None]:
         assert list(names) == [generation_lock_name("dw", task.desired.target_table)]
         assert timeout_seconds == 2
@@ -81,7 +81,7 @@ async def test_materialization_holds_generation_lock_through_commit(
 
     monkeypatch.setattr(
         mysql_adapters.MySQLDatabase,
-        "advisory_locks",
+        "exclusive_service_locks",
         generation_locks,
     )
     monkeypatch.setattr(mysql_adapters.MySQLDatabase, "session", session_context)
@@ -116,6 +116,76 @@ async def test_materialization_holds_generation_lock_through_commit(
         "ddl_commit",
         "generation_exit",
     ]
+
+
+async def test_generation_reset_holds_write_lock_through_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generation reset 的 DW 与 task 事务提交后才释放 WRITE lock。"""
+    task = sync_task(SyncPhase.BUFFERING)
+    coordinate = BinlogCoordinate(file="mysql-bin.000001", position=4, row_index=0)
+    events: list[str] = []
+    session = AsyncMock()
+    repository = AsyncMock()
+    repository.has_authority.return_value = True
+    repository.record_snapshot.return_value = True
+    repository.advance_captured_coordinate.return_value = True
+    repository.settle_phase.return_value = True
+
+    @asynccontextmanager
+    async def generation_locks(
+        names: Iterable[str],
+        *,
+        timeout_seconds: int,
+    ) -> AsyncIterator[None]:
+        assert list(names) == [generation_lock_name("dw", task.desired.target_table)]
+        assert timeout_seconds == 2
+        events.append("generation_enter")
+        yield
+        events.append("generation_exit")
+
+    @asynccontextmanager
+    async def session_context() -> AsyncIterator[AsyncMock]:
+        events.append("transaction_enter")
+        yield session
+        events.append("transaction_commit")
+
+    async def reset_rows(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        events.append("reset_rows")
+        return True
+
+    monkeypatch.setattr(
+        mysql_adapters.MySQLDatabase,
+        "exclusive_service_locks",
+        generation_locks,
+    )
+    monkeypatch.setattr(mysql_adapters.MySQLDatabase, "session", session_context)
+    monkeypatch.setattr(mysql_adapters, "DataSyncRepository", lambda _: repository)
+    monkeypatch.setattr(mysql_adapters, "reset_source_rows", reset_rows)
+    settings = app_config.data_sync.model_copy(
+        update={
+            "dw_database": "dw",
+            "generation_lock_timeout_seconds": 2,
+        }
+    )
+    adapter = mysql_adapters.MySQLMaterializationAdapter(
+        settings,
+        lambda current_session, desired: AsyncMock(),
+    )
+
+    await adapter.reset_generation(task, coordinate, limit=100)
+
+    assert events == [
+        "generation_enter",
+        "transaction_enter",
+        "reset_rows",
+        "transaction_commit",
+        "generation_exit",
+    ]
+    repository.record_snapshot.assert_awaited_once_with(task, coordinate)
+    repository.advance_captured_coordinate.assert_awaited_once_with(task, coordinate)
+    repository.settle_phase.assert_awaited_once_with(task, SyncPhase.BACKFILLING)
 
 
 async def test_task_adapter_records_capture_and_coordinate_in_one_session(
