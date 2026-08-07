@@ -207,6 +207,54 @@ def test_detail_result_fields_remain_complete_before_filter_clause() -> None:
         ).validate_evidence(["列出订单编号和订单金额，地区是华东"])
 
 
+def test_detail_result_fields_remain_complete_after_filter_clause() -> None:
+    """过滤在前时仍必须逐项覆盖其后的全部明细结果字段。"""
+    with pytest.raises(ValueError, match="每个明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["华东"],
+                    clause_quote="地区是华东",
+                )
+            ],
+        ).validate_evidence(["列出地区是华东的订单编号和订单金额"])
+
+
+def test_explicit_year_range_cannot_be_omitted_from_intent() -> None:
+    """完整原文中的显式年份必须形成可信时间过滤契约。"""
+    with pytest.raises(ValueError, match="时间范围"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+        ).validate_evidence(["查询2025年销售额合计"])
+
+
+@pytest.mark.parametrize("connector", ["和", "以及"])
+def test_all_conjunctive_filter_clauses_must_enter_intent(connector: str) -> None:
+    """和、以及连接的每项正向过滤都不得被模型省略。"""
+    with pytest.raises(ValueError, match="每项过滤条件"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["华东"],
+                    clause_quote="地区是华东",
+                )
+            ],
+        ).validate_evidence([f"列出地区是华东{connector}状态是完成的订单编号"])
+
+
 def test_top_n_sort_ambiguity_can_reach_clarification() -> None:
     """缺少排序键的 Top-N 可携带排序歧义进入 Meta 澄清。"""
     intent = QueryIntent(

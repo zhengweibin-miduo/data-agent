@@ -428,6 +428,16 @@ class QueryIntent(ContractModel):
             or (not self.sorts and not has_sort_ambiguity)
         ):
             raise ValueError("用户明确表达的 Top-N 形态必须完整映射到查询意图")
+        explicit_time_range = re.search(
+            r"(?:\d{4}\s*年(?:\d{1,2}\s*月(?:\d{1,2}\s*日)?)?|"
+            r"\d{4}-\d{1,2}-\d{1,2}|今年|去年|本月|上月|"
+            r"最近\s*\d+\s*(?:天|周|月|年))",
+            user_text,
+        )
+        if explicit_time_range and not (
+            self.time_quote and self.time_column_quote and self.time_filter
+        ):
+            raise ValueError("用户明确表达的时间范围必须完整映射到查询意图")
         if (
             any(
                 marker in user_text
@@ -446,6 +456,7 @@ class QueryIntent(ContractModel):
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
         filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
+        filter_evidence_text = re.sub(r"(?:以及|和)", "且", filter_evidence_text)
         explicit_filter_clauses = re.findall(
             r"[^且，。,.；;]+(?:大于或等于|小于或等于|大于等于|小于等于|"
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
@@ -485,13 +496,16 @@ class QueryIntent(ContractModel):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
         if self.query_type == QueryType.DETAIL:
             detail_evidence_text = user_text
-            clause_offsets = [
-                detail_evidence_text.find(item.clause_quote)
-                for item in all_filters
-                if item.clause_quote and item.clause_quote in detail_evidence_text
-            ]
-            if clause_offsets:
-                detail_evidence_text = detail_evidence_text[: min(clause_offsets)]
+            for item in all_filters:
+                if item.clause_quote:
+                    detail_evidence_text = detail_evidence_text.replace(
+                        item.clause_quote, ""
+                    )
+            detail_evidence_text = re.sub(
+                r"((?:列出|展示|查看))(?:且|和|以及|，|,|的)*",
+                r"\1",
+                detail_evidence_text,
+            )
             detail_match = re.search(
                 r"(?:列出|展示|查看)(.+?)(?=(?:大于|小于|等于|属于|包含|"
                 r"升序|降序|前\s*\d+|top\s*\d+|的记录|的订单|$))",

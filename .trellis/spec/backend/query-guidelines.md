@@ -131,6 +131,11 @@
 - Accepted physical-schema authority is scoped by the submitted table set, so
   independently accepted table snapshots for one source coexist; detail result
   fields remain item-complete even when the same request also has filters.
+- Accepting a table scope invalidates every older authority scope for the same
+  source that overlaps any submitted table, while disjoint local snapshots
+  remain valid. Detail-field evidence is checked on both sides of trusted
+  filter clauses, and explicit time ranges plus every conjunctive filter clause
+  must be represented by the trusted intent before planning.
 
 ### 5. Good/Base/Bad Cases
 

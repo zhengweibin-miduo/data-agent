@@ -4,7 +4,10 @@ from pathlib import Path
 
 from sqlglot import exp, parse
 
-from ddl_metadata.persistence.metadata_repository import authority_scope_key
+from ddl_metadata.persistence.metadata_repository import (
+    authority_scope_key,
+    authority_scopes_overlap,
+)
 from ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
@@ -56,3 +59,9 @@ def test_authority_scope_key_is_order_independent_and_scope_specific() -> None:
         authority_scope_key(["table-b", "table-a"]),
     )
     assert authority_scope_key(["table-a"]) != authority_scope_key(["table-b"])
+
+
+def test_authority_scope_overlap_invalidates_only_intersecting_snapshots() -> None:
+    """重新验收表 A 时应失效包含 A 的旧组合，但保留不相交表 B。"""
+    assert authority_scopes_overlap(["table-a", "table-b"], ["table-a"])
+    assert not authority_scopes_overlap(["table-b"], ["table-a"])

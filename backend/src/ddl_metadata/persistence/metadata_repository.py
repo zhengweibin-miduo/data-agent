@@ -27,6 +27,13 @@ def authority_scope_key(table_ids: Iterable[str]) -> str:
     return hashlib.sha256(canonical_scope.encode()).hexdigest()
 
 
+def authority_scopes_overlap(
+    existing_table_ids: Iterable[str], submitted_table_ids: Iterable[str]
+) -> bool:
+    """判断两个 accepted 局部表范围是否相交。"""
+    return not set(existing_table_ids).isdisjoint(submitted_table_ids)
+
+
 class MetadataRepository:
     """在调用方提供的事务内同步 Meta 快照。"""
 
@@ -66,6 +73,30 @@ class MetadataRepository:
         semantic_tables = {table.table_id: table for table in metadata.tables}
         semantic_columns = {column.column_id: column for column in metadata.columns}
         submitted_table_ids = [table.id for table in schema.tables]
+        authority_rows = (
+            (
+                await self._session.execute(
+                    select(
+                        physical_schema_authority.c.scope_key,
+                        physical_schema_authority.c.table_ids,
+                    ).where(physical_schema_authority.c.source == schema.source)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        stale_scope_keys = [
+            str(row["scope_key"])
+            for row in authority_rows
+            if authority_scopes_overlap(row["table_ids"] or (), submitted_table_ids)
+        ]
+        if stale_scope_keys:
+            await self._session.execute(
+                delete(physical_schema_authority).where(
+                    physical_schema_authority.c.source == schema.source,
+                    physical_schema_authority.c.scope_key.in_(stale_scope_keys),
+                )
+            )
         existing_column_ids = set(
             (
                 await self._session.scalars(
@@ -98,9 +129,10 @@ class MetadataRepository:
                     "source": schema.source,
                     "scope_key": authority_scope_key(submitted_table_ids),
                     "schema_fingerprint": schema.schema_fingerprint,
+                    "table_ids": sorted(submitted_table_ids),
                 }
             ],
-            ("schema_fingerprint",),
+            ("schema_fingerprint", "table_ids"),
         )
 
         # 步骤二：依次 upsert 当前表、列和指标内容，保留静态表定义与绑定参数。

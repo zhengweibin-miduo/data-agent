@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS physical_schema_authority
     source             VARCHAR(128) NOT NULL COMMENT 'accepted DDL 来源',
     scope_key          CHAR(64) NOT NULL COMMENT '本次 accepted 表集合 SHA-256 标识',
     schema_fingerprint CHAR(64) NOT NULL COMMENT '局部物理模式 SHA-256 指纹',
+    table_ids          JSON NOT NULL COMMENT '本次 accepted 表 ID 集合',
     PRIMARY KEY (source, scope_key),
     UNIQUE KEY uq_physical_schema_authority_fingerprint (source, schema_fingerprint)
 ) ENGINE = InnoDB COMMENT = 'Query JOIN 授权使用的 accepted 物理模式版本';
