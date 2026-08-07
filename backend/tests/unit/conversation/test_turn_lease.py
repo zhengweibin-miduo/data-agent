@@ -86,6 +86,12 @@ async def test_turn_gate_uses_database_side_lease_deadline() -> None:
         actual=rendered,
         expected="判定以 OR 覆盖空闲、同轮次与超租约三种情形",
     )
+    check_condition(
+        "放弃哨兵仅允许同轮次重试",
+        "year(" in rendered.casefold() and "updated_at) !=" in rendered.casefold(),
+        actual=rendered,
+        expected="自然过期分支排除 1970 放弃哨兵",
+    )
 
 
 async def test_turn_gate_rejects_live_turn_and_allows_expired_turn() -> None:

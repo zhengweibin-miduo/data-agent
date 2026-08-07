@@ -352,6 +352,7 @@ class QueryIntent(ContractModel):
             if matched != {self.aggregation}:
                 raise ValueError("聚合运算必须与用户原文精确一致")
         has_time_ambiguity = any(item.slot == "time" for item in self.ambiguities)
+        has_measure_ambiguity = any(item.slot == "measure" for item in self.ambiguities)
         if self.time_quote and self.time_filter is None and not has_time_ambiguity:
             raise ValueError("时间范围必须提供可验证的过滤契约")
         if self.grain and self.time_column_quote is None:
@@ -399,8 +400,8 @@ class QueryIntent(ContractModel):
         )
         if any(marker in user_text for marker in trend_markers) and (
             self.query_type != QueryType.TREND
-            or self.grain is None
-            or self.aggregation is None
+            or (self.grain is None and not has_time_ambiguity)
+            or (self.aggregation is None and not has_measure_ambiguity)
         ):
             raise ValueError("用户明确表达的趋势形态必须完整映射到查询意图")
         grouping_matches = re.findall(
@@ -556,7 +557,10 @@ class QueryIntent(ContractModel):
             ),
             QueryType.RANKING: self.limit is not None
             and (bool(self.sorts) or has_sort_ambiguity),
-            QueryType.TREND: self.aggregation is not None and self.grain is not None,
+            QueryType.TREND: (
+                (self.aggregation is not None or has_measure_ambiguity)
+                and (self.grain is not None or has_time_ambiguity)
+            ),
             QueryType.COMPARISON: (
                 self.aggregation is not None and bool(self.dimension_quotes)
             ),
@@ -1076,14 +1080,20 @@ def _validate_query_sync(
         ):
             return _failed("join_forbidden")
         on = join.args["on"]
-        if on.find(exp.Or) is not None:
+        def supported_join_tree(node: exp.Expression) -> bool:
+            if isinstance(node, exp.And):
+                return supported_join_tree(node.this) and supported_join_tree(
+                    node.expression
+                )
+            return (
+                isinstance(node, exp.EQ)
+                and isinstance(node.this, exp.Column)
+                and isinstance(node.expression, exp.Column)
+            )
+
+        if not supported_join_tree(on):
             return _failed("join_unsupported")
         equalities = list(on.find_all(exp.EQ))
-        if any(
-            not isinstance(node, (exp.And, exp.EQ, exp.Column, exp.Identifier))
-            for node in on.walk()
-        ):
-            return _failed("join_unsupported")
         join_pairs = {
             frozenset(
                 (

@@ -16,6 +16,7 @@ from models.physical import (
 )
 from query.domain import (
     FilterIntent,
+    QueryAmbiguity,
     QueryContext,
     QueryDraft,
     QueryIntent,
@@ -411,6 +412,35 @@ async def test_join_target_must_be_proven_unique() -> None:
     assert result.issues[0].code == "join_unsupported"
 
 
+async def test_join_rejects_unmodeled_boolean_leaf() -> None:
+    """JOIN ON 的每个叶子都必须属于获授权外键等式。"""
+    context = _context().model_copy(
+        update={
+            "relationships_authoritative": True,
+            "bindings": {"金额": "column-amount", "客户": "table-customers"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT o.amount FROM dw.orders o JOIN dw.customers c "
+                "ON o.id = c.id AND c.id"
+            ),
+            table_ids=["table-orders", "table-customers"],
+            column_ids=[
+                "column-amount",
+                "column-customer-id",
+                "column-id",
+            ],
+        ),
+        context,
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "join_unsupported"
+
+
 async def test_swapped_detail_aliases_fail_closed() -> None:
     """公开结果列标签不能交换两个权威字段的业务身份。"""
     context = _context().model_copy(
@@ -659,6 +689,23 @@ def test_time_range_requires_normalized_predicate_contract() -> None:
 
     with pytest.raises(ValueError, match="时间范围"):
         intent.validate_evidence(["按日期查看 2026-08-01 的趋势"])
+
+
+def test_incomplete_trend_can_reach_single_slot_clarification() -> None:
+    """趋势缺少粒度或聚合时，可由对应歧义进入 Meta 单项澄清。"""
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        query_type_quote="趋势",
+        measure_quotes=["销售额"],
+        ambiguities=[
+            QueryAmbiguity(slot="time", quote="趋势", question="请明确时间粒度？"),
+            QueryAmbiguity(
+                slot="measure", quote="销售额", question="请明确聚合口径？"
+            ),
+        ],
+    )
+
+    assert intent.validate_evidence(["查看销售额趋势"]) is None
 
 
 @pytest.mark.parametrize(

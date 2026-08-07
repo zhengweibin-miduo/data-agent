@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,11 +238,15 @@ class ConversationRepository:
                     or_(
                         agent_conversation.c.active_turn_uid.is_(None),
                         agent_conversation.c.active_turn_uid == turn_uid,
-                        agent_conversation.c.updated_at
-                        <= func.timestampadd(
-                            text("SECOND"),
-                            -app_config.conversation.turn_lease_seconds,
-                            func.now(),
+                        and_(
+                            agent_conversation.c.updated_at
+                            <= func.timestampadd(
+                                text("SECOND"),
+                                -app_config.conversation.turn_lease_seconds,
+                                func.now(),
+                            ),
+                            func.year(agent_conversation.c.updated_at)
+                            != _ABANDONED_TURN_YEAR,
                         ),
                     ),
                 )
