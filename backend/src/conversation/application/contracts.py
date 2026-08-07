@@ -93,6 +93,12 @@ class ConversationStore(Protocol):
         """释放失败或取消的活动轮次门禁。"""
         ...
 
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> bool:
+        """仅续租仍由指定轮次持有的门禁。"""
+        ...
+
     async def assistant_message(
         self,
         user_id: str,

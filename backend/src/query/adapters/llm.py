@@ -53,11 +53,17 @@ class QueryLLMAdapter:
         self._dw_database = dw_database
         self._semaphore = asyncio.Semaphore(app_config.llm.max_concurrency)
 
-    async def parse(self, question: str, user_messages: list[str]) -> QueryIntent:
+    async def parse(
+        self,
+        question: str,
+        context_messages: list[str],
+        evidence_messages: list[str],
+    ) -> QueryIntent:
         """提取严格 QueryIntent；契约错误仅修复一次并最终失败关闭。"""
         payload: dict[str, object] = {
             "current_question": question,
-            "user_messages": user_messages,
+            "context_messages": context_messages,
+            "evidence_messages": evidence_messages,
         }
         for attempt in range(2):
             if attempt:
@@ -68,7 +74,7 @@ class QueryLLMAdapter:
                 )
             try:
                 intent = await self._invoke(QueryIntent, _INTENT_PROMPT, payload)
-                intent.validate_evidence(user_messages)
+                intent.validate_evidence(evidence_messages)
             except (TypeError, ValueError):
                 continue
             return intent

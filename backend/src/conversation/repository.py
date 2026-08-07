@@ -495,18 +495,20 @@ class ConversationRepository:
             )
         )
         assistant_id = _inserted_id(result, "助手消息")
-        outbox = insert(conversation_memory_outbox).values(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            turn_uid=turn_uid,
-            user_message_id=int(user_message["id"]),
-            assistant_message_id=assistant_id,
-        )
-        await self._session.execute(
-            outbox.on_duplicate_key_update(
-                assistant_message_id=outbox.inserted.assistant_message_id
+        # 澄清不是 Query 终态；在用户回答前不能让异步摘要游标越过原始问题。
+        if semantic_fingerprint != "query:clarification":
+            outbox = insert(conversation_memory_outbox).values(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn_uid=turn_uid,
+                user_message_id=int(user_message["id"]),
+                assistant_message_id=assistant_id,
             )
-        )
+            await self._session.execute(
+                outbox.on_duplicate_key_update(
+                    assistant_message_id=outbox.inserted.assistant_message_id
+                )
+            )
         await self._session.execute(
             update(agent_conversation)
             .where(
@@ -543,6 +545,21 @@ class ConversationRepository:
             )
             .values(active_turn_uid=turn_uid, updated_at=_ABANDONED_TURN_TIMESTAMP)
         )
+
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> bool:
+        """只刷新仍由指定轮次持有的租约，完成或替代后返回假。"""
+        result = await self._session.execute(
+            update(agent_conversation)
+            .where(
+                agent_conversation.c.uid == conversation_uid,
+                agent_conversation.c.user_id == user_id,
+                agent_conversation.c.active_turn_uid == turn_uid,
+            )
+            .values(updated_at=func.now())
+        )
+        return bool(getattr(result, "rowcount", 0))
 
     async def assistant_message(
         self,

@@ -394,7 +394,21 @@ class QueryIntent(ContractModel):
         grouping_matches = re.findall(
             r"按(?!照|日|周|月|季|季度|年)([^，。,.；;\s]+)", user_text
         )
-        if grouping_matches and not self.dimension_quotes:
+        explicit_dimensions = [
+            dimension
+            for match in grouping_matches
+            for dimension in re.split(
+                r"(?:和|与|、)", re.split(r"(?:统计|查看|展示|比较|对比)", match)[0]
+            )
+            if dimension
+        ]
+        if explicit_dimensions and any(
+            not any(
+                dimension in quote or quote in dimension
+                for quote in self.dimension_quotes
+            )
+            for dimension in explicit_dimensions
+        ):
             raise ValueError("用户明确表达的分组维度必须完整映射到查询意图")
         if re.search(r"(?:前\s*\d+|top\s*\d+)", user_text) and (
             self.query_type != QueryType.RANKING or self.limit is None or not self.sorts
@@ -417,6 +431,14 @@ class QueryIntent(ContractModel):
             or re.search(r"\S+(?:是|为|属于)(?!(?:多少|什么|否))\S+", user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
+        explicit_filter_clauses = re.findall(
+            r"[^且，。,.；;]+(?:大于或等于|小于或等于|大于等于|小于等于|"
+            r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
+            r"等于|属于|包含)[^且，。,.；;]+",
+            user_text,
+        )
+        if len(explicit_filter_clauses) > len(all_filters):
+            raise ValueError("用户明确表达的每项过滤条件必须完整映射到查询意图")
         if (
             any(
                 marker in user_text

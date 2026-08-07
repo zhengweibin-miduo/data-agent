@@ -132,6 +132,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         ),
         executor=query_executor,
         dw_database=app_config.data_sync.dw_database,
+        turn_lease_seconds=app_config.conversation.turn_lease_seconds,
     )
     # 步骤五：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
     logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")

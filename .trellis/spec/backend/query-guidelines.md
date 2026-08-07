@@ -120,6 +120,14 @@
 - Filter normalization follows the authoritative column type so textual IDs
   retain leading zeroes, and public projection aliases cannot relabel direct
   physical fields as another business field.
+- A live Query owner renews its Conversation lease independently of response
+  consumption, so a healthy stream cannot be reclaimed after the lease age.
+- Role-labelled clarification context and verbatim user evidence are separate
+  intent inputs. Multi-round clarification keeps the original question and all
+  user answers until a non-clarification terminal result closes the chain;
+  clarification messages do not advance the memory-summary cursor.
+- Explicit filters and non-temporal grouping dimensions must be covered item by
+  item by the trusted intent; a non-empty partial slot list is not sufficient.
 
 ### 5. Good/Base/Bad Cases
 

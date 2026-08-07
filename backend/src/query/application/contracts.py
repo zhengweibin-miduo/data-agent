@@ -138,12 +138,23 @@ class ConversationPort(Protocol):
         """释放失败或取消的查询轮次执行权。"""
         ...
 
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> bool:
+        """仅当当前请求仍持有轮次时续租。"""
+        ...
+
 
 class QueryIntentPort(Protocol):
     """从用户原文生成严格 QueryIntent。"""
 
-    async def parse(self, question: str, user_messages: list[str]) -> QueryIntent:
-        """解析并验证用户原文证据。"""
+    async def parse(
+        self,
+        question: str,
+        context_messages: list[str],
+        evidence_messages: list[str],
+    ) -> QueryIntent:
+        """使用角色上下文解析，并仅用用户原文验证证据。"""
         ...
 
 

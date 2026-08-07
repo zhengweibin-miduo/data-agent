@@ -1484,6 +1484,32 @@ def test_intent_requires_grouping_and_limit_semantics_without_false_or() -> None
     ).validate_evidence(["列出金额大于或等于100且库存小于10的订单编号"])
 
 
+def test_intent_requires_every_explicit_filter_and_grouping_dimension() -> None:
+    """多项过滤与分组维度不能只抽取其中一项。"""
+    with pytest.raises(ValueError, match="每项过滤"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="金额",
+                    operator="gt",
+                    operator_quote="大于",
+                    value_quotes=["100"],
+                    clause_quote="金额大于100",
+                )
+            ],
+        ).validate_evidence(["列出金额大于100且数量小于10的订单编号"])
+    with pytest.raises(ValueError, match="分组维度"):
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            dimension_quotes=["地区"],
+        ).validate_evidence(["按地区和产品统计销售额合计"])
+
+
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:
     """未建模否定词和与槽位矛盾的结果形态必须失败关闭。"""
     with pytest.raises(ValueError, match="否定语义"):

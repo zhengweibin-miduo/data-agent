@@ -167,6 +167,12 @@ class ConversationService:
         """释放失败或取消的活动轮次门禁，使同轮次可安全重试。"""
         await self._store.abandon_turn(user_id, conversation_uid, turn_uid)
 
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> bool:
+        """为仍存活的长轮次续租，避免健康 owner 被超时重入。"""
+        return await self._store.renew_turn(user_id, conversation_uid, turn_uid)
+
     async def assistant_message(
         self,
         user_id: str,

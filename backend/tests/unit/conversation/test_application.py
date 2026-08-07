@@ -106,6 +106,11 @@ class _ConversationStore:
     ) -> None:
         raise NotImplementedError
 
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> bool:
+        raise NotImplementedError
+
     async def assistant_message(
         self, user_id: str, conversation_uid: str, turn_uid: str
     ) -> MessageRecord | None:

@@ -97,6 +97,10 @@ class _Conversations:
         """记录流结束后的执行权释放。"""
         self.abandoned += 1
 
+    async def renew_turn(self, *_args: object) -> bool:
+        """测试长轮次仍持有执行权。"""
+        return True
+
 
 class _ReplayConversations(_Conversations):
     """返回已经原子完成的同一轮次助手消息。"""
@@ -118,7 +122,12 @@ class _ClarificationReplayConversations(_Conversations):
 class _IntentParser:
     """返回带精确用户原文证据的查询意图。"""
 
-    async def parse(self, _question: str, _user_messages: list[str]) -> QueryIntent:
+    async def parse(
+        self,
+        _question: str,
+        _context_messages: list[str],
+        _evidence_messages: list[str],
+    ) -> QueryIntent:
         """返回一个聚合指标意图。"""
         return QueryIntent(
             query_type=QueryType.AGGREGATE,
@@ -133,10 +142,37 @@ class _RecordingIntentParser(_IntentParser):
 
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.evidence_messages: list[str] = []
 
-    async def parse(self, question: str, user_messages: list[str]) -> QueryIntent:
-        self.messages = user_messages
-        return await super().parse(question, user_messages)
+    async def parse(
+        self,
+        question: str,
+        context_messages: list[str],
+        evidence_messages: list[str],
+    ) -> QueryIntent:
+        self.messages = context_messages
+        self.evidence_messages = evidence_messages
+        return await super().parse(question, context_messages, evidence_messages)
+
+
+class _MultiClarificationIntentParser(_RecordingIntentParser):
+    """返回能够由完整多轮用户证据证明的意图。"""
+
+    async def parse(
+        self,
+        question: str,
+        context_messages: list[str],
+        evidence_messages: list[str],
+    ) -> QueryIntent:
+        self.messages = context_messages
+        self.evidence_messages = evidence_messages
+        return QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["销售额"],
+            dimension_quotes=["地区"],
+        )
 
 
 class _IndependentQueryConversations(_Conversations):
@@ -179,6 +215,38 @@ class _ResolvedClarificationConversations(_Conversations):
                     ContextMessage(role=MessageRole.USER, content="下单日期"),
                     ContextMessage(role=MessageRole.ASSISTANT, content="旧查询已完成"),
                     ContextMessage(role=MessageRole.USER, content="查询销售额总和"),
+                ],
+                memories=[],
+            ),
+        )
+
+
+class _MultiClarificationConversations(_Conversations):
+    """返回同一查询连续两轮澄清后的完整消息链。"""
+
+    async def start_turn(
+        self, *_args: object, semantic_fingerprint: str | None = None
+    ) -> StartTurnResponse:
+        del semantic_fingerprint
+        return StartTurnResponse(
+            message=_message(MessageRole.USER, "华东"),
+            context=ConversationContext(
+                messages=[
+                    ContextMessage(
+                        role=MessageRole.USER, content="按地区查询销售额总和"
+                    ),
+                    ContextMessage(
+                        role=MessageRole.ASSISTANT,
+                        content="销售额是下单金额还是支付金额？",
+                        semantic_fingerprint="query:clarification",
+                    ),
+                    ContextMessage(role=MessageRole.USER, content="支付金额"),
+                    ContextMessage(
+                        role=MessageRole.ASSISTANT,
+                        content="要查询哪个地区？",
+                        semantic_fingerprint="query:clarification",
+                    ),
+                    ContextMessage(role=MessageRole.USER, content="华东"),
                 ],
                 memories=[],
             ),
@@ -322,6 +390,36 @@ async def test_resolved_clarification_does_not_pollute_independent_query() -> No
         )
     )
     assert parser.messages == ["user: 查询销售额总和"]
+
+
+async def test_multi_round_clarification_keeps_original_user_evidence() -> None:
+    """连续澄清必须保留原始问题和所有用户回答，助手文本不能充当证据。"""
+    parser = _MultiClarificationIntentParser()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _MultiClarificationConversations()),
+        intents=cast(QueryIntentPort, parser),
+        metadata=cast(QueryMetadataPort, _Metadata()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    await anext(
+        application.stream(
+            QueryRequest(
+                user_id="user-1",
+                conversation_uid="conversation-1",
+                turn_uid="turn-3",
+                question="华东",
+                ddl_context=DDLJobRequest(
+                    source="erp",
+                    ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY)",
+                ),
+            )
+        )
+    )
+    assert parser.messages[0] == "user: 按地区查询销售额总和"
+    assert parser.evidence_messages == ["按地区查询销售额总和", "支付金额", "华东"]
 
 
 async def test_completed_turn_replays_without_duplicate_query_work() -> None:

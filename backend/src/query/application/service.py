@@ -1,5 +1,6 @@
 """自然语言只读查询的唯一应用编排入口。"""
 
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncGenerator
@@ -45,6 +46,7 @@ class QueryApplication:
         readiness: QueryReadinessPort,
         executor: QueryExecutorPort,
         dw_database: str,
+        turn_lease_seconds: int = 600,
     ) -> None:
         """绑定查询流程的外部端口。"""
         self._conversations = conversations
@@ -54,6 +56,7 @@ class QueryApplication:
         self._readiness = readiness
         self._executor = executor
         self._dw_database = dw_database
+        self._turn_lease_seconds = turn_lease_seconds
 
     async def stream(self, request: QueryRequest) -> AsyncGenerator[QueryEvent, None]:
         """执行一轮查询并逐个产生有界 NDJSON 事件。"""
@@ -109,6 +112,11 @@ class QueryApplication:
                 retryable=True,
                 http_status=409,
             )
+        owner_task = asyncio.current_task()
+        heartbeat = asyncio.create_task(
+            self._heartbeat_turn(request, owner_task),
+            name=f"query-turn-heartbeat:{request.turn_uid}",
+        )
         try:
             # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
             messages = started.context.messages
@@ -124,13 +132,23 @@ class QueryApplication:
             )
             if pending_clarification:
                 clarification_index = clarification_indexes[-1]
-                prior_user_indexes = [
+                prior_terminal_indexes = [
                     index
                     for index in range(clarification_index)
+                    if messages[index].role == MessageRole.ASSISTANT
+                    and messages[index].semantic_fingerprint
+                    != "query:clarification"
+                ]
+                terminal_index = (
+                    prior_terminal_indexes[-1] if prior_terminal_indexes else -1
+                )
+                prior_user_indexes = [
+                    index
+                    for index in range(terminal_index + 1, clarification_index)
                     if messages[index].role == MessageRole.USER
                 ]
                 chain_start = (
-                    prior_user_indexes[-1]
+                    prior_user_indexes[0]
                     if prior_user_indexes
                     else clarification_index
                 )
@@ -154,8 +172,18 @@ class QueryApplication:
             intent_context = [
                 f"{message.role.value}: {message.content}" for message in evidence_chain
             ]
-            intent = await self._intents.parse(request.question, intent_context)
-            intent.validate_evidence(user_messages)
+            intent = await self._intents.parse(
+                request.question, intent_context, user_messages
+            )
+            try:
+                intent.validate_evidence(user_messages)
+            except ValueError as error:
+                raise DataAgentError(
+                    "query_intent_invalid",
+                    "query_intent",
+                    "查询意图缺少可验证的用户原文证据",
+                    http_status=422,
+                ) from error
             context_or_clarification = await self._metadata.build_context(
                 " ".join(
                     [*intent.measure_quotes, *intent.dimension_quotes]
@@ -179,6 +207,8 @@ class QueryApplication:
             )
             # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
             if isinstance(context_or_clarification, QueryClarification):
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
                 await self._complete(
                     request,
                     context_or_clarification.question,
@@ -192,6 +222,8 @@ class QueryApplication:
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
             validated = await self._plan(request, context, intent)
             if validated is None:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
                 await self._complete(request, DATA_PREPARING_MESSAGE)
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                 return
@@ -209,6 +241,8 @@ class QueryApplication:
                         http_status=409,
                     )
                 if not await self._readiness.ready(validated.target_tables):
+                    heartbeat.cancel()
+                    await asyncio.gather(heartbeat, return_exceptions=True)
                     await self._complete(request, DATA_PREPARING_MESSAGE)
                     yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                     return
@@ -274,11 +308,15 @@ class QueryApplication:
                     row_count=row_count,
                     duration_ms=elapsed_ms,
                 )
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
                 await self._complete(request, summary)
                 yield QueryEvent(
                     kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
                 )
         finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
             try:
                 await self._conversations.abandon_turn(
                     request.user_id,
@@ -294,6 +332,26 @@ class QueryApplication:
                     request.turn_uid,
                     type(error).__name__,
                 )
+
+    async def _heartbeat_turn(
+        self,
+        request: QueryRequest,
+        owner_task: asyncio.Task[object] | None,
+    ) -> None:
+        """独立续租健康长流；续租失败时 fence 掉旧执行者。"""
+        interval = max(1.0, self._turn_lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self._conversations.renew_turn(
+                    request.user_id, request.conversation_uid, request.turn_uid
+                )
+            except Exception:
+                renewed = False
+            if not renewed:
+                if owner_task is not None:
+                    owner_task.cancel()
+                return
 
     async def _plan(
         self,

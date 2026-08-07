@@ -118,6 +118,15 @@ class MySQLConversationStore:
                 user_id, conversation_uid, turn_uid
             )
 
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str
+    ) -> bool:
+        """以短事务续租仍由指定轮次持有的门禁。"""
+        async with MySQLDatabase.session() as session:
+            return await ConversationRepository(session).renew_turn(
+                user_id, conversation_uid, turn_uid
+            )
+
     async def assistant_message(
         self, user_id: str, conversation_uid: str, turn_uid: str
     ) -> MessageRecord | None:
