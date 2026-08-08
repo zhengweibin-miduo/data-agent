@@ -503,6 +503,24 @@ def test_explicit_equality_cannot_be_omitted_from_intent() -> None:
         ).validate_evidence(["列出地区是华东的订单编号"])
 
 
+@pytest.mark.parametrize(
+    "question",
+    ["备注含有加急的订单数量", "状态在已完成、已取消之一的订单数量"],
+)
+def test_supported_chinese_filter_cannot_be_omitted_from_intent(
+    question: str,
+) -> None:
+    """已支持的中文包含与集合过滤必须进入可信过滤槽位。"""
+    with pytest.raises(ValueError, match="过滤条件"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+        ).validate_evidence([question])
+
+
 def test_unmodeled_negated_filter_cannot_be_omitted_from_intent() -> None:
     """未建模否定过滤即使被模型省略也必须在规划前失败关闭。"""
     with pytest.raises(ValueError, match="否定语义"):
@@ -1598,6 +1616,47 @@ async def test_many_to_one_join_allows_parent_dimension_for_child_measure() -> N
             aggregation_quote="总和",
             measure_quotes=["金额"],
             dimension_quotes=["地区"],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is not None
+
+
+async def test_detail_join_allows_parent_field_at_child_row_grain() -> None:
+    """子表明细可以投影多对一父表属性而不触发聚合扇出门禁。"""
+    context = _context()
+    customers = context.physical_schema.tables[1].model_copy(
+        update={
+            "columns": [
+                *context.physical_schema.tables[1].columns,
+                PhysicalColumn(
+                    id="column-customer-name", name="name", data_type="VARCHAR(64)"
+                ),
+            ]
+        }
+    )
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={"tables": [context.physical_schema.tables[0], customers]}
+            ),
+            "bindings": {"订单编号": "column-id", "客户名称": "column-customer-name"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT o.id, c.name FROM dw.orders o "
+                "JOIN dw.customers c ON o.id = c.id"
+            ),
+            table_ids=["table-orders", "table-customers"],
+            column_ids=["column-id", "column-customer-id", "column-customer-name"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            query_type_quote="列出",
+            measure_quotes=["订单编号", "客户名称"],
         ),
         dw_database="dw",
     )

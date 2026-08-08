@@ -491,9 +491,11 @@ class QueryIntent(ContractModel):
                     "至少",
                     "至多",
                     "包含",
+                    "含有",
                 )
             )
             or re.search(r"\S+(?:是|为|属于)(?!(?:多少|什么|否))\S+", user_text)
+            or re.search(r"\S+在\S+之一", user_text)
             or explicit_operator_pattern.search(user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
@@ -1243,7 +1245,7 @@ def _validate_query_sync(
     for candidate in context.candidates:
         if candidate.object_id in required_metric_ids:
             required_column_ids.update(candidate.related_column_ids)
-    if list(root.find_all(exp.Join)):
+    if list(root.find_all(exp.Join)) and intent.aggregation is not None:
         result_object_ids = {
             context.bindings[quote]
             for quote in intent.measure_quotes
