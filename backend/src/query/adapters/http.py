@@ -45,6 +45,25 @@ def _line(event: QueryEvent) -> bytes:
     return (event.model_dump_json(exclude_none=True) + "\n").encode()
 
 
+def _internal_cancellation(
+    error: asyncio.CancelledError,
+) -> tuple[str, str, str] | None:
+    """把内部 fencing 取消原因映射为稳定的 Query 错误坐标。"""
+    if len(error.args) != 1 or not isinstance(error.args[0], str):
+        return None
+    projections = {
+        "query_lease_lost": ("conversation_turn", "查询轮次执行权已失效"),
+        "generation_lock_owner_lost": (
+            "query_readiness",
+            "查询代次锁执行权已失效",
+        ),
+    }
+    projection = projections.get(error.args[0])
+    if projection is None:
+        return None
+    return error.args[0], *projection
+
+
 async def _remaining(
     first: QueryEvent,
     stream: AsyncGenerator[QueryEvent, None],
@@ -66,14 +85,16 @@ async def _remaining(
             )
         )
     except asyncio.CancelledError as error:
-        if error.args != ("query_lease_lost",):
+        projection = _internal_cancellation(error)
+        if projection is None:
             raise
+        reason, stage, _message = projection
         yield _line(
             QueryEvent(
                 kind="stream_error",
                 error=QueryStreamError(
-                    code="query_lease_lost",
-                    stage="conversation_turn",
+                    code=reason,
+                    stage=stage,
                     retryable=True,
                 ),
             )
@@ -125,12 +146,14 @@ async def query_turn(
         ) from error
     except asyncio.CancelledError as error:
         await stream.aclose()
-        if error.args != ("query_lease_lost",):
+        projection = _internal_cancellation(error)
+        if projection is None:
             raise
+        reason, stage, message = projection
         raise DataAgentError(
-            "query_lease_lost",
-            "conversation_turn",
-            "查询轮次执行权已失效",
+            reason,
+            stage,
+            message,
             retryable=True,
             http_status=409,
         ) from error

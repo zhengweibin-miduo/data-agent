@@ -52,6 +52,22 @@ class _PreResponseLeaseLostQuery:
         yield
 
 
+class _GenerationOwnerLostQuery:
+    """模拟首事件后 generation owner 连接失效。"""
+
+    async def stream(self, _request: object):
+        yield QueryEvent(kind="metadata", sql="SELECT 1", columns=["value"])
+        raise asyncio.CancelledError("generation_lock_owner_lost")
+
+
+class _PreResponseGenerationOwnerLostQuery:
+    """模拟首事件前 generation owner 连接失效。"""
+
+    async def stream(self, _request: object):
+        raise asyncio.CancelledError("generation_lock_owner_lost")
+        yield
+
+
 class _PreResponseStream:
     """记录首事件失败时 HTTP 适配器是否关闭流。"""
 
@@ -259,3 +275,59 @@ async def test_query_route_maps_pre_response_lease_loss_to_business_error() -> N
 
     assert response.status_code == 409
     assert response.json()["code"] == "query_lease_lost"
+
+
+async def test_query_route_maps_generation_owner_loss_before_and_after_start() -> None:
+    """Generation owner 丢失在响应前后都映射为稳定可重试错误。"""
+    async def handle_data_agent_error(
+        _request: Request, error: Exception
+    ) -> JSONResponse:
+        assert isinstance(error, DataAgentError)
+        return JSONResponse(
+            status_code=error.http_status,
+            content={"code": error.code, "stage": error.stage},
+        )
+
+    body = {
+        "user_id": "user-1",
+        "turn_uid": "turn-1",
+        "question": "查询订单",
+        "supplemental_context": {"user_timezone": "Asia/Shanghai"},
+        "ddl_context": {
+            "source": "erp",
+            "dialect": "mysql",
+            "ddl": "CREATE TABLE orders (id BIGINT)",
+        },
+    }
+    started_app = FastAPI()
+    started_app.state.query = _GenerationOwnerLostQuery()
+    started_app.include_router(router)
+    pre_response_app = FastAPI()
+    pre_response_app.state.query = _PreResponseGenerationOwnerLostQuery()
+    pre_response_app.add_exception_handler(DataAgentError, handle_data_agent_error)
+    pre_response_app.include_router(router)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=started_app), base_url="http://test"
+    ) as client:
+        started = await client.post(
+            "/api/v1/conversations/conversation-1/query-turns", json=body
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=pre_response_app), base_url="http://test"
+    ) as client:
+        before = await client.post(
+            "/api/v1/conversations/conversation-1/query-turns", json=body
+        )
+
+    events = [json.loads(line) for line in started.text.splitlines()]
+    assert events[-1]["error"] == {
+        "code": "generation_lock_owner_lost",
+        "stage": "query_readiness",
+        "retryable": True,
+    }
+    assert before.status_code == 409
+    assert before.json() == {
+        "code": "generation_lock_owner_lost",
+        "stage": "query_readiness",
+    }

@@ -274,6 +274,8 @@ class GenerationLockManager:
             await asyncio.sleep(interval)
             try:
                 await self._scalar(connection, text("SELECT 1"), {})
+            except asyncio.CancelledError:
+                raise
             except BaseException:
                 if owner_task is not None:
                     owner_task.cancel("generation_lock_owner_lost")

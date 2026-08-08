@@ -232,3 +232,31 @@ async def test_read_owner_is_kept_alive_while_caller_is_paused(
         await asyncio.sleep(0.04)
 
     assert any("SELECT 1" in sql for sql, _ in connection.calls)
+
+
+async def test_normal_exit_does_not_fence_owner_when_keepalive_probe_is_cancelled(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """正常退出取消阻塞中的保活探测时不得反向取消健康 owner。"""
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    connection = _Connection([1, 1])
+    manager = await _manager(monkeypatch, _Engine(connection))
+    original_scalar = manager._scalar
+
+    async def scalar(
+        current: object, statement: object, parameters: dict[str, object]
+    ) -> object:
+        if "SELECT 1" in str(statement):
+            probe_started.set()
+            await release_probe.wait()
+        return await original_scalar(current, statement, parameters)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(manager, "_scalar", scalar)
+
+    async with manager.read(["table:a"], 0):
+        await probe_started.wait()
+
+    current_task = asyncio.current_task()
+    assert current_task is not None
+    assert current_task.cancelling() == 0
