@@ -1639,6 +1639,15 @@ def _validate_query_sync(
                 and isinstance(expression.this, exp.Column)
                 else None
             )
+            table_count_id = (
+                next(iter(required_table_ids))
+                if table_count_subject
+                and len(required_table_ids) == 1
+                and isinstance(expression, exp.Count)
+                and expression.find(exp.Star) is not None
+                and expression.sql(dialect="mysql") in aggregate_sql
+                else None
+            )
             if exact_column_id is None and intent.grain is not None:
                 time_column_id = context.bindings.get(intent.time_column_quote or "")
                 group = root.args.get("group")
@@ -1654,7 +1663,7 @@ def _validate_query_sync(
                     exact_column_id = time_column_id
             actual_sorts.append(
                 (
-                    metric_id or exact_column_id,
+                    metric_id or table_count_id or exact_column_id,
                     "desc" if ordered.args.get("desc") else "asc",
                 )
             )

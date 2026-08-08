@@ -187,10 +187,10 @@ class QueryMetadataAdapter:
                     {MetadataObjectKind.COLUMN},
                 )
             )
-        slots.extend(
-            ("sort", item.quote, {MetadataObjectKind.METRIC, MetadataObjectKind.COLUMN})
-            for item in intent.sorts
-        )
+        sort_kinds = {MetadataObjectKind.METRIC, MetadataObjectKind.COLUMN}
+        if intent.aggregation == "count":
+            sort_kinds.add(MetadataObjectKind.TABLE)
+        slots.extend(("sort", item.quote, sort_kinds) for item in intent.sorts)
         if not slots:
             return QueryClarification(
                 slot="measure",

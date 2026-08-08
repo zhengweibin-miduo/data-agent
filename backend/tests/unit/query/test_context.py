@@ -12,7 +12,7 @@ from errors import DataAgentError
 from models.physical import PhysicalColumn, PhysicalSchema, PhysicalTable
 from query.adapters.metadata import QueryMetadataAdapter
 from query.application.contracts import QueryClarification
-from query.domain import FilterIntent, QueryIntent, QueryType
+from query.domain import FilterIntent, QueryIntent, QueryType, SortIntent
 
 
 class _Search:
@@ -176,6 +176,35 @@ async def test_count_subject_can_bind_to_authoritative_table() -> None:
 
     assert not isinstance(result, QueryClarification)
     assert result.bindings == {"订单": "table-orders"}
+
+
+async def test_table_count_subject_can_bind_to_sort_slot() -> None:
+    """表主体计数的排序槽位复用同一个权威表身份。"""
+    search = _Search(
+        [
+            _candidate(MetadataObjectKind.TABLE, "table-orders", "订单"),
+            _candidate(MetadataObjectKind.COLUMN, "column-region", "地区"),
+        ]
+    )
+
+    result = await QueryMetadataAdapter(search).build_context(
+        "按地区统计订单数量降序的前10个地区",
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="前10个地区",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            dimension_quotes=["地区"],
+            sorts=[SortIntent(quote="订单", direction="desc", direction_quote="降序")],
+            limit=10,
+            limit_quote="前10个地区",
+        ),
+        _schema(),
+    )
+
+    assert not isinstance(result, QueryClarification)
+    assert result.bindings == {"订单": "table-orders", "地区": "column-region"}
 
 
 async def test_context_rejects_non_authoritative_schema_for_single_table() -> None:

@@ -2047,6 +2047,38 @@ async def test_table_count_only_accepts_count_star() -> None:
         assert result.issues[0].code == "aggregation_operand_mismatch"
 
 
+async def test_table_count_ranking_can_sort_by_count_star() -> None:
+    """表主体计数排名可将精确 COUNT(*) 排序映射回表身份。"""
+    context = _context().model_copy(
+        update={"bindings": {"订单": "table-orders", "编号": "column-id"}}
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT o.id, COUNT(*) AS total FROM dw.orders o "
+                "GROUP BY o.id ORDER BY total DESC LIMIT 10"
+            ),
+            table_ids=["table-orders"],
+            column_ids=["column-id"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="前10个编号",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            dimension_quotes=["编号"],
+            sorts=[SortIntent(quote="订单", direction="desc", direction_quote="降序")],
+            limit=10,
+            limit_quote="前10个编号",
+        ),
+        dw_database="dw",
+    )
+
+    assert result.validated is not None
+
+
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:
     """未建模否定词和与槽位矛盾的结果形态必须失败关闭。"""
     with pytest.raises(ValueError, match="否定语义"):

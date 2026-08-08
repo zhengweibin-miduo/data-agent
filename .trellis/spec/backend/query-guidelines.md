@@ -191,6 +191,9 @@ async for batch in readonly_executor.execute(validated):
 - Multi-character symbolic filter operators are parsed atomically, explicit
   sort clauses map one-to-one to trusted sort intents, and unsupported natural-
   language exclusion phrases fail closed before planning.
+- A table-bound `COUNT(*)` has the same authoritative table identity in both
+  measure and sort slots, so grouped Top-N row-count queries can sort by their
+  validated aggregate without weakening the aggregate-expression gate.
 - Aggregate public labels cannot claim arbitrary business identities or collide
   with another result column. Completed-turn replay is resolved from durable
   messages before remote memory context is recalled.
