@@ -2297,6 +2297,7 @@ def test_intent_requires_sort_and_grain_evidence() -> None:
                 operator="gte",
                 operator_quote="大于等于",
                 value_quotes=["2025"],
+                clause_quote="日期大于等于2025年",
             ),
             grain="day",
             grain_quote="按月",
@@ -2314,9 +2315,23 @@ def test_intent_normalizes_or_equal_and_requires_time_clause_evidence() -> None:
                 operator="gte",
                 operator_quote="大于或等于",
                 value_quotes=["10"],
+                clause_quote="金额大于或等于10",
             )
         ],
     ).validate_evidence(["金额大于或等于10"])
+    with pytest.raises(ValueError, match="同一用户子句"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="订单编号",
+                    operator="gt",
+                    operator_quote="大于",
+                    value_quotes=["100"],
+                )
+            ],
+        ).validate_evidence(["价格大于100的订单编号"])
     with pytest.raises(ValueError, match="逐字"):
         QueryIntent(
             query_type=QueryType.TREND,

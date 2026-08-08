@@ -87,17 +87,13 @@ class QueryMetadataAdapter:
         candidates = await self._search.search_metadata(
             " ".join(context.bindings), table_ids=table_ids, column_ids=column_ids
         )
-        candidates = [
-            candidate
-            for candidate in candidates
-            if self._in_scope(candidate, table_ids, column_ids)
-            and candidate.kind != MetadataObjectKind.METRIC
-        ]
         return all(
             [
                 candidate.object_id
                 for candidate in candidates
-                if self._matches(quote, candidate)
+                if self._in_scope(candidate, table_ids, column_ids)
+                and candidate.kind.value == context.binding_kinds.get(quote)
+                and self._matches(quote, candidate)
             ]
             == [object_id]
             for quote, object_id in context.bindings.items()
@@ -268,6 +264,10 @@ class QueryMetadataAdapter:
             ],
             value_search_complete=value_result.complete,
             bindings=bindings,
+            binding_kinds={
+                quote: retained[object_id].kind.value
+                for quote, object_id in bindings.items()
+            },
         )
 
     @staticmethod

@@ -28,6 +28,7 @@ async def run_worker() -> None:
         app_config.mysql.url,
         pool_size=app_config.mysql.generation_lock_pool_size,
         pool_timeout_seconds=app_config.mysql.generation_lock_pool_timeout_seconds,
+        io_timeout_seconds=app_config.mysql.generation_lock_io_timeout_seconds,
     )
     await generation_locks.initialize()
     try:

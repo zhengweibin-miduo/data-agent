@@ -382,3 +382,23 @@ async def test_time_filter_column_is_bound_independently_from_bucket_column() ->
 
     assert not isinstance(result, QueryClarification)
     assert result.bindings["付款日期"] == "column-paid-at"
+
+
+async def test_authority_recheck_preserves_binding_object_kind() -> None:
+    """同名表不得让已唯一绑定的维度字段在最终复核时误报变化。"""
+    search = _Search(
+        [
+            _candidate(MetadataObjectKind.TABLE, "table-orders", "地区"),
+            _candidate(MetadataObjectKind.COLUMN, "column-region", "地区"),
+        ]
+    )
+    adapter = QueryMetadataAdapter(search)
+    result = await adapter.build_context(
+        "按地区统计",
+        QueryIntent(query_type=QueryType.COMPARISON, dimension_quotes=["地区"]),
+        _schema(),
+    )
+
+    assert not isinstance(result, QueryClarification)
+    assert result.binding_kinds == {"地区": "column"}
+    assert await adapter.bindings_are_authoritative(result) is True

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import AsyncIterator, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -30,9 +31,10 @@ _CONTENTION_ERRORS = frozenset({3132, 3133})
 class ExpandableWriteOwner:
     """在同一 owner connection 上逐步扩展 WRITE 锁集合。"""
 
-    def __init__(self, connection: AsyncConnection) -> None:
+    def __init__(self, connection: AsyncConnection, io_timeout_seconds: float) -> None:
         """绑定本次发布独占的 owner connection。"""
         self._connection = connection
+        self._io_timeout_seconds = io_timeout_seconds
         self._held: set[str] = set()
 
     async def acquire(self, names: Iterable[str], timeout_seconds: int) -> None:
@@ -50,7 +52,13 @@ class ExpandableWriteOwner:
             timeout_seconds=timeout_seconds,
         )
         try:
-            acquired = await self._connection.scalar(statement, parameters)
+            async with asyncio.timeout(self._io_timeout_seconds):
+                acquired = await self._connection.scalar(statement, parameters)
+        except TimeoutError as error:
+            await _invalidate_owner_connection(self._connection, error)
+            raise AdvisoryLockUnavailableError(
+                "MySQL generation lock 网络 I/O 超时"
+            ) from error
         except DBAPIError as error:
             if _mysql_error_number(error) in _CONTENTION_ERRORS:
                 raise AdvisoryLockUnavailableError(
@@ -101,11 +109,13 @@ class GenerationLockManager:
         *,
         pool_size: int = 16,
         pool_timeout_seconds: float = 1,
+        io_timeout_seconds: float = 5,
     ) -> None:
         """绑定连接地址与显式池容量，延迟创建引擎。"""
         self._url = url
         self._pool_size = pool_size
         self._pool_timeout_seconds = pool_timeout_seconds
+        self._io_timeout_seconds = io_timeout_seconds
         self._engine: AsyncEngine | None = None
 
     async def initialize(self) -> None:
@@ -118,8 +128,28 @@ class GenerationLockManager:
                 pool_size=self._pool_size,
                 max_overflow=0,
                 pool_timeout=self._pool_timeout_seconds,
-                connect_args={"init_command": "SET time_zone = '+00:00'"},
+                connect_args={
+                    "init_command": "SET time_zone = '+00:00'",
+                    "connect_timeout": self._io_timeout_seconds,
+                    "read_timeout": self._io_timeout_seconds,
+                },
             )
+
+    async def _scalar(
+        self,
+        connection: AsyncConnection,
+        statement: TextClause,
+        parameters: dict[str, object],
+    ) -> object:
+        """以独立网络预算执行 owner I/O，超时即失效连接。"""
+        try:
+            async with asyncio.timeout(self._io_timeout_seconds):
+                return await connection.scalar(statement, parameters)
+        except TimeoutError as error:
+            await _invalidate_owner_connection(connection, error)
+            raise AdvisoryLockUnavailableError(
+                "MySQL generation lock 网络 I/O 超时"
+            ) from error
 
     def _client(self) -> AsyncEngine:
         """返回已初始化的专用引擎。"""
@@ -160,7 +190,7 @@ class GenerationLockManager:
         owner: ExpandableWriteOwner | None = None
         try:
             async with self._client().connect() as connection:
-                owner = ExpandableWriteOwner(connection)
+                owner = ExpandableWriteOwner(connection, self._io_timeout_seconds)
                 try:
                     await owner.acquire(names, timeout_seconds)
                     yield owner
@@ -198,7 +228,7 @@ class GenerationLockManager:
             async with connection_context as connection:
                 try:
                     try:
-                        acquired = await connection.scalar(statement, parameters)
+                        acquired = await self._scalar(connection, statement, parameters)
                     except DBAPIError as error:
                         if _mysql_error_number(error) in _CONTENTION_ERRORS:
                             raise AdvisoryLockUnavailableError(
@@ -227,7 +257,8 @@ class GenerationLockManager:
     async def _release(self, connection: AsyncConnection) -> BaseException | None:
         """释放 owner 在 generation namespace 内的全部锁。"""
         try:
-            released = await connection.scalar(
+            released = await self._scalar(
+                connection,
                 text("SELECT service_release_locks(:namespace)"),
                 {"namespace": _GENERATION_LOCK_NAMESPACE},
             )
@@ -245,11 +276,13 @@ class GenerationLockManager:
                 active_error: BaseException | None = None
                 try:
                     try:
-                        read_result = await connection.scalar(
+                        read_result = await self._scalar(
+                            connection,
                             text("SELECT service_get_read_locks(:namespace, :name, 0)"),
                             {"namespace": _PROBE_NAMESPACE, "name": f"read:{probe}"},
                         )
-                        write_result = await connection.scalar(
+                        write_result = await self._scalar(
+                            connection,
                             text(
                                 "SELECT service_get_write_locks(:namespace, :name, 0)"
                             ),
@@ -268,7 +301,8 @@ class GenerationLockManager:
                     raise
                 finally:
                     try:
-                        released = await connection.scalar(
+                        released = await self._scalar(
+                            connection,
                             text("SELECT service_release_locks(:namespace)"),
                             {"namespace": _PROBE_NAMESPACE},
                         )

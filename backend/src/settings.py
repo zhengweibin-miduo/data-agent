@@ -145,6 +145,9 @@ class MySQLSettings(SettingsModel):
     generation_lock_pool_timeout_seconds: float = Field(
         default=1, gt=0, le=30, description="generation lock owner 池取连接超时。"
     )
+    generation_lock_io_timeout_seconds: float = Field(
+        default=5, gt=0, le=60, description="generation lock owner 网络 I/O 超时。"
+    )
 
 
 class QuerySettings(SettingsModel):

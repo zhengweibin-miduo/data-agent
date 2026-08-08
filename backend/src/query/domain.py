@@ -308,17 +308,16 @@ class QueryIntent(ContractModel):
             for item in all_filters
         ):
             raise ValueError("过滤条件包含尚未建模的 OR 关系")
-        if len(all_filters) > 1:
-            for item in all_filters:
-                if item.clause_quote is None or not all(
-                    quote in item.clause_quote
-                    for quote in (
-                        item.column_quote,
-                        item.operator_quote or "",
-                        *item.value_quotes,
-                    )
-                ):
-                    raise ValueError("多项过滤的字段、操作符和值必须来自同一用户子句")
+        for item in all_filters:
+            if item.clause_quote is None or not all(
+                quote in item.clause_quote
+                for quote in (
+                    item.column_quote,
+                    item.operator_quote or "",
+                    *item.value_quotes,
+                )
+            ):
+                raise ValueError("过滤的字段、操作符和值必须来自同一用户子句")
         direction_markers = {
             "asc": ("升序", "从低到高", "最低", "最小", "asc"),
             "desc": ("降序", "从高到低", "最高", "最大", "desc"),
@@ -831,6 +830,9 @@ class QueryContext(ContractModel):
     )
     bindings: dict[str, str] = Field(
         default_factory=dict, description="用户原文到权威对象标识的绑定。"
+    )
+    binding_kinds: dict[str, str] = Field(
+        default_factory=dict, description="用户原文绑定对象的权威 Meta 类型。"
     )
     relationships_authoritative: bool = Field(
         default=True, description="关系是否已由权威 Meta 快照核验。"
