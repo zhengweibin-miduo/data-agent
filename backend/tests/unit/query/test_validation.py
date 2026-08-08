@@ -423,7 +423,12 @@ def _context() -> QueryContext:
                     name="orders",
                     qualified_name="orders",
                     columns=[
-                        PhysicalColumn(id="column-id", name="id", data_type="BIGINT"),
+                        PhysicalColumn(
+                            id="column-id",
+                            name="id",
+                            data_type="BIGINT",
+                            nullable=False,
+                        ),
                         PhysicalColumn(
                             id="column-amount",
                             name="amount",
@@ -3109,6 +3114,98 @@ def test_every_conjunctive_filter_must_be_extracted(connector: str) -> None:
                 )
             ],
         ).validate_evidence([question])
+
+
+def test_repeated_time_range_in_clarification_chain_is_deduplicated() -> None:
+    """澄清回答重复同一时间范围时不应被误判为多个范围。"""
+    QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="合计",
+        aggregation="sum",
+        aggregation_quote="合计",
+        measure_quotes=["销售额"],
+        time_quote="今年",
+        time_column_quote="订单日期",
+    ).validate_evidence(["查看今年销售额合计", "订单日期，今年"])
+
+
+@pytest.mark.parametrize(
+    ("measure", "aggregation", "aggregation_quote", "question"),
+    [
+        ("平均售价", "sum", "合计", "平均售价合计"),
+        ("最高温度", "avg", "平均", "最高温度平均"),
+    ],
+)
+def test_aggregation_keywords_inside_measure_names_are_not_actions(
+    measure: str,
+    aggregation: Literal["sum", "avg"],
+    aggregation_quote: str,
+    question: str,
+) -> None:
+    """度量名称内部的平均或最高不得制造第二个聚合动作。"""
+    QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote=aggregation_quote,
+        aggregation=aggregation,
+        aggregation_quote=aggregation_quote,
+        measure_quotes=[measure],
+    ).validate_evidence([question])
+
+
+def test_grouped_top_n_extreme_binds_only_the_measure_sort_object() -> None:
+    """无标点分隔的分组 Top-N 不能把前置维度当作排序对象。"""
+    with pytest.raises(ValueError, match="每项排序"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="前10个",
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            dimension_quotes=["地区"],
+            sorts=[SortIntent(quote="地区", direction="desc", direction_quote="最高")],
+            limit=10,
+            limit_quote="前10个",
+        ).validate_evidence(["按地区统计销售额合计最高的前10个地区"])
+
+
+async def test_nullable_foreign_key_join_fails_closed() -> None:
+    """可空外键只能使用 INNER JOIN 时不得静默丢弃主体行。"""
+    context = _context()
+    orders = context.physical_schema.tables[0]
+    nullable_orders = orders.model_copy(
+        update={
+            "columns": [
+                column.model_copy(update={"nullable": True})
+                if column.id == "column-id"
+                else column
+                for column in orders.columns
+            ]
+        }
+    )
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [nullable_orders, context.physical_schema.tables[1]]
+                }
+            ),
+            "bindings": {"金额": "column-amount", "客户": "table-customers"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT o.amount FROM dw.orders o JOIN dw.customers c "
+                "ON o.id = c.id"
+            ),
+            table_ids=["table-orders", "table-customers"],
+            column_ids=["column-id", "column-customer-id", "column-amount"],
+        ),
+        context,
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_cardinality_unsupported"
 
 
 @pytest.mark.parametrize("connector", ["与", "及"])

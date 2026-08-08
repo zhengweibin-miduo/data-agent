@@ -513,7 +513,10 @@ class QueryIntent(ContractModel):
             r"最近\s*\d+\s*(?:天|周|月|年))",
             user_text,
         )
-        if len(explicit_time_ranges) > 1:
+        distinct_time_ranges = {
+            re.sub(r"\s+", "", item).casefold() for item in explicit_time_ranges
+        }
+        if len(distinct_time_ranges) > 1:
             raise ValueError("多个时间范围尚未建模，必须先澄清")
         if explicit_time_ranges and not (
             self.time_quote and (self.time_column_quote or has_time_ambiguity)
@@ -581,6 +584,11 @@ class QueryIntent(ContractModel):
                 != len(explicit_filter_clauses)
             ):
                 raise ValueError("每项过滤条件必须与不同的用户原文子句一一对应")
+        aggregation_evidence_text = user_text
+        for measure_quote in sorted(self.measure_quotes, key=len, reverse=True):
+            aggregation_evidence_text = aggregation_evidence_text.replace(
+                measure_quote, ""
+            )
         explicit_aggregation_actions = {
             operation
             for operation, markers in {
@@ -589,7 +597,7 @@ class QueryIntent(ContractModel):
                 "min": ("最小值", "最小", "最低"),
                 "max": ("最大值", "最大", "最高"),
             }.items()
-            if any(marker in user_text for marker in markers)
+            if any(marker in aggregation_evidence_text for marker in markers)
             and (self.query_type != QueryType.RANKING or operation in {"sum", "avg"})
         }
         if len(explicit_aggregation_actions) > 1:
@@ -652,6 +660,9 @@ class QueryIntent(ContractModel):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
         matched_sort_indexes: set[int] = set()
         for explicit_object, explicit_direction in explicit_sorts:
+            explicit_object = re.sub(
+                r"^.*(?:统计|比较|对比)", "", explicit_object
+            ).strip()
             normalized_direction = next(
                 (
                     direction
@@ -1320,6 +1331,7 @@ def _validate_query_sync(
     fk_constraints: dict[str, set[frozenset[str]]] = {}
     fk_constraint_tables: dict[str, tuple[str, str]] = {}
     fk_constraint_targets: dict[str, set[str]] = {}
+    nullable_fk_constraints: set[str] = set()
     table_by_qualified = {
         key.casefold(): table
         for table in context.physical_schema.tables
@@ -1355,6 +1367,18 @@ def _validate_query_sync(
                 relation.source_table_id,
                 target_table.id,
             )
+            source_column = next(
+                (
+                    column
+                    for table in context.physical_schema.tables
+                    if table.id == relation.source_table_id
+                    for column in table.columns
+                    if column.id == relation.source_column_id
+                ),
+                None,
+            )
+            if source_column is None or source_column.nullable:
+                nullable_fk_constraints.add(constraint_id)
     for constraint_id in list(fk_constraints):
         target_table = next(
             table
@@ -1442,6 +1466,11 @@ def _validate_query_sync(
         ]
         if not matched_constraints:
             return _failed("join_unsupported")
+        if any(
+            constraint_id in nullable_fk_constraints
+            for constraint_id in matched_constraints
+        ):
+            return _failed("join_cardinality_unsupported")
         actual_join_directions.update(
             fk_constraint_tables[constraint_id] for constraint_id in matched_constraints
         )

@@ -239,3 +239,9 @@ async for batch in readonly_executor.execute(validated):
 - Reverse intent coverage treats `各<维度>`、`每个<维度>` and `分<维度>` as explicit
   grouping evidence. Until an explicit `LIKE ... ESCAPE` contract exists,
   contains evidence with backslashes, `%`, or `_` fails closed.
+- Repeated evidence for the same normalized time range is one semantic range;
+  only distinct ranges trigger the unsupported-multiple-range guard.
+- Aggregate action detection excludes trusted measure names, and Top-N extreme
+  phrases bind only the measure expression after any grouping prefix.
+- Until a trusted outer-join contract exists, a nullable foreign key cannot
+  authorize an inner child-to-parent join that would discard driving rows.
