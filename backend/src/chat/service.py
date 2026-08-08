@@ -181,6 +181,10 @@ class ChatService:
             else:
                 assistant_content = gate.user_message or "无法继续回答"
             # 步骤六：复用完成轮次事务，原子写入助手消息、提炼 outbox 并释放门禁。
+            # 完成事务会清空 claim token；必须先停止续租，避免 heartbeat 在
+            # 提交后把正常的 CAS false 误判成外部接管并取消当前 owner。
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
             completed = await self._conversations.complete_turn(
                 request.user_id,
                 conversation_uid,
@@ -241,7 +245,9 @@ class ChatService:
                     user_id, conversation_uid, turn_uid, claim_token
                 )
             except Exception:
-                renewed = False
+                # 传输或数据库异常不能证明 claim 已被替代。保留当前 owner，
+                # 下一心跳周期继续续租；只有正常 CAS 返回 False 才执行 fencing。
+                continue
             if not renewed:
                 if owner_task is not None:
                     owner_task.cancel("chat_lease_lost")

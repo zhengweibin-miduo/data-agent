@@ -161,6 +161,43 @@ async def test_chat_turn_stops_when_claim_renewal_is_lost() -> None:
     assert caught.value.code == "chat_lease_lost"
 
 
+async def test_chat_turn_ignores_transient_claim_renewal_error() -> None:
+    """续租传输异常不能被误判为 claim 已经被替代。"""
+    service, conversations, _, model = _service()
+    conversations.renew_turn = AsyncMock(
+        side_effect=[RuntimeError("temporary database failure"), True]
+    )
+
+    async def slow_model(*_args: object, **_kwargs: object) -> AIMessage:
+        await asyncio.sleep(0.04)
+        return AIMessage(content="按支付成功金额定义。")
+
+    model.ainvoke = AsyncMock(side_effect=slow_model)
+
+    result = await service.run_turn("conversation-1", _request())
+
+    assert result.message.content == "按支付成功金额定义。"
+    assert conversations.renew_turn.await_count >= 2
+
+
+async def test_chat_turn_stops_heartbeat_before_completion() -> None:
+    """完成事务开始前必须停止 heartbeat，避免成功提交后自我 fence。"""
+    service, conversations, _, _ = _service()
+
+    async def complete(*_args: object) -> CompleteTurnResponse:
+        await asyncio.sleep(0.04)
+        return CompleteTurnResponse(
+            message=_message(MessageRole.ASSISTANT, "按支付成功金额定义。")
+        )
+
+    conversations.complete_turn = AsyncMock(side_effect=complete)
+
+    result = await service.run_turn("conversation-1", _request())
+
+    assert result.message.content == "按支付成功金额定义。"
+    assert conversations.renew_turn.await_count == 0
+
+
 async def test_chat_turn_reuses_context_readiness_and_shared_model() -> None:
     """成功轮次携带当前 DDL 上下文并只持久化一次助手消息。"""
     service, conversations, readiness, model = _service()

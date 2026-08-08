@@ -248,5 +248,11 @@ async for batch in readonly_executor.execute(validated):
 - Query claim heartbeats distinguish a failed compare-and-swap renewal from a
   transient renewal transport error. A confirmed claim loss fences execution
   and projects the same stable retryable error before or after the first event.
+- Chat claim heartbeats follow the same rule and stop before the terminal
+  completion transaction, so a transient renewal failure does not fence a live
+  owner and a successful completion cannot cancel itself after clearing the claim.
+- Driver fetch growth is conservative but not permanently row-by-row: probe one
+  row, grow through a small bounded batch, and keep speculative pre-materialization
+  capped independently of the configured NDJSON row batch.
 - Reverse aggregation coverage treats the bounded `<object>有多少` family as
   count evidence, so it cannot be downgraded to a detail result shape.

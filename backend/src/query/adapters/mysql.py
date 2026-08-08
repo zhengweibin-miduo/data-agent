@@ -207,10 +207,11 @@ class MySQLQueryExecutor:
                     pending_bytes += row_bytes
                     driver_fetch_rows = min(
                         self._fetch_batch_rows,
-                        # 未知的下一行可能突然变宽。驱动层最多同时预取两行，
-                        # 既避免永久逐行 await，也把门禁前的最坏预物化量限制
-                        # 在两个合法单行预算内，不能因一串窄行放大到 500 行。
-                        2,
+                        # 未知的下一行可能突然变宽。驱动层采用很小的有界预取，
+                        # 采用 1→2→4 的保守增长，而不是永久停在两行或因一条
+                        # 窄行直接放大到配置上限。四行硬上限将未知宽行的门禁前
+                        # 物化量保持有界，同时恢复真正的批量游标读取。
+                        min(driver_fetch_rows * 2, 4),
                         max(
                             1,
                             self._max_batch_bytes
