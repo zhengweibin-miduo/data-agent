@@ -3,10 +3,10 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Callable
+from typing import Callable, cast
 
 from loguru import logger
 
@@ -54,6 +54,7 @@ class QueryApplication:
         now: Callable[[], datetime] | None = None,
         clarification_chain_message_limit: int = 100,
         clarification_chain_max_chars: int = 262_144,
+        control_io_timeout_seconds: float = 10.0,
     ) -> None:
         """绑定查询流程的外部端口。"""
         self._conversations = conversations
@@ -67,6 +68,7 @@ class QueryApplication:
         self._now = now or (lambda: datetime.now(UTC))
         self._clarification_chain_message_limit = clarification_chain_message_limit
         self._clarification_chain_max_chars = clarification_chain_max_chars
+        self._control_io_timeout_seconds = control_io_timeout_seconds
 
     async def stream(self, request: QueryRequest) -> AsyncGenerator[QueryEvent, None]:
         """执行一轮查询并逐个产生有界 NDJSON 事件。"""
@@ -210,6 +212,7 @@ class QueryApplication:
                     "user_timezone": request.supplemental_context.user_timezone
                 }
             )
+            await self._ensure_timezone_supported(context, intent)
             trusted_time_range = self._trusted_time_range(request, context, intent)
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
             validated = await self._plan(request, context, intent, trusted_time_range)
@@ -222,8 +225,10 @@ class QueryApplication:
             # 最终复核与完整结果读取共享同步 generation lock，避免 readiness
             # 通过后目标表切入重建并暴露空集或部分代次。
             async with self._readiness.hold(validated.target_tables):
-                if not await self._metadata.relationships_are_authoritative(
-                    context.physical_schema
+                if not await self._control_read(
+                    self._metadata.relationships_are_authoritative(
+                        context.physical_schema
+                    )
                 ):
                     raise DataAgentError(
                         "query_schema_changed",
@@ -232,7 +237,9 @@ class QueryApplication:
                         retryable=True,
                         http_status=409,
                     )
-                if not await self._metadata.bindings_are_authoritative(context):
+                if not await self._control_read(
+                    self._metadata.bindings_are_authoritative(context)
+                ):
                     raise DataAgentError(
                         "query_metadata_changed",
                         "query_metadata",
@@ -240,7 +247,9 @@ class QueryApplication:
                         retryable=True,
                         http_status=409,
                     )
-                if not await self._readiness.ready(validated.target_tables):
+                if not await self._control_read(
+                    self._readiness.ready(validated.target_tables)
+                ):
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)
                     await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
@@ -397,8 +406,10 @@ class QueryApplication:
                     row_count=0,
                 )
                 async with self._readiness.hold(result.validated.target_tables):
-                    if not await self._metadata.relationships_are_authoritative(
-                        context.physical_schema
+                    if not await self._control_read(
+                        self._metadata.relationships_are_authoritative(
+                            context.physical_schema
+                        )
                     ):
                         raise DataAgentError(
                             "query_schema_changed",
@@ -407,7 +418,9 @@ class QueryApplication:
                             retryable=True,
                             http_status=409,
                         )
-                    if not await self._metadata.bindings_are_authoritative(context):
+                    if not await self._control_read(
+                        self._metadata.bindings_are_authoritative(context)
+                    ):
                         raise DataAgentError(
                             "query_metadata_changed",
                             "query_metadata",
@@ -415,7 +428,9 @@ class QueryApplication:
                             retryable=True,
                             http_status=409,
                         )
-                    if not await self._readiness.ready(result.validated.target_tables):
+                    if not await self._control_read(
+                        self._readiness.ready(result.validated.target_tables)
+                    ):
                         structured_log(
                             "INFO",
                             "只读查询预检未执行",
@@ -472,6 +487,45 @@ class QueryApplication:
                 details={"issue_codes": ",".join(issue.code for issue in issues)},
             )
         raise AssertionError("查询修复循环必须返回或抛出")
+
+    async def _control_read(self, awaitable: Awaitable[object]) -> object:
+        """限制 generation READ 锁内控制面数据库读取时长。"""
+        try:
+            async with asyncio.timeout(self._control_io_timeout_seconds):
+                return await awaitable
+        except TimeoutError as error:
+            raise DataAgentError(
+                "query_control_timeout",
+                "query_readiness",
+                "查询权威状态复核超时，请稍后重试",
+                retryable=True,
+                http_status=503,
+            ) from error
+
+    async def _ensure_timezone_supported(
+        self, context: QueryContext, intent: QueryIntent
+    ) -> None:
+        """在生成 CONVERT_TZ 前证明执行实例具备 named-zone 数据。"""
+        if intent.grain is None or intent.time_column_quote is None:
+            return
+        column_id = context.bindings.get(intent.time_column_quote)
+        column = next(
+            (
+                column
+                for table in context.physical_schema.tables
+                for column in table.columns
+                if column.id == column_id
+            ),
+            None,
+        )
+        if column is None or not column.data_type.upper().startswith("TIMESTAMP"):
+            return
+        ensure = cast(
+            Callable[[str], Awaitable[None]] | None,
+            getattr(self._executor, "ensure_timezone_supported", None),
+        )
+        if callable(ensure):
+            await ensure(context.user_timezone)
 
     def _trusted_time_range(
         self,

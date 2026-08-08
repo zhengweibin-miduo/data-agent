@@ -263,6 +263,10 @@ class QueryExecutorPort(Protocol):
         """执行不返回业务行的数据库预检。"""
         ...
 
+    async def ensure_timezone_supported(self, timezone: str) -> None:
+        """证明执行实例能够解析本次 IANA 时区。"""
+        ...
+
     def execute(self, query: ValidatedQuery) -> AsyncGenerator[QueryBatch, None]:
         """按固定单批预算流式读取完整业务结果。"""
         ...

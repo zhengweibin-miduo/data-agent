@@ -1594,14 +1594,15 @@ def _validate_query_sync(
             for value in values
         ):
             return _failed("filter_value_type_mismatch")
-        if (
-            re.match(r"^(?:DATETIME|TIMESTAMP)\b", data_type)
-            and item.operator in {"eq", "ne"}
-            and all(
-                isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
-                for value in values
-            )
+        if re.match(r"^TIMESTAMP\b", data_type) and all(
+            isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+            for value in values
         ):
+            # MySQL Query sessions are UTC. A date-only TIMESTAMP boundary is a
+            # local-calendar instant and cannot be bound verbatim without
+            # silently shifting non-UTC users' requested range. Until the
+            # trusted two-boundary contract represents explicit comparisons,
+            # fail closed for every operator rather than only equality.
             return _failed("filter_value_type_mismatch")
 
     def comparable_actual(
@@ -1903,16 +1904,31 @@ def _validate_query_sync(
             for item in quarter_order
             if isinstance(item, (exp.Year, exp.Quarter))
         ]
+
+        def quarter_operand_id(operand: exp.Expression) -> str | None:
+            if isinstance(operand, exp.TsOrDsToDate):
+                operand = operand.this
+            if isinstance(operand, exp.Column):
+                return _column_id(operand, columns_by_coordinate)
+            if isinstance(operand, exp.ConvertTimezone):
+                source_tz = operand.args.get("source_tz")
+                target_tz = operand.args.get("target_tz")
+                timestamp = operand.args.get("timestamp")
+                if (
+                    isinstance(source_tz, exp.Literal)
+                    and str(source_tz.this) in {"+00:00", "UTC"}
+                    and isinstance(target_tz, exp.Literal)
+                    and str(target_tz.this) == context.user_timezone
+                    and isinstance(timestamp, exp.Column)
+                ):
+                    return _column_id(timestamp, columns_by_coordinate)
+            return None
+
         if (
             isinstance(quarter_order[0], exp.Year)
             and isinstance(quarter_order[1], exp.Quarter)
             and len(operands) == 2
-            and {
-                _column_id(item, columns_by_coordinate)
-                for item in operands
-                if isinstance(item, exp.Column)
-            }
-            == {time_column_id}
+            and {quarter_operand_id(item) for item in operands} == {time_column_id}
             and directions[0] == directions[1]
         ):
             actual_sorts = [(time_column_id, directions[0])]

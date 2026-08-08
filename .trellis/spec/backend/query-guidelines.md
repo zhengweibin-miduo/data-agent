@@ -94,6 +94,15 @@
   Accepted snapshot publication, schema synchronization, and generation reset
   use the matching WRITE locks, so queries can share a stable generation while
   no generation can be replaced between validation and execution.
+- Database-backed authority, binding, and readiness reads performed while a
+  generation READ owner is held have an application-level timeout and map a
+  timeout to a stable retryable Query error so the owner is promptly released.
+- IANA-zone `TIMESTAMP` buckets require a successful read-only MySQL named-zone
+  capability probe. Quarter ordering must use the same validated timezone
+  conversion for both the year and quarter coordinates.
+- Date-only evidence is never bound verbatim to a `TIMESTAMP` comparison in the
+  UTC Query session; until an explicit trusted boundary contract represents
+  that comparison, validation fails closed.
 - Locking Service timeout or deadlock maps to retryable
   `generation_lock_unavailable` at `query_readiness` with HTTP 409 before the
   first event, or the same safe code in `stream_error` after response start.

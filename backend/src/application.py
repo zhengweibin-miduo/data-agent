@@ -145,6 +145,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         ),
         executor=query_executor,
         dw_database=app_config.data_sync.dw_database,
+        control_io_timeout_seconds=app_config.query.timeout_seconds,
         turn_lease_seconds=app_config.conversation.turn_lease_seconds,
         clarification_chain_message_limit=(
             app_config.query.clarification_chain_message_limit

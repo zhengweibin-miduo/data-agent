@@ -1,6 +1,6 @@
 """只读 MySQL 执行器的连接契约测试。"""
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -60,6 +60,15 @@ class _Connection:
         return False
 
     async def close(self) -> None:
+        return None
+
+    async def scalar(self, _statement: object, _params: object) -> int:
+        return 1
+
+    async def __aenter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
 
@@ -135,3 +144,20 @@ def test_query_engine_initializes_utc_session(
     assert create_engine.call_args.kwargs["connect_args"] == {
         "init_command": "SET time_zone = '+00:00'"
     }
+
+
+async def test_query_executor_probes_named_timezone_support() -> None:
+    """IANA 时区只有在 DW 实例能够解析时才可用于分桶。"""
+    executor = MySQLQueryExecutor(
+        "mysql+asyncmy://query:secret@localhost/dw",
+        timeout_seconds=10,
+        fetch_batch_rows=500,
+        max_batch_bytes=1024,
+    )
+    connection = _Connection(_Result())
+    connection.scalar = AsyncMock(return_value=1)  # type: ignore[method-assign]
+    executor._engine = Mock(connect=Mock(return_value=connection))
+
+    await executor.ensure_timezone_supported("Asia/Shanghai")
+
+    assert connection.scalar.await_count == 1

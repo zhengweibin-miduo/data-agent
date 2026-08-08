@@ -286,6 +286,69 @@ async def test_timestamp_grain_requires_user_timezone_conversion() -> None:
     assert result.validated is not None
 
 
+async def test_timestamp_quarter_sort_accepts_timezone_converted_keys() -> None:
+    """季度排序接受同一用户时区转换后的年份和季度键。"""
+    context = _context()
+    orders = context.physical_schema.tables[0]
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [
+                        orders.model_copy(
+                            update={
+                                "columns": [
+                                    column.model_copy(update={"data_type": "TIMESTAMP"})
+                                    if column.id == "column-created-at"
+                                    else column
+                                    for column in orders.columns
+                                ]
+                            }
+                        ),
+                        *context.physical_schema.tables[1:],
+                    ]
+                }
+            ),
+            "bindings": {
+                "金额": "column-amount",
+                "下单时间": "column-created-at",
+            },
+            "user_timezone": "Asia/Shanghai",
+        }
+    )
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        query_type_quote="趋势",
+        aggregation="sum",
+        aggregation_quote="总和",
+        measure_quotes=["金额"],
+        time_column_quote="下单时间",
+        grain="quarter",
+        grain_quote="每季度",
+        sorts=[
+            SortIntent(quote="下单时间", direction="asc", direction_quote="升序")
+        ],
+    )
+    converted = "CONVERT_TZ(o.created_at, '+00:00', 'Asia/Shanghai')"
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                f"SELECT YEAR({converted}), QUARTER({converted}), "
+                "SUM(o.amount) AS total FROM dw.orders o "
+                f"GROUP BY YEAR({converted}), QUARTER({converted}) "
+                f"ORDER BY YEAR({converted}) ASC, QUARTER({converted}) ASC"
+            ),
+            table_ids=["table-orders"],
+            column_ids=["column-created-at", "column-amount"],
+        ),
+        context,
+        intent,
+        dw_database="dw",
+    )
+
+    assert result.validated is not None
+
+
 @pytest.mark.parametrize(
     ("data_type", "quote", "parameter"),
     [("BOOLEAN", "true", True), ("BOOL", "false", False), ("TINYINT(1)", "1", True)],
@@ -637,8 +700,9 @@ def test_all_supported_aggregation_actions_must_enter_intent(marker: str) -> Non
         ).validate_evidence([f"查询订单编号{marker}"])
 
 
-async def test_date_only_equality_on_timestamp_fails_closed() -> None:
-    """时间戳列的自然日不能被错误表达为午夜等值比较。"""
+@pytest.mark.parametrize("operator", ["eq", "ne", "gt", "gte", "lt", "lte"])
+async def test_date_only_comparison_on_timestamp_fails_closed(operator: str) -> None:
+    """时间戳列的自然日不能被错误表达为 UTC 午夜比较。"""
     context = _context()
     orders = context.physical_schema.tables[0]
     timestamp_column = next(
@@ -675,8 +739,15 @@ async def test_date_only_equality_on_timestamp_fails_closed() -> None:
             filters=[
                 FilterIntent(
                     column_quote="下单日期",
-                    operator="eq",
-                    operator_quote="是",
+                    operator=operator,  # type: ignore[arg-type]
+                    operator_quote={
+                        "eq": "是",
+                        "ne": "不等于",
+                        "gt": "大于",
+                        "gte": "大于等于",
+                        "lt": "小于",
+                        "lte": "小于等于",
+                    }[operator],
                     value_quotes=["2026年8月1日"],
                 )
             ],

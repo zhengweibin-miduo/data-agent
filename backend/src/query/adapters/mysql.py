@@ -98,6 +98,41 @@ class MySQLQueryExecutor:
                 http_status=502,
             ) from error
 
+    async def ensure_timezone_supported(self, timezone: str) -> None:
+        """证明 MySQL named-zone 表可解析本次用户时区。"""
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                async with self._engine.connect() as connection:
+                    supported = await connection.scalar(
+                        text(
+                            "SELECT CONVERT_TZ("
+                            "'2000-01-01 00:00:00', '+00:00', :timezone) IS NOT NULL"
+                        ),
+                        {"timezone": timezone},
+                    )
+                    if supported != 1:
+                        raise DataAgentError(
+                            "query_timezone_unsupported",
+                            "query_validation",
+                            "DW 查询实例未加载请求时区数据",
+                            retryable=False,
+                            http_status=422,
+                        )
+        except TimeoutError as error:
+            raise DataAgentError(
+                "query_timeout",
+                "query_validation",
+                "DW 时区能力检查超过执行预算",
+                http_status=504,
+            ) from error
+        except SQLAlchemyError as error:
+            raise DataAgentError(
+                "query_database_failed",
+                "query_validation",
+                "DW 时区能力检查失败",
+                retryable=True,
+                http_status=502,
+            ) from error
     async def execute(self, query: ValidatedQuery) -> AsyncGenerator[QueryBatch, None]:
         """在一个只读事务中按行数与字节双预算读取完整结果。"""
         remaining = [self._timeout_seconds]
