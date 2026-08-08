@@ -543,6 +543,40 @@ async def test_stream_completes_only_one_authoritative_clarification() -> None:
     assert conversations.completed == ["“销售额”是下单金额还是支付金额？"]
 
 
+async def test_oversized_ddl_is_rejected_before_parsing_or_starting_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Query 必须在解析 DDL 和占用 Conversation 门禁前执行字节预算。"""
+    conversations = _Conversations()
+    parse = AsyncMock()
+    monkeypatch.setattr("query.application.service.parse_ddl", parse)
+    application = QueryApplication(
+        conversations=cast(ConversationPort, conversations),
+        intents=cast(QueryIntentPort, _MustNotRun()),
+        metadata=cast(QueryMetadataPort, _MustNotRun()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+        max_ddl_bytes=8,
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(source="erp", ddl="CREATE TABLE orders (id INT)"),
+    )
+
+    with pytest.raises(DataAgentError) as captured:
+        await anext(application.stream(request))
+
+    assert captured.value.code == "ddl_too_large"
+    parse.assert_not_awaited()
+    assert conversations.semantic_fingerprints == []
+
+
 async def test_independent_query_does_not_reuse_completed_history_as_evidence() -> None:
     """新独立问题不能被旧趋势轮次的显式槽位污染。"""
     parser = _RecordingIntentParser()

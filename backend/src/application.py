@@ -152,6 +152,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
             app_config.query.clarification_chain_message_limit
         ),
         clarification_chain_max_chars=app_config.query.clarification_chain_max_chars,
+        max_ddl_bytes=app_config.api.max_ddl_bytes,
     )
     # 步骤五：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
     logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")

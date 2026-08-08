@@ -225,7 +225,8 @@ class QueryIntent(ContractModel):
         unsupported_negations = ("不包含", "不含", "不在", "not in", "not like")
         user_text = " ".join(user_messages).casefold()
         if any(marker in user_text for marker in unsupported_negations) or re.search(
-            r"(?:^|[\s，。,.；;])非\S+|除\S+以外", user_text
+            r"(?:^|[\s，。,.；;]|[\w\u4e00-\u9fff])非\S+|除\S+以外|"
+            r"(?:没有|无)\S+", user_text
         ):
             raise ValueError("过滤操作包含尚未建模的否定语义")
         normalized_inequalities = {
@@ -409,6 +410,19 @@ class QueryIntent(ContractModel):
         }
         if self.grain and grain_matches != {self.grain}:
             raise ValueError("时间粒度必须携带与枚举一致的用户原文证据")
+        explicit_grains = {
+            grain
+            for grain, pattern in {
+                "day": r"(?:按|每)(?:日|天)|(?:日|天)度|\bday\b",
+                "week": r"(?:按|每)(?:周|星期)|(?:周|星期)度|\bweek\b",
+                "month": r"(?:按|每)月|月度|\bmonth\b",
+                "quarter": r"(?:按|每)(?:季度|季)|季度|\bquarter\b",
+                "year": r"(?:按|每)年|年度|\byear\b",
+            }.items()
+            if re.search(pattern, user_text)
+        }
+        if len(explicit_grains) > 1:
+            raise ValueError("多个时间粒度尚未建模，必须先澄清")
         shape_markers = {
             QueryType.DETAIL: ("查询", "列出", "每笔", "明细", "记录"),
             QueryType.AGGREGATE: (
@@ -503,6 +517,15 @@ class QueryIntent(ContractModel):
             for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
             if dimension.strip(" 的")
         )
+        comparison_matches = re.findall(
+            r"(?:比较|对比)(.+?)(?=统计|查询|查看|展示|。|；|;|$)", user_text
+        )
+        explicit_dimensions.extend(
+            dimension.strip(" 的")
+            for match in comparison_matches
+            for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
+            if dimension.strip(" 的")
+        )
         if explicit_dimensions and any(
             not any(
                 dimension in quote or quote in dimension
@@ -560,8 +583,14 @@ class QueryIntent(ContractModel):
                     "等于",
                     "超过",
                     "低于",
+                    "少于",
                     "至少",
                     "至多",
+                    "不少于",
+                    "不低于",
+                    "不高于",
+                    "不大于",
+                    "不超过",
                     "包含",
                     "含有",
                 )
@@ -574,6 +603,7 @@ class QueryIntent(ContractModel):
         filter_operator_pattern = re.compile(
             r"(?:大于或等于|小于或等于|大于等于|小于等于|"
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
+            r"少于|不高于|"
             r"等于|属于|包含|是|为|!=|<>|>=|<=|(?<![<>!])=(?!=)|"
             r"\b(?:in|like)\b)",
             re.IGNORECASE,
@@ -783,7 +813,7 @@ class QueryIntent(ContractModel):
             raise ValueError("查询形态必须与用户证据槽位确定性一致")
 
 
-QueryParameter = str | int | float | Decimal | bool | None
+QueryParameter = bool | str | int | float | Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1030,6 +1060,8 @@ def _values_match(
     operator: str, values: list[QueryParameter], quotes: list[QueryParameter]
 ) -> bool:
     """按用户证据精确比较谓词绑定值。"""
+    if quotes and all(isinstance(quote, bool) for quote in quotes):
+        return all(isinstance(value, bool) for value in values) and values == quotes
     normalized = [str(value) for value in values]
     if operator == "contains":
         string_quotes = [str(quote) for quote in quotes]
@@ -1725,10 +1757,10 @@ def _validate_query_sync(
 
     def comparable_actual(
         item: tuple[str, str, list[QueryParameter]] | None,
-    ) -> tuple[str, str, tuple[str, ...]] | None:
+    ) -> tuple[str, str, tuple[QueryParameter, ...]] | None:
         if item is None:
             return None
-        return item[0], item[1], tuple(str(value) for value in item[2])
+        return item[0], item[1], tuple(item[2])
 
     comparable_expected = [
         (column_id, operator, tuple(values))
@@ -1818,6 +1850,14 @@ def _validate_query_sync(
             isinstance(projection, exp.Alias)
             and isinstance(projection.this, exp.AggFunc)
             and projection.alias.casefold() != "total"
+        ):
+            return _failed("projection_alias_mismatch")
+        if (
+            intent.grain is not None
+            and isinstance(projection, exp.Alias)
+            and not isinstance(projection.this, (exp.Column, exp.AggFunc))
+            and projection.alias.casefold()
+            not in {"time_bucket", intent.grain, "year", "quarter"}
         ):
             return _failed("projection_alias_mismatch")
 

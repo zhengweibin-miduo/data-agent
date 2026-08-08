@@ -3333,3 +3333,139 @@ def test_how_many_phrase_cannot_be_downgraded_to_detail() -> None:
         aggregation_quote="有多少个",
         measure_quotes=["订单编号"],
     ).validate_evidence(["查询订单编号有多少个？"])
+
+
+def test_comparison_requires_every_explicit_dimension() -> None:
+    """比较后的全部并列维度都必须进入可信意图。"""
+    with pytest.raises(ValueError, match="分组维度"):
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            query_type_quote="比较",
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            dimension_quotes=["地区"],
+        ).validate_evidence(["销售额合计，比较地区和产品"])
+
+
+def test_trend_rejects_multiple_explicit_grains() -> None:
+    """单粒度契约不能静默遗漏并列的其他粒度。"""
+    with pytest.raises(ValueError, match="多个时间粒度"):
+        QueryIntent(
+            query_type=QueryType.TREND,
+            query_type_quote="趋势",
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            time_column_quote="订单时间",
+            grain="month",
+            grain_quote="月度",
+        ).validate_evidence(["以订单时间展示销售额合计的月度和年度趋势"])
+
+
+@pytest.mark.parametrize("phrase", ["少于", "不少于", "不高于"])
+def test_supported_inequality_cannot_be_omitted(phrase: str) -> None:
+    """受支持的不等式短语必须形成过滤意图。"""
+    with pytest.raises(ValueError, match="过滤"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+        ).validate_evidence([f"价格{phrase}100的订单数量"])
+
+
+@pytest.mark.parametrize("phrase", ["状态非完成", "状态没有完成", "状态无完成"])
+def test_unmodeled_adjacent_negation_is_rejected(phrase: str) -> None:
+    """字段后紧邻的未建模否定不能被省略。"""
+    with pytest.raises(ValueError, match="否定"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+        ).validate_evidence([f"{phrase}的订单数量"])
+
+
+async def test_time_bucket_alias_cannot_claim_business_identity() -> None:
+    """时间桶只能使用封闭的公开别名。"""
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT DATE_FORMAT(o.created_at, '%Y-%m') AS order_amount, "
+                "SUM(o.amount) AS total FROM dw.orders AS o "
+                "GROUP BY DATE_FORMAT(o.created_at, '%Y-%m')"
+            ),
+            table_ids=["table-orders"],
+            column_ids=["column-created-at", "column-amount"],
+        ),
+        _context().model_copy(
+            update={
+                "bindings": {
+                    "订单时间": "column-created-at",
+                    "金额": "column-amount",
+                }
+            }
+        ),
+        QueryIntent(
+            query_type=QueryType.TREND,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["金额"],
+            time_column_quote="订单时间",
+            grain="month",
+            grain_quote="月度",
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is None
+    assert result.issues[0].code == "projection_alias_mismatch"
+
+
+async def test_boolean_filter_rejects_string_parameter() -> None:
+    """布尔证据不能与同文本的字符串参数混为一谈。"""
+    context = _context()
+    orders = context.physical_schema.tables[0]
+    enabled = PhysicalColumn(
+        id="column-enabled", name="enabled", data_type="BOOLEAN"
+    )
+    schema = context.physical_schema.model_copy(
+        update={
+            "tables": [
+                orders.model_copy(update={"columns": [*orders.columns, enabled]}),
+                *context.physical_schema.tables[1:],
+            ]
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.amount FROM dw.orders AS o WHERE o.enabled = :enabled",
+            params={"enabled": "True"},
+            table_ids=["table-orders"],
+            column_ids=["column-amount", "column-enabled"],
+        ),
+        context.model_copy(
+            update={
+                "physical_schema": schema,
+                "bindings": {"金额": "column-amount", "启用": "column-enabled"},
+            }
+        ),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="启用",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["真"],
+                    clause_quote="启用是真",
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is None
+    assert result.issues[0].code == "predicate_mismatch"

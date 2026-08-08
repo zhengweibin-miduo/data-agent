@@ -55,6 +55,7 @@ class QueryApplication:
         clarification_chain_message_limit: int = 100,
         clarification_chain_max_chars: int = 262_144,
         control_io_timeout_seconds: float = 10.0,
+        max_ddl_bytes: int = 262_144,
     ) -> None:
         """绑定查询流程的外部端口。"""
         self._conversations = conversations
@@ -69,11 +70,20 @@ class QueryApplication:
         self._clarification_chain_message_limit = clarification_chain_message_limit
         self._clarification_chain_max_chars = clarification_chain_max_chars
         self._control_io_timeout_seconds = control_io_timeout_seconds
+        self._max_ddl_bytes = max_ddl_bytes
 
     async def stream(self, request: QueryRequest) -> AsyncGenerator[QueryEvent, None]:
         """执行一轮查询并逐个产生有界 NDJSON 事件。"""
         # 步骤一：在占用 Conversation 门禁前确定性解析当前 DDL。
-        schema = await parse_ddl(request.ddl_context.source, request.ddl_context.ddl)
+        ddl = request.ddl_context.ddl
+        if len(ddl) > self._max_ddl_bytes or len(ddl.encode()) > self._max_ddl_bytes:
+            raise DataAgentError(
+                "ddl_too_large",
+                "query_turn",
+                "查询 DDL 超过配置的字节限制",
+                http_status=422,
+            )
+        schema = await parse_ddl(request.ddl_context.source, ddl)
         # 步骤二：提交用户消息并复用已有 Conversation 上下文和幂等坐标。
         started = await self._conversations.start_turn(
             request.user_id,
@@ -222,7 +232,9 @@ class QueryApplication:
                 }
             )
             await self._ensure_timezone_supported(context, intent)
-            trusted_time_range = self._trusted_time_range(request, context, intent)
+            trusted_time_range = self._trusted_time_range(
+                request, context, intent, now_utc=evidence_now
+            )
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
             validated = await self._plan(request, context, intent, trusted_time_range)
             if validated is None:
@@ -549,6 +561,8 @@ class QueryApplication:
         request: QueryRequest,
         context: QueryContext,
         intent: QueryIntent,
+        *,
+        now_utc: datetime,
     ) -> TrustedTimeRange | None:
         """在 Meta 绑定后仅用权威字段类型派生自然时间边界。"""
         if intent.time_quote is None or intent.time_filter is not None:
@@ -583,7 +597,7 @@ class QueryApplication:
             column_name=column.name,
             data_type=column.data_type,
             user_timezone=request.supplemental_context.user_timezone,
-            now_utc=self._now(),
+            now_utc=now_utc,
         )
         if trusted is None:
             raise DataAgentError(
