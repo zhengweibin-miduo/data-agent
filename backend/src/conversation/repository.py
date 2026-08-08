@@ -29,6 +29,7 @@ from settings import app_config
 _ABANDONED_TURN_TIMESTAMP = "1970-01-01 00:00:00"
 _ABANDONED_TURN_YEAR = 1970
 _QUERY_CLARIFICATION_SCAN_PAGE_SIZE = 20
+_QUERY_EXTRACTION_MESSAGE_LIMIT = 100
 
 
 def _message(row: RowMapping) -> MessageRecord:
@@ -247,7 +248,7 @@ class ConversationRepository:
                             <= func.timestampadd(
                                 text("SECOND"),
                                 -app_config.conversation.turn_lease_seconds,
-                                func.now(),
+                                func.now(6),
                             ),
                         ),
                     ),
@@ -574,7 +575,7 @@ class ConversationRepository:
             .values(
                 active_turn_uid=turn_uid,
                 active_turn_claim_token=None,
-                turn_abandoned_at=func.now(),
+                turn_abandoned_at=func.now(6),
                 updated_at=_ABANDONED_TURN_TIMESTAMP,
             )
         )
@@ -595,7 +596,7 @@ class ConversationRepository:
                 agent_conversation.c.active_turn_uid == turn_uid,
                 agent_conversation.c.active_turn_claim_token == claim_token,
             )
-            .values(updated_at=func.now())
+            .values(updated_at=func.now(6))
         )
         return bool(getattr(result, "rowcount", 0))
 
@@ -822,12 +823,25 @@ class ConversationRepository:
                 .mappings()
                 .one()
             )
+            assistant_fingerprint = (
+                await self._session.execute(
+                    select(agent_message.c.semantic_fingerprint).where(
+                        agent_message.c.id == int(row["assistant_message_id"]),
+                        agent_message.c.user_id == str(row["user_id"]),
+                    )
+                )
+            ).scalar_one_or_none()
+            extraction_limit = (
+                max(message_limit, _QUERY_EXTRACTION_MESSAGE_LIMIT)
+                if assistant_fingerprint == "query:complete"
+                else message_limit
+            )
             messages = await self.context_messages(
                 str(row["user_id"]),
                 int(row["conversation_id"]),
                 after_id=conversation["summary_through_message_id"],
                 through_id=int(row["assistant_message_id"]),
-                limit=message_limit,
+                limit=extraction_limit,
             )
             claimed.append(
                 ClaimedExtraction(

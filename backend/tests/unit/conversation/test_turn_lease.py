@@ -122,7 +122,9 @@ async def test_turn_gate_uses_database_side_lease_deadline() -> None:
     rendered = _rendered(session.statements[0])
     check_condition(
         "租约判定使用数据库端时间函数",
-        "timestampadd" in rendered.casefold() and "now()" in rendered.casefold(),
+        "timestampadd" in rendered.casefold()
+        and "now" in rendered.casefold()
+        and "now_1': 6" in rendered,
         actual=rendered,
         expected="判定包含 timestampadd(SECOND, -N, now())",
     )
@@ -195,9 +197,7 @@ async def test_pending_query_chain_stops_at_an_unanswered_older_user_turn() -> N
             semantic_fingerprint="query:complete",
         ),
     ]
-    repository = ConversationRepository(
-        cast(AsyncSession, _PendingChainSession(rows))
-    )
+    repository = ConversationRepository(cast(AsyncSession, _PendingChainSession(rows)))
 
     result = await repository.pending_query_chain(
         "user-1",
@@ -217,15 +217,11 @@ async def test_pending_query_chain_fails_closed_at_its_own_message_budget() -> N
             identifier,
             MessageRole.USER if identifier % 2 else MessageRole.ASSISTANT,
             f"证据-{identifier}",
-            semantic_fingerprint=(
-                None if identifier % 2 else "query:clarification"
-            ),
+            semantic_fingerprint=(None if identifier % 2 else "query:clarification"),
         )
         for identifier in range(101, 0, -1)
     ]
-    repository = ConversationRepository(
-        cast(AsyncSession, _PendingChainSession(rows))
-    )
+    repository = ConversationRepository(cast(AsyncSession, _PendingChainSession(rows)))
 
     with pytest.raises(DataAgentError) as captured:
         await repository.pending_query_chain(

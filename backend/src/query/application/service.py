@@ -104,6 +104,7 @@ class QueryApplication:
                     separators=(",", ":"),
                 ).encode()
             ).hexdigest(),
+            include_context=False,
         )
         try:
             existing = await self._conversations.assistant_message(

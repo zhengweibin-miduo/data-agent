@@ -107,6 +107,7 @@ class ConversationService:
         content: str,
         *,
         semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         """提交用户消息后，基于已提交状态构建同用户的有界上下文。"""
         # 步骤一：store 在短事务中提交消息与活动轮次门禁，再返回会话快照。
@@ -121,6 +122,13 @@ class ConversationService:
                 turn_uid,
                 content,
                 semantic_fingerprint=semantic_fingerprint,
+            )
+        if not include_context:
+            return StartTurnResponse(
+                message=started.message,
+                context=ConversationContext(summary=None, messages=[], memories=[]),
+                execution_owner=started.execution_owner,
+                claim_token=started.claim_token,
             )
         # 已完成轮次的幂等回放不依赖长期记忆或远程检索。
         if not started.execution_owner:

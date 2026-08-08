@@ -224,9 +224,20 @@ class QueryIntent(ContractModel):
         }
         unsupported_negations = ("不包含", "不含", "不在", "not in", "not like")
         user_text = " ".join(user_messages).casefold()
+        negation_text = user_text
+        business_quotes = [
+            *self.measure_quotes,
+            *self.dimension_quotes,
+            *(item.quote for item in self.sorts),
+            *(item.column_quote for item in self.filters),
+            *([self.time_column_quote] if self.time_column_quote else []),
+        ]
+        for quote in sorted(business_quotes, key=len, reverse=True):
+            if quote.strip():
+                negation_text = negation_text.replace(quote.casefold(), " ")
         if any(marker in user_text for marker in unsupported_negations) or re.search(
             r"(?:^|[\s，。,.；;]|[\w\u4e00-\u9fff])非\S+|除\S+以外|"
-            r"(?:没有|无)\S+", user_text
+            r"(?:没有|无)\S+", negation_text
         ):
             raise ValueError("过滤操作包含尚未建模的否定语义")
         normalized_inequalities = {

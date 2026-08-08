@@ -61,10 +61,10 @@ CREATE TABLE IF NOT EXISTS agent_conversation
     summary_through_message_id BIGINT NULL COMMENT '摘要已经覆盖到的消息内部主键',
     active_turn_uid            CHAR(64) NULL COMMENT '当前唯一在途轮次标识',
     active_turn_claim_token    CHAR(32) NULL COMMENT '当前在途轮次的执行代次坐标',
-    turn_abandoned_at          DATETIME NULL COMMENT '失败轮次的有限接管租约起点',
+    turn_abandoned_at          DATETIME(6) NULL COMMENT '失败轮次的有限接管租约起点',
     created_at                 DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '会话创建时间',
-    updated_at                 DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                             ON UPDATE CURRENT_TIMESTAMP COMMENT '会话最近活动时间',
+    updated_at                 DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                                             ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '会话最近活动时间',
     INDEX idx_agent_conversation_user (user_id, updated_at, id)
 ) ENGINE = InnoDB COMMENT = '永久保存用户拥有的 Agent 文本会话';
 

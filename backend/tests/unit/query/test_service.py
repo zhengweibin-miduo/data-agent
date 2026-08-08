@@ -74,9 +74,11 @@ class _Conversations:
         self,
         *_args: object,
         semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         """返回包含当前用户原文的已开始轮次。"""
         self.semantic_fingerprints.append(semantic_fingerprint)
+        assert include_context is False
         content = "查询销售额总和"
         return StartTurnResponse(
             message=_message(MessageRole.USER, content),
@@ -300,9 +302,13 @@ class _IndependentQueryConversations(_Conversations):
     """返回一个已完成旧查询和当前独立请求。"""
 
     async def start_turn(
-        self, *_args: object, semantic_fingerprint: str | None = None
+        self,
+        *_args: object,
+        semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        assert include_context is False
         self.chain = [_message(MessageRole.USER, "查询销售额总和")]
         return StartTurnResponse(
             message=_message(MessageRole.USER, "查询销售额总和"),
@@ -322,9 +328,13 @@ class _ResolvedClarificationConversations(_Conversations):
     """返回已经由后续 Query 终态关闭的历史澄清。"""
 
     async def start_turn(
-        self, *_args: object, semantic_fingerprint: str | None = None
+        self,
+        *_args: object,
+        semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        assert include_context is False
         self.chain = [_message(MessageRole.USER, "查询销售额总和")]
         return StartTurnResponse(
             message=_message(MessageRole.USER, "查询销售额总和"),
@@ -350,9 +360,13 @@ class _MultiClarificationConversations(_Conversations):
     """返回同一查询连续两轮澄清后的完整消息链。"""
 
     async def start_turn(
-        self, *_args: object, semantic_fingerprint: str | None = None
+        self,
+        *_args: object,
+        semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        assert include_context is False
         self.chain = [
             _message(MessageRole.USER, "按地区查询销售额总和"),
             _message(
@@ -394,15 +408,16 @@ class _LongClarificationConversations(_Conversations):
     """返回超过普通 Conversation 窗口但仍在 Query 独立预算内的证据链。"""
 
     async def start_turn(
-        self, *_args: object, semantic_fingerprint: str | None = None
+        self,
+        *_args: object,
+        semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        assert include_context is False
         filler = "补充口径" * 500
         self.chain = [
-            *[
-                _message(MessageRole.USER, f"{index}:{filler}")
-                for index in range(21)
-            ],
+            *[_message(MessageRole.USER, f"{index}:{filler}") for index in range(21)],
             _message(MessageRole.USER, "查询销售额总和"),
         ]
         return StartTurnResponse(
@@ -1284,7 +1299,7 @@ class _FinalExplainFailingExecutor(_Executor):
                 "query_explain",
                 "最终预检超时",
                 http_status=504,
-        )
+            )
 
 
 async def test_authority_readiness_explain_and_select_share_generation_read() -> None:

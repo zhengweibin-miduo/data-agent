@@ -128,6 +128,7 @@ class ConversationPort(Protocol):
         content: str,
         *,
         semantic_fingerprint: str | None = None,
+        include_context: bool = True,
     ) -> StartTurnResponse:
         """原子开始用户轮次并返回有界上下文。"""
         ...

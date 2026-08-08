@@ -1,0 +1,4 @@
+ALTER TABLE agent_conversation
+    MODIFY turn_abandoned_at DATETIME(6) NULL,
+    MODIFY updated_at DATETIME(6) NOT NULL
+        DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6);

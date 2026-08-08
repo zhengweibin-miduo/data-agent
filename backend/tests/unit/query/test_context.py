@@ -126,6 +126,14 @@ def _candidate(
     )
 
 
+def test_candidate_name_does_not_match_a_longer_unknown_field_name() -> None:
+    """短字段名不得通过反向子串吞并当前 DDL 中不存在的字段。"""
+    candidate = _candidate(MetadataObjectKind.COLUMN, "column-id", "id")
+
+    assert QueryMetadataAdapter._matches("id", candidate)
+    assert not QueryMetadataAdapter._matches("order_id", candidate)
+
+
 async def test_context_does_not_execute_natural_language_metric_definition() -> None:
     """没有结构化公式的指标即使仅关联一列也必须继续澄清。"""
     search = _Search(

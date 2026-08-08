@@ -287,13 +287,13 @@ class QueryMetadataAdapter:
 
     @staticmethod
     def _matches(quote: str, candidate: MetadataCandidate) -> bool:
-        """以原文和权威候选文本的双向包含建立确定性候选集合。"""
+        """仅以权威名称或显式召回别名的精确文本建立候选集合。"""
         normalized = quote.casefold().strip()
         if not normalized:
             return False
         return any(
-            normalized in text.casefold() or text.casefold() in normalized
-            for text in (candidate.name, candidate.description, candidate.matched_text)
+            normalized == text.casefold().strip()
+            for text in (candidate.name, candidate.matched_text)
             if text.strip()
         )
 
