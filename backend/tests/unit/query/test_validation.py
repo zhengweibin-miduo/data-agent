@@ -3296,3 +3296,21 @@ async def test_aggregate_alias_cannot_claim_another_business_identity() -> None:
     )
     assert result.validated is None
     assert result.issues[0].code == "projection_alias_mismatch"
+
+
+def test_how_many_phrase_cannot_be_downgraded_to_detail() -> None:
+    """“有多少个”必须形成计数意图，不能降级为明细结果。"""
+    with pytest.raises(ValueError, match="聚合"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            query_type_quote="查询",
+            measure_quotes=["订单编号"],
+        ).validate_evidence(["查询订单编号有多少个？"])
+
+    QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="有多少个",
+        aggregation="count",
+        aggregation_quote="有多少个",
+        measure_quotes=["订单编号"],
+    ).validate_evidence(["查询订单编号有多少个？"])

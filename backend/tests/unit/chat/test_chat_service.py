@@ -100,6 +100,7 @@ def _service(
         ),
     )
     conversations.abandon_turn = AsyncMock()
+    conversations.renew_turn = AsyncMock(return_value=True)
     readiness = Mock(spec=AnswerReadinessService)
     readiness.evaluate = AsyncMock(
         return_value=AnswerGateResult(
@@ -117,8 +118,47 @@ def _service(
         cast(ConversationService, conversations),
         cast(AnswerReadinessService, readiness),
         cast(BaseChatModel, model),
+        turn_lease_seconds=0.03,
     )
     return service, conversations, readiness, model
+
+
+async def test_chat_turn_renews_claim_during_slow_model_call() -> None:
+    """健康 Chat 在长模型调用期间持续续租当前 claim。"""
+    release = asyncio.Event()
+
+    async def slow_model(*_args: object, **_kwargs: object) -> AIMessage:
+        await release.wait()
+        return AIMessage(content="按支付成功金额定义。")
+
+    service, conversations, _, model = _service()
+    model.ainvoke = AsyncMock(side_effect=slow_model)
+
+    task = asyncio.create_task(service.run_turn("conversation-1", _request()))
+    for _ in range(20):
+        if conversations.renew_turn.await_count:
+            break
+        await asyncio.sleep(0.01)
+    assert conversations.renew_turn.await_count >= 1
+    release.set()
+    await task
+
+
+async def test_chat_turn_stops_when_claim_renewal_is_lost() -> None:
+    """Chat claim 续租 CAS 失败时 fence 旧执行者并返回稳定错误。"""
+    service, conversations, _, model = _service()
+    conversations.renew_turn = AsyncMock(return_value=False)
+
+    async def slow_model(*_args: object, **_kwargs: object) -> AIMessage:
+        await asyncio.sleep(1)
+        return AIMessage(content="不会完成")
+
+    model.ainvoke = AsyncMock(side_effect=slow_model)
+
+    with pytest.raises(DataAgentError) as caught:
+        await service.run_turn("conversation-1", _request())
+
+    assert caught.value.code == "chat_lease_lost"
 
 
 async def test_chat_turn_reuses_context_readiness_and_shared_model() -> None:

@@ -4,7 +4,8 @@ import asyncio
 import json
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from errors import DataAgentError
 from query.adapters.http import router
@@ -41,6 +42,14 @@ class _LeaseLostQuery:
     async def stream(self, _request: object):
         yield QueryEvent(kind="metadata", sql="SELECT 1", columns=["value"])
         raise asyncio.CancelledError("query_lease_lost")
+
+
+class _PreResponseLeaseLostQuery:
+    """模拟首事件前内部轮次续租 fencing。"""
+
+    async def stream(self, _request: object):
+        raise asyncio.CancelledError("query_lease_lost")
+        yield
 
 
 class _PreResponseStream:
@@ -212,3 +221,41 @@ async def test_query_route_maps_internal_lease_loss_to_stream_error() -> None:
 
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[-1]["error"]["code"] == "query_lease_lost"
+
+
+async def test_query_route_maps_pre_response_lease_loss_to_business_error() -> None:
+    """首事件前内部租约丢失映射为稳定的可重试 HTTP 错误。"""
+    async def handle_data_agent_error(
+        _request: Request, error: Exception
+    ) -> JSONResponse:
+        assert isinstance(error, DataAgentError)
+        return JSONResponse(
+            status_code=error.http_status,
+            content={"code": error.code, "stage": error.stage},
+        )
+
+    app = FastAPI()
+    app.state.query = _PreResponseLeaseLostQuery()
+    app.add_exception_handler(DataAgentError, handle_data_agent_error)
+    app.include_router(router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/conversations/conversation-1/query-turns",
+            json={
+                "user_id": "user-1",
+                "turn_uid": "turn-1",
+                "question": "查询订单",
+                "supplemental_context": {"user_timezone": "Asia/Shanghai"},
+                "ddl_context": {
+                    "source": "erp",
+                    "dialect": "mysql",
+                    "ddl": "CREATE TABLE orders (id BIGINT)",
+                },
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "query_lease_lost"

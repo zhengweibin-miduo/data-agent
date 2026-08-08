@@ -363,8 +363,16 @@ class QueryApplication:
                     request.turn_uid,
                     claim_token,
                 )
-            except Exception:
-                renewed = False
+            except Exception as error:
+                logger.warning(
+                    "查询轮次续租暂时失败：user_id={} conversation_uid={} "
+                    "turn_uid={} error_type={}",
+                    request.user_id,
+                    request.conversation_uid,
+                    request.turn_uid,
+                    type(error).__name__,
+                )
+                continue
             if not renewed:
                 if owner_task is not None:
                     owner_task.cancel("query_lease_lost")

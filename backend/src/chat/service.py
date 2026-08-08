@@ -1,5 +1,6 @@
 """当前 DDL 上下文的最小 AI 聊天应用编排。"""
 
+import asyncio
 import hashlib
 import json
 
@@ -51,11 +52,14 @@ class ChatService:
         conversations: ConversationService,
         readiness: AnswerReadinessService,
         model: BaseChatModel,
+        *,
+        turn_lease_seconds: float = 600,
     ) -> None:
         """绑定现有会话服务、就绪门禁和服务端模型。"""
         self._conversations = conversations
         self._readiness = readiness
         self._model = model
+        self._turn_lease_seconds = turn_lease_seconds
 
     async def run_turn(
         self,
@@ -155,6 +159,17 @@ class ChatService:
             ]
         )
         completed_turn = False
+        owner_task = asyncio.current_task()
+        heartbeat = asyncio.create_task(
+            self._heartbeat_turn(
+                request.user_id,
+                conversation_uid,
+                request.turn_uid,
+                claim_token,
+                owner_task,
+            ),
+            name=f"chat-turn-heartbeat:{request.turn_uid}",
+        )
         try:
             gate = await self._readiness.evaluate(request.content, catalog)
             if gate.decision == AnswerGateDecision.PROCEED:
@@ -184,7 +199,19 @@ class ChatService:
                 retryable=isinstance(error, _RETRYABLE_MODEL_ERRORS),
                 http_status=502,
             ) from error
+        except asyncio.CancelledError as error:
+            if error.args != ("chat_lease_lost",):
+                raise
+            raise DataAgentError(
+                "chat_lease_lost",
+                "conversation_turn",
+                "聊天轮次执行权已失效",
+                retryable=True,
+                http_status=409,
+            ) from error
         finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
             if not completed_turn:
                 try:
                     await self._conversations.abandon_turn(
@@ -196,6 +223,29 @@ class ChatService:
                 except Exception:
                     # 清理失败不得覆盖 readiness、模型、取消或持久化的原始异常。
                     pass
+
+    async def _heartbeat_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+        owner_task: asyncio.Task[object] | None,
+    ) -> None:
+        """在 Chat 外部工作期间续租 claim，并 fence 已失效的旧执行者。"""
+        interval = max(0.01, self._turn_lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self._conversations.renew_turn(
+                    user_id, conversation_uid, turn_uid, claim_token
+                )
+            except Exception:
+                renewed = False
+            if not renewed:
+                if owner_task is not None:
+                    owner_task.cancel("chat_lease_lost")
+                return
 
     @staticmethod
     def _existing_decision(content: str) -> AnswerGateDecision:

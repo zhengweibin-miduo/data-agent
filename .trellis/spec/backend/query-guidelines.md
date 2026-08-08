@@ -245,3 +245,8 @@ async for batch in readonly_executor.execute(validated):
   phrases bind only the measure expression after any grouping prefix.
 - Until a trusted outer-join contract exists, a nullable foreign key cannot
   authorize an inner child-to-parent join that would discard driving rows.
+- Query claim heartbeats distinguish a failed compare-and-swap renewal from a
+  transient renewal transport error. A confirmed claim loss fences execution
+  and projects the same stable retryable error before or after the first event.
+- Reverse aggregation coverage treats the bounded `<object>有多少` family as
+  count evidence, so it cannot be downgraded to a detail result shape.

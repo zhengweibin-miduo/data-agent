@@ -116,6 +116,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         conversations,
         AnswerReadinessService(AnswerReadinessClassifier(model)),
         model,
+        turn_lease_seconds=app_config.conversation.turn_lease_seconds,
     )
     meta_projection = compose_meta_projection_runtime(
         elasticsearch=elasticsearch,

@@ -354,7 +354,7 @@ class QueryIntent(ContractModel):
             raise ValueError("多度量必须逐项提供聚合运算契约")
         if self.aggregation_quote is not None:
             markers = {
-                "count": ("数量", "个数", "count"),
+                "count": ("数量", "个数", "有多少", "count"),
                 "sum": ("总和", "合计", "sum"),
                 "avg": ("平均", "均值", "avg"),
                 "min": ("最小", "最低", "min"),
@@ -405,7 +405,15 @@ class QueryIntent(ContractModel):
             raise ValueError("时间粒度必须携带与枚举一致的用户原文证据")
         shape_markers = {
             QueryType.DETAIL: ("查询", "列出", "每笔", "明细", "记录"),
-            QueryType.AGGREGATE: ("总和", "合计", "平均", "数量", "最大值", "最小值"),
+            QueryType.AGGREGATE: (
+                "总和",
+                "合计",
+                "平均",
+                "数量",
+                "有多少",
+                "最大值",
+                "最小值",
+            ),
             QueryType.RANKING: ("前", "top", "最高", "最低", "排名"),
             QueryType.TREND: ("趋势", "按日", "按周", "按月", "季度", "按年"),
             QueryType.COMPARISON: ("比较", "对比", "按"),
@@ -626,6 +634,9 @@ class QueryIntent(ContractModel):
             marker in user_text
             and not any(marker in quote for quote in self.measure_quotes)
             for marker in ("数量", "个数")
+        )
+        aggregation_action = aggregation_action or bool(
+            re.search(r"有多少(?:个|条|笔|名|项|行)?", user_text)
         )
         aggregation_action = aggregation_action or (
             self.query_type != QueryType.RANKING

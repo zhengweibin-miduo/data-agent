@@ -123,6 +123,17 @@ async def query_turn(
             retryable=True,
             http_status=502,
         ) from error
+    except asyncio.CancelledError as error:
+        await stream.aclose()
+        if error.args != ("query_lease_lost",):
+            raise
+        raise DataAgentError(
+            "query_lease_lost",
+            "conversation_turn",
+            "查询轮次执行权已失效",
+            retryable=True,
+            http_status=409,
+        ) from error
     except BaseException:
         await stream.aclose()
         raise

@@ -95,7 +95,9 @@ draft a DDL clarification answer, but it cannot submit
 `/metadata/ddl-jobs/{job_id}/answers`; only an explicit user confirmation may use
 that job contract. A failed model or completion call abandons only its own claim
 generation, so the client can safely retry the same `turn_uid`, content, source,
-and DDL without allowing a stale owner to affect a later reclaim.
+and DDL without allowing a stale owner to affect a later reclaim. Chat renews
+its claim while readiness and model work are in flight; a confirmed renewal
+loss fences the stale owner before it can persist a response.
 
 History uses the auto-increment row ID as an exclusive `before` keyset cursor.
 Rows are selected newest-first for paging and returned oldest-first for display.
