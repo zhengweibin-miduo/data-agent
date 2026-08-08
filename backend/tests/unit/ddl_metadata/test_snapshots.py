@@ -20,6 +20,11 @@ from models.semantic import SemanticMetadata
 from tests.helpers.checks import check_equal, check_exception
 
 
+async def _async_value(value: object) -> object:
+    """返回可由 AsyncMock seam 替代的单次异步值。"""
+    return value
+
+
 class _GenerationLocks:
     """把测试锁上下文投影为专用 manager 的 WRITE seam。"""
 
@@ -84,6 +89,12 @@ def _install_repository_fakes(
 
         def __init__(self, session: object) -> None:
             del session
+
+        async def authority_target_tables_overlapping(
+            self, schema: object
+        ) -> set[str]:
+            del schema
+            return set()
 
         async def fingerprint_expiration_memory_keys(
             self,
@@ -234,14 +245,14 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
 
     await MySQLAcceptedSnapshotPublisher(
         _lock_manager(generation_locks), {"local": "source_demo"}
-    ).publish(
-        _accepted_snapshot()
-    )
+    ).publish(_accepted_snapshot())
 
     check_equal(
         "发布事务位于 generation lock 内",
         events,
         [
+            "session_enter",
+            "session_commit",
             "generation_enter:2:10",
             "session_enter",
             "fingerprints",
@@ -254,6 +265,46 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
             "generation_exit",
         ],
     )
+
+
+async def test_snapshot_locks_every_table_from_an_overlapping_authority_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """局部发布撤销组合 authority 前必须锁住组合中的其余目标表。"""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def generation_locks(
+        names: Iterable[str], *, timeout_seconds: int
+    ) -> AsyncIterator[None]:
+        assert set(names) == {
+            generation_lock_name("dw", "orders"),
+            generation_lock_name("dw", "customers"),
+        }
+        del timeout_seconds
+        yield
+
+    @asynccontextmanager
+    async def session() -> AsyncIterator[object]:
+        yield object()
+
+    _install_repository_fakes(monkeypatch, events)
+    monkeypatch.setattr(snapshots, "build_accepted_memories", lambda *a, **k: [])
+    monkeypatch.setattr(
+        snapshots,
+        "build_desired_tables",
+        lambda *a, **k: [SimpleNamespace(target_table="orders")],
+    )
+    monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
+    monkeypatch.setattr(
+        snapshots.MetadataRepository,
+        "authority_target_tables_overlapping",
+        lambda self, schema: _async_value({"orders", "customers"}),
+    )
+
+    await MySQLAcceptedSnapshotPublisher(
+        _lock_manager(generation_locks), {"local": "source_demo"}
+    ).publish(_accepted_snapshot())
 
 
 async def test_snapshot_rollback_completes_before_generation_lock_release(
@@ -390,6 +441,11 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
+    monkeypatch.setattr(
+        snapshots.MetadataRepository,
+        "authority_target_tables_overlapping",
+        lambda self, schema: _async_value(set()),
+    )
 
     with pytest.raises(DataAgentError) as captured:
         await MySQLAcceptedSnapshotPublisher(
@@ -400,4 +456,4 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
     check_equal("锁竞争错误码", captured.value.code, "generation_lock_unavailable")
     check_equal("锁竞争允许上层安全重试", captured.value.retryable, True)
     check_equal("锁竞争 HTTP 状态", captured.value.http_status, 503)
-    check_equal("锁竞争前未进入发布事务", session_entries, [])
+    check_equal("锁竞争前仅执行 authority 影响面只读", session_entries, ["entered"])

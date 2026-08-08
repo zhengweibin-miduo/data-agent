@@ -211,6 +211,141 @@ async def test_trusted_time_range_requires_both_exact_boundaries(
     assert missing_end.issues[0].code == "predicate_mismatch"
 
 
+async def test_timestamp_grain_requires_user_timezone_conversion() -> None:
+    """TIMESTAMP 分桶必须先从 UTC 转到用户业务时区。"""
+    context = _context()
+    table = context.physical_schema.tables[0]
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [
+                        table.model_copy(
+                            update={
+                                "columns": [
+                                    column.model_copy(update={"data_type": "TIMESTAMP"})
+                                    if column.id == "column-created-at"
+                                    else column
+                                    for column in table.columns
+                                ]
+                            }
+                        )
+                    ]
+                }
+            ),
+            "bindings": {
+                "金额": "column-amount",
+                "下单时间": "column-created-at",
+            },
+            "user_timezone": "Asia/Shanghai",
+        }
+    )
+    intent = QueryIntent(
+        query_type=QueryType.TREND,
+        query_type_quote="趋势",
+        aggregation="sum",
+        aggregation_quote="总和",
+        measure_quotes=["金额"],
+        time_column_quote="下单时间",
+        grain="day",
+        grain_quote="每日",
+    )
+    trusted = resolve_trusted_time_range(
+        source_quote="今年",
+        column_id="column-created-at",
+        column_name="created_at",
+        data_type="TIMESTAMP",
+        user_timezone="Asia/Shanghai",
+        now_utc=datetime(2026, 8, 8, tzinfo=UTC),
+    )
+    assert trusted is not None
+    intent = intent.model_copy(update={"time_quote": "今年"})
+
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT DATE(CONVERT_TZ(o.created_at, '+00:00', 'Asia/Shanghai')), "
+                "SUM(o.amount) AS total FROM dw.orders AS o "
+                "WHERE o.created_at >= :trusted_time_start "
+                "AND o.created_at < :trusted_time_end "
+                "GROUP BY DATE(CONVERT_TZ(o.created_at, '+00:00', 'Asia/Shanghai'))"
+            ),
+            params={
+                "trusted_time_start": trusted.start,
+                "trusted_time_end": trusted.end,
+            },
+            table_ids=["table-orders"],
+            column_ids=["column-amount", "column-created-at"],
+        ),
+        context,
+        intent,
+        trusted_time_range=trusted,
+        dw_database="dw",
+    )
+
+    assert result.validated is not None
+
+
+@pytest.mark.parametrize(
+    ("data_type", "quote", "parameter"),
+    [("BOOLEAN", "true", True), ("BOOL", "false", False), ("TINYINT(1)", "1", True)],
+)
+async def test_boolean_filter_values_are_normalized_deterministically(
+    data_type: str, quote: str, parameter: bool
+) -> None:
+    """布尔证据绑定为真正布尔参数而非 MySQL 会转成零的文本。"""
+    context = _context()
+    table = context.physical_schema.tables[0]
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [
+                        table.model_copy(
+                            update={
+                                "columns": [
+                                    *table.columns,
+                                    PhysicalColumn(
+                                        id="column-active",
+                                        name="active",
+                                        data_type=data_type,
+                                    ),
+                                ]
+                            }
+                        ),
+                        *context.physical_schema.tables[1:],
+                    ]
+                }
+            ),
+            "bindings": {"状态": "column-active"},
+        }
+    )
+    intent = QueryIntent(
+        query_type=QueryType.DETAIL,
+        measure_quotes=["状态"],
+        filters=[
+            FilterIntent(
+                column_quote="状态",
+                operator="eq",
+                operator_quote="=",
+                value_quotes=[quote],
+            )
+        ],
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.active FROM dw.orders o WHERE o.active = :active",
+            params={"active": parameter},
+            table_ids=["table-orders"],
+            column_ids=["column-active"],
+        ),
+        context,
+        intent,
+        dw_database="dw",
+    )
+    assert result.validated is not None
+
+
 def _context() -> QueryContext:
     """构造一张当前 DDL 权威表的查询上下文。"""
     return QueryContext(

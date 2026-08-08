@@ -205,7 +205,11 @@ class QueryApplication:
                     kind="clarification", message=context_or_clarification.question
                 )
                 return
-            context = context_or_clarification
+            context = context_or_clarification.model_copy(
+                update={
+                    "user_timezone": request.supplemental_context.user_timezone
+                }
+            )
             trusted_time_range = self._trusted_time_range(request, context, intent)
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
             validated = await self._plan(request, context, intent, trusted_time_range)

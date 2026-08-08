@@ -41,6 +41,41 @@ class MetadataRepository:
         """绑定由调用方管理事务边界的 Session。"""
         self._session = session
 
+    async def authority_target_tables_overlapping(
+        self, schema: PhysicalSchema
+    ) -> set[str]:
+        """返回本次验收会撤销的 authority scope 所有 DW 目标表。"""
+        submitted = {table.id for table in schema.tables}
+        authority_rows = (
+            (
+                await self._session.execute(
+                    select(physical_schema_authority.c.table_ids).where(
+                        physical_schema_authority.c.source == schema.source
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        impacted_ids = {
+            str(table_id)
+            for row in authority_rows
+            if authority_scopes_overlap(row["table_ids"] or (), submitted)
+            for table_id in (row["table_ids"] or ())
+        } | submitted
+        if not impacted_ids:
+            return set()
+        names = (
+            await self._session.execute(
+                select(table_info.c.id, table_info.c.name).where(
+                    table_info.c.id.in_(impacted_ids)
+                )
+            )
+        ).all()
+        targets = {str(name).rsplit(".", 1)[-1] for _, name in names}
+        targets.update(table.name for table in schema.tables)
+        return targets
+
     async def _upsert(
         self,
         table: Table,

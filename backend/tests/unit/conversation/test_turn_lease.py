@@ -183,10 +183,44 @@ async def test_pending_query_chain_ignores_ordinary_context_budgets() -> None:
     assert sum(len(message.content) for message in result) > 32_768
 
 
+async def test_pending_query_chain_stops_at_an_unanswered_older_user_turn() -> None:
+    """当前消息前不是 Query 澄清时不得继承废弃用户问题。"""
+    rows = [
+        _pending_message(3, MessageRole.USER, "列出订单编号"),
+        _pending_message(2, MessageRole.USER, "按月查看销售额趋势"),
+        _pending_message(
+            1,
+            MessageRole.ASSISTANT,
+            "更早查询已完成",
+            semantic_fingerprint="query:complete",
+        ),
+    ]
+    repository = ConversationRepository(
+        cast(AsyncSession, _PendingChainSession(rows))
+    )
+
+    result = await repository.pending_query_chain(
+        "user-1",
+        "conversation-1",
+        through_id=3,
+        message_limit=100,
+        max_chars=262_144,
+    )
+
+    assert [message.id for message in result] == [3]
+
+
 async def test_pending_query_chain_fails_closed_at_its_own_message_budget() -> None:
     """无法在独立消息预算内证明链边界时稳定拒绝。"""
     rows = [
-        _pending_message(identifier, MessageRole.USER, f"证据-{identifier}")
+        _pending_message(
+            identifier,
+            MessageRole.USER if identifier % 2 else MessageRole.ASSISTANT,
+            f"证据-{identifier}",
+            semantic_fingerprint=(
+                None if identifier % 2 else "query:clarification"
+            ),
+        )
         for identifier in range(101, 0, -1)
     ]
     repository = ConversationRepository(

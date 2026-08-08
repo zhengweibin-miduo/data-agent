@@ -108,6 +108,14 @@ class MySQLAcceptedSnapshotPublisher:
             for item in desired_tables
         }
         try:
+            async with MySQLDatabase.session() as authority_session:
+                authority_targets = await MetadataRepository(
+                    authority_session
+                ).authority_target_tables_overlapping(schema)
+            generation_locks.update(
+                generation_lock_name(app_config.data_sync.dw_database, target)
+                for target in authority_targets
+            )
             # 步骤四：先持有本次全部 target generation locks，再开启唯一发布事务。
             lock_context = self._generation_locks.write(
                 generation_locks,

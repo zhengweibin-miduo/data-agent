@@ -683,6 +683,7 @@ class TrustedTimeRange:
     data_type: str
     start: str
     end: str
+    user_timezone: str
     start_parameter: str = "trusted_time_start"
     end_parameter: str = "trusted_time_end"
 
@@ -764,6 +765,7 @@ def resolve_trusted_time_range(
         data_type=normalized_type,
         start=start,
         end=end,
+        user_timezone=user_timezone,
     )
 
 
@@ -805,6 +807,9 @@ class QueryContext(ContractModel):
     )
     relationships_authoritative: bool = Field(
         default=True, description="关系是否已由权威 Meta 快照核验。"
+    )
+    user_timezone: str = Field(
+        default="UTC", description="时间分桶使用的可信 IANA 用户时区。"
     )
 
 
@@ -923,6 +928,19 @@ def _normalized_filter_values(
 ) -> list[QueryParameter]:
     """只从逐字证据确定性解析常用数字与本地化日期绑定值。"""
     normalized_type = data_type.upper()
+    if re.match(
+        r"^(?:BOOL\b|BOOLEAN\b|TINYINT\s*\(\s*1\s*\)(?:\s|$))", normalized_type
+    ):
+        values: list[QueryParameter] = []
+        for quote in item.value_quotes:
+            normalized = quote.strip().casefold()
+            if normalized in {"true", "1", "是", "真"}:
+                values.append(True)
+            elif normalized in {"false", "0", "否", "假"}:
+                values.append(False)
+            else:
+                values.append(quote)
+        return values
     if not re.match(
         r"^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|DATE|DATETIME|TIMESTAMP)\b",
         normalized_type,
@@ -1490,6 +1508,7 @@ def _validate_query_sync(
         r"^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL)\b"
     )
     temporal_type = re.compile(r"^(?:DATE|DATETIME|TIMESTAMP)\b")
+    boolean_type = re.compile(r"^(?:BOOL\b|BOOLEAN\b|TINYINT\s*\(\s*1\s*\))")
     expected_contracts = [
         (
             context.bindings.get(item.column_quote),
@@ -1527,6 +1546,10 @@ def _validate_query_sync(
         values = _normalized_filter_values(item, data_type=data_type)
         if numeric_type.match(data_type) and any(
             not isinstance(value, (int, Decimal)) for value in values
+        ):
+            return _failed("filter_value_type_mismatch")
+        if boolean_type.match(data_type) and any(
+            not isinstance(value, bool) for value in values
         ):
             return _failed("filter_value_type_mismatch")
         if temporal_type.match(data_type) and any(
@@ -1893,6 +1916,7 @@ def _validate_query_sync(
             ("DATE", "DATETIME", "TIMESTAMP")
         ):
             return _failed("time_type_mismatch")
+        time_column_type = time_column.data_type.upper()
 
         def bucket_matches(expression: exp.Expression, grain: str) -> bool:
             operand: exp.Expression | None = None
@@ -1918,10 +1942,23 @@ def _validate_query_sync(
                 operand = expression.this
                 if isinstance(operand, exp.TsOrDsToDate):
                     operand = operand.this
-            return (
-                isinstance(operand, exp.Column)
-                and _column_id(operand, columns_by_coordinate) == time_column_id
-            )
+            if time_column_type.startswith("TIMESTAMP"):
+                if not isinstance(operand, exp.ConvertTimezone):
+                    return False
+                source_tz = operand.args.get("source_tz")
+                target_tz = operand.args.get("target_tz")
+                timestamp = operand.args.get("timestamp")
+                return (
+                    isinstance(source_tz, exp.Literal)
+                    and str(source_tz.this) in {"+00:00", "UTC"}
+                    and isinstance(target_tz, exp.Literal)
+                    and str(target_tz.this) == context.user_timezone
+                    and isinstance(timestamp, exp.Column)
+                    and _column_id(timestamp, columns_by_coordinate) == time_column_id
+                )
+            return isinstance(operand, exp.Column) and _column_id(
+                operand, columns_by_coordinate
+            ) == time_column_id
 
         buckets = [
             item for item in group_expressions if bucket_matches(item, intent.grain)

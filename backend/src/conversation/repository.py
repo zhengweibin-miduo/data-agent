@@ -685,6 +685,7 @@ class ConversationRepository:
         chars = 0
         before_id: int | None = None
         boundary_proven = False
+        newer_role: MessageRole | None = None
         while not boundary_proven:
             remaining = message_limit - len(chain)
             page_limit = min(
@@ -717,11 +718,15 @@ class ConversationRepository:
             # 步骤二：普通 Query 终态是链边界；澄清助手消息只提供角色上下文，
             # 用户原文仍由调用方单独筛选为逐字证据。
             for row in rows:
+                role = MessageRole(str(row["role"]))
                 if (
-                    str(row["role"]) == MessageRole.ASSISTANT.value
+                    role == MessageRole.ASSISTANT
                     and str(row.get("semantic_fingerprint") or "")
                     != "query:clarification"
                 ):
+                    boundary_proven = True
+                    break
+                if role == MessageRole.USER and newer_role == MessageRole.USER:
                     boundary_proven = True
                     break
                 if (
@@ -736,6 +741,7 @@ class ConversationRepository:
                     )
                 chain.append(_message(row))
                 chars += len(str(row["content"]))
+                newer_role = role
             if boundary_proven:
                 break
             if len(rows) < page_limit:

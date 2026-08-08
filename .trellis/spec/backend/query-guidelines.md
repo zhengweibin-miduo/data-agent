@@ -215,3 +215,13 @@ async for batch in readonly_executor.execute(validated):
 - Aggregate public labels cannot claim arbitrary business identities or collide
   with another result column. Completed-turn replay is resolved from durable
   messages before remote memory context is recalled.
+- A pending clarification chain extends across an older user message only when
+  the intervening assistant message is a Query clarification; consecutive user
+  turns form an independent-query boundary.
+- Publishing an accepted snapshot locks every DW target in each overlapping
+  authority scope before invalidating that scope, not only the newly submitted
+  targets.
+- BOOLEAN filter evidence is normalized to typed parameters and rejected when
+  it is outside the closed true/false vocabulary.
+- TIMESTAMP trend buckets convert the UTC session value to the trusted user
+  timezone before applying day, week, month, quarter, or year grouping.
