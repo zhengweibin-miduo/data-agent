@@ -156,6 +156,28 @@ async def test_expandable_write_reuses_one_owner_connection(
     assert "service_release_locks" in connection.calls[2][0]
 
 
+async def test_expandable_write_owner_is_kept_alive_during_publication(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """长发布事务期间 expandable WRITE owner 必须主动保活。"""
+    connection = _Connection([1, 1, 1])
+    engine = _Engine(connection)
+    monkeypatch.setattr(
+        module,
+        "create_async_engine",
+        lambda *_args, **_kwargs: cast(AsyncEngine, engine),
+    )
+    manager = GenerationLockManager(
+        "mysql+asyncmy://user:pass@localhost/meta", io_timeout_seconds=0.05
+    )
+    await manager.initialize()
+
+    async with manager.expandable_write(["publisher:source"], 3):
+        await asyncio.sleep(0.04)
+
+    assert any("SELECT 1" in sql for sql, _ in connection.calls)
+
+
 async def test_checkout_exhaustion_has_stable_unavailable_error(
     monkeypatch: MonkeyPatch,
 ) -> None:

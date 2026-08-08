@@ -188,13 +188,21 @@ class GenerationLockManager:
         self, names: Iterable[str], timeout_seconds: int
     ) -> AsyncIterator[ExpandableWriteOwner]:
         owner: ExpandableWriteOwner | None = None
+        keepalive: asyncio.Task[None] | None = None
         try:
             async with self._client().connect() as connection:
                 owner = ExpandableWriteOwner(connection, self._io_timeout_seconds)
                 try:
                     await owner.acquire(names, timeout_seconds)
+                    keepalive = asyncio.create_task(
+                        self._keep_owner_alive(connection, asyncio.current_task()),
+                        name="generation-lock-expandable-owner-keepalive",
+                    )
                     yield owner
                 finally:
+                    if keepalive is not None:
+                        keepalive.cancel()
+                        await asyncio.gather(keepalive, return_exceptions=True)
                     active_error = sys.exc_info()[1]
                     release_error = await self._release(connection)
                     if release_error is not None:
