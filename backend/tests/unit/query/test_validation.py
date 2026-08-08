@@ -1561,6 +1561,55 @@ async def test_contains_requires_exact_both_sided_pattern(value: str) -> None:
     assert (result.validated is not None) is (value == "%foo%")
 
 
+@pytest.mark.parametrize("quote", [r"C:\\", r"C:\\temp"])
+async def test_contains_rejects_backslash_without_escape_contract(quote: str) -> None:
+    """未建模 ESCAPE 语义时不得放行含反斜杠的 LIKE 值。"""
+    context = _context()
+    table = context.physical_schema.tables[0]
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [
+                        table.model_copy(
+                            update={
+                                "columns": [
+                                    column.model_copy(
+                                        update={"data_type": "VARCHAR(64)"}
+                                    )
+                                    if column.id == "column-amount"
+                                    else column
+                                    for column in table.columns
+                                ]
+                            }
+                        )
+                    ]
+                }
+            ),
+            "bindings": {"金额": "column-amount"},
+        }
+    )
+    result = await validate_query(
+        _draft(
+            "SELECT o.amount FROM dw.orders o WHERE o.amount LIKE :value",
+            params={"value": f"%{quote}%"},
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="金额", operator="contains", value_quotes=[quote]
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is None
+    assert result.issues[0].code == "predicate_mismatch"
+
+
 def test_evidence_rejects_whitespace_only_quotes() -> None:
     """空白槽位不能冒充用户原文证据。"""
     with pytest.raises(ValueError, match="关键短语"):
@@ -2377,6 +2426,23 @@ def test_intent_requires_every_comma_separated_grouping_dimension(
             measure_quotes=["销售额"],
             dimension_quotes=["地区"],
         ).validate_evidence([f"按地区{separator}状态统计销售额合计"])
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["各地区订单数量", "每个地区的订单数量", "分地区统计订单数量"],
+)
+def test_intent_requires_grouping_dimension_for_alternate_grouping_phrases(
+    question: str,
+) -> None:
+    """“各/每个/分”表达的分组维度不得被省略。"""
+    with pytest.raises(ValueError, match="分组维度"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+        ).validate_evidence([question])
 
 
 def test_intent_requires_every_symbol_filter_clause() -> None:

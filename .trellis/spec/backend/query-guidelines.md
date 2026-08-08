@@ -227,3 +227,6 @@ async for batch in readonly_executor.execute(validated):
   it is outside the closed true/false vocabulary.
 - TIMESTAMP trend buckets convert the UTC session value to the trusted user
   timezone before applying day, week, month, quarter, or year grouping.
+- Reverse intent coverage treats `各<维度>`、`每个<维度>` and `分<维度>` as explicit
+  grouping evidence. Until an explicit `LIKE ... ESCAPE` contract exists,
+  contains evidence with backslashes, `%`, or `_` fails closed.

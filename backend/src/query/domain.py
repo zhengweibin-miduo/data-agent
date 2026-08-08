@@ -463,6 +463,33 @@ class QueryIntent(ContractModel):
             if dimension.strip()
         ]
         explicit_dimensions = [item.strip(" 的") for item in explicit_dimensions]
+        result_object_pattern = "|".join(
+            sorted(
+                (re.escape(quote) for quote in result_object_quotes if quote.strip()),
+                key=len,
+                reverse=True,
+            )
+        )
+        alternate_grouping_matches: list[str] = []
+        if result_object_pattern:
+            alternate_grouping_matches.extend(
+                re.findall(
+                    rf"(?:各|每个)(.+?)(?=(?:的)?(?:{result_object_pattern}))",
+                    user_text,
+                )
+            )
+        alternate_grouping_matches.extend(
+            re.findall(
+                r"分(.+?)(?=统计|查询|查看|展示|比较|对比)",
+                user_text,
+            )
+        )
+        explicit_dimensions.extend(
+            dimension.strip(" 的")
+            for match in alternate_grouping_matches
+            for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
+            if dimension.strip(" 的")
+        )
         if explicit_dimensions and any(
             not any(
                 dimension in quote or quote in dimension
@@ -917,7 +944,10 @@ def _values_match(
     normalized = [str(value) for value in values]
     if operator == "contains":
         string_quotes = [str(quote) for quote in quotes]
-        if any("%" in quote or "_" in quote for quote in string_quotes):
+        if any(
+            "%" in quote or "_" in quote or "\\" in quote
+            for quote in string_quotes
+        ):
             return False
         return normalized == [f"%{quote}%" for quote in string_quotes]
     return normalized == [str(quote) for quote in quotes]
