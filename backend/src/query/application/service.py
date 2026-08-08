@@ -251,8 +251,6 @@ class QueryApplication:
                     await self._complete(request, DATA_PREPARING_MESSAGE)
                     yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                     return
-                await self._executor.explain(validated)
-                # 步骤七：专用 SELECT-only executor 以单批预算流式读取，不施加总 LIMIT。
                 started_at = perf_counter()
                 row_count = 0
                 sql_hash = hashlib.sha256(validated.sql.encode()).hexdigest()
@@ -270,8 +268,12 @@ class QueryApplication:
                     outcome="started",
                     row_count=0,
                 )
-                stream = self._executor.execute(validated)
+                stream = None
                 try:
+                    await self._executor.explain(validated)
+                    # 步骤七：专用 SELECT-only executor 流式读取，
+                    # 不施加总 LIMIT。
+                    stream = self._executor.execute(validated)
                     try:
                         first = await anext(stream)
                     except StopAsyncIteration:
@@ -302,7 +304,8 @@ class QueryApplication:
                     )
                     raise
                 finally:
-                    await stream.aclose()
+                    if stream is not None:
+                        await stream.aclose()
                 elapsed_ms = round((perf_counter() - started_at) * 1000)
                 summary = f"查询完成，共返回 {row_count} 行。"
                 structured_log(

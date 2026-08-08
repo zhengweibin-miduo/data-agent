@@ -829,6 +829,62 @@ class _TimeoutExecutor(_Executor):
         )
 
 
+class _FinalExplainFailingExecutor(_Executor):
+    """模拟规划预检通过后最终 EXPLAIN 失败。"""
+
+    async def explain(self, query: ValidatedQuery) -> None:
+        """第二次 EXPLAIN 抛出稳定数据库错误。"""
+        await super().explain(query)
+        if self.explained == 2:
+            raise DataAgentError(
+                "query_timeout",
+                "query_explain",
+                "最终预检超时",
+                http_status=504,
+            )
+
+
+async def test_final_explain_has_execution_started_and_failed_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最终 EXPLAIN 必须位于同一执行审计的开始与失败终态之间。"""
+    audit_events: list[tuple[str, dict[str, object]]] = []
+
+    def capture_audit(_level: str, _message: str, **fields: object) -> None:
+        audit_events.append((_message, fields))
+
+    monkeypatch.setattr("query.application.service.structured_log", capture_audit)
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _Conversations()),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _GroundedMetadata()),
+        planner=cast(QueryPlannerPort, _Planner()),
+        readiness=cast(QueryReadinessPort, _Ready()),
+        executor=cast(QueryExecutorPort, _FinalExplainFailingExecutor()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额",
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    with pytest.raises(DataAgentError, match="最终预检超时"):
+        _ = [event async for event in application.stream(request)]
+
+    execution_outcomes = [
+        fields["outcome"]
+        for message, fields in audit_events
+        if message.startswith("只读查询执行")
+    ]
+    assert execution_outcomes == ["started", "failed"]
+
+
 async def test_stream_repairs_sql_once_but_never_repairs_timeout() -> None:
     """SQL 规则失败只修复一次，基础设施超时直接向调用方传播。"""
     request = QueryRequest(
