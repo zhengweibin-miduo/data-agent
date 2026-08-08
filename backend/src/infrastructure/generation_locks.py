@@ -31,10 +31,16 @@ _CONTENTION_ERRORS = frozenset({3132, 3133})
 class ExpandableWriteOwner:
     """在同一 owner connection 上逐步扩展 WRITE 锁集合。"""
 
-    def __init__(self, connection: AsyncConnection, io_timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        connection: AsyncConnection,
+        io_timeout_seconds: float,
+        io_lock: asyncio.Lock,
+    ) -> None:
         """绑定本次发布独占的 owner connection。"""
         self._connection = connection
         self._io_timeout_seconds = io_timeout_seconds
+        self._io_lock = io_lock
         self._held: set[str] = set()
 
     async def acquire(self, names: Iterable[str], timeout_seconds: int) -> None:
@@ -52,8 +58,9 @@ class ExpandableWriteOwner:
             timeout_seconds=timeout_seconds,
         )
         try:
-            async with asyncio.timeout(self._io_timeout_seconds):
-                acquired = await self._connection.scalar(statement, parameters)
+            async with self._io_lock:
+                async with asyncio.timeout(self._io_timeout_seconds):
+                    acquired = await self._connection.scalar(statement, parameters)
         except TimeoutError as error:
             await _invalidate_owner_connection(self._connection, error)
             raise AdvisoryLockUnavailableError(
@@ -191,11 +198,16 @@ class GenerationLockManager:
         keepalive: asyncio.Task[None] | None = None
         try:
             async with self._client().connect() as connection:
-                owner = ExpandableWriteOwner(connection, self._io_timeout_seconds)
+                io_lock = asyncio.Lock()
+                owner = ExpandableWriteOwner(
+                    connection, self._io_timeout_seconds, io_lock
+                )
                 try:
                     await owner.acquire(names, timeout_seconds)
                     keepalive = asyncio.create_task(
-                        self._keep_owner_alive(connection, asyncio.current_task()),
+                        self._keep_owner_alive(
+                            connection, asyncio.current_task(), io_lock=io_lock
+                        ),
                         name="generation-lock-expandable-owner-keepalive",
                     )
                     yield owner
@@ -204,7 +216,8 @@ class GenerationLockManager:
                         keepalive.cancel()
                         await asyncio.gather(keepalive, return_exceptions=True)
                     active_error = sys.exc_info()[1]
-                    release_error = await self._release(connection)
+                    async with io_lock:
+                        release_error = await self._release(connection)
                     if release_error is not None:
                         await _invalidate_owner_connection(connection, release_error)
                         if active_error is None:
@@ -275,13 +288,19 @@ class GenerationLockManager:
         self,
         connection: AsyncConnection,
         owner_task: asyncio.Task[object] | None,
+        *,
+        io_lock: asyncio.Lock | None = None,
     ) -> None:
         """在长临界区内保活 owner；连接失效时 fence 当前调用方。"""
         interval = max(0.01, min(1.0, self._io_timeout_seconds / 2))
         while True:
             await asyncio.sleep(interval)
             try:
-                await self._scalar(connection, text("SELECT 1"), {})
+                if io_lock is None:
+                    await self._scalar(connection, text("SELECT 1"), {})
+                else:
+                    async with io_lock:
+                        await self._scalar(connection, text("SELECT 1"), {})
             except asyncio.CancelledError:
                 raise
             except BaseException:

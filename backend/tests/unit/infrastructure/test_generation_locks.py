@@ -178,6 +178,54 @@ async def test_expandable_write_owner_is_kept_alive_during_publication(
     assert any("SELECT 1" in sql for sql, _ in connection.calls)
 
 
+async def test_expandable_write_serializes_lock_extension_and_keepalive(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """目标锁扩展等待期间，保活不得并发读取同一 owner connection。"""
+    extension_started = asyncio.Event()
+    release_extension = asyncio.Event()
+    concurrent_probe = False
+    active_call = False
+
+    class BlockingConnection(_Connection):
+        async def scalar(self, statement: object, parameters: dict[str, object]):
+            nonlocal active_call, concurrent_probe
+            sql = str(statement)
+            if active_call and "SELECT 1" in sql:
+                concurrent_probe = True
+            active_call = True
+            try:
+                if "service_get_write_locks" in sql and len(self.calls) == 1:
+                    extension_started.set()
+                    await release_extension.wait()
+                self.calls.append((sql, parameters))
+                return 1
+            finally:
+                active_call = False
+
+    connection = BlockingConnection([])
+    manager = GenerationLockManager(
+        "mysql+asyncmy://user:pass@localhost/meta", io_timeout_seconds=0.05
+    )
+    monkeypatch.setattr(
+        module,
+        "create_async_engine",
+        lambda *_args, **_kwargs: cast(AsyncEngine, _Engine(connection)),
+    )
+    await manager.initialize()
+
+    async with manager.expandable_write(["publisher:source"], 3) as owner:
+        extension = asyncio.create_task(owner.acquire(["table:a"], 3))
+        await extension_started.wait()
+        await asyncio.sleep(0.04)
+        assert concurrent_probe is False
+        release_extension.set()
+        await extension
+        await asyncio.sleep(0.04)
+
+    assert any("SELECT 1" in sql for sql, _ in connection.calls)
+
+
 async def test_checkout_exhaustion_has_stable_unavailable_error(
     monkeypatch: MonkeyPatch,
 ) -> None:
