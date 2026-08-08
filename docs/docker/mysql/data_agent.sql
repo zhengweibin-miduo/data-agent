@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS agent_conversation
     summary                    TEXT NULL COMMENT '异步生成的有界会话摘要',
     summary_through_message_id BIGINT NULL COMMENT '摘要已经覆盖到的消息内部主键',
     active_turn_uid            CHAR(64) NULL COMMENT '当前唯一在途轮次标识',
+    active_turn_claim_token    CHAR(32) NULL COMMENT '当前在途轮次的执行代次坐标',
     turn_abandoned_at          DATETIME NULL COMMENT '失败轮次的有限接管租约起点',
     created_at                 DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '会话创建时间',
     updated_at                 DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

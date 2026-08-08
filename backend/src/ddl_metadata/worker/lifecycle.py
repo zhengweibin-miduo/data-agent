@@ -38,6 +38,7 @@ from ddl_metadata.workflow.memory_context import MemoryContextLoader
 from errors import DataAgentError
 from infrastructure.checkpoint_store import CheckpointStore
 from infrastructure.elasticsearch import ElasticsearchClient
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.llm_client import LLMClient
 from infrastructure.mysql import MySQLDatabase
 from infrastructure.qdrant import QdrantClient
@@ -106,7 +107,18 @@ async def startup(ctx: dict[Any, Any]) -> None:
     await _wait_for_queue(cast(ArqRedis, ctx["redis"]))
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
-    await MySQLDatabase.check_locking_service()
+    generation_locks = GenerationLockManager(
+        app_config.mysql.url,
+        pool_size=app_config.mysql.generation_lock_pool_size,
+        pool_timeout_seconds=app_config.mysql.generation_lock_pool_timeout_seconds,
+    )
+    await generation_locks.initialize()
+    try:
+        await generation_locks.check_capability()
+    except BaseException:
+        await generation_locks.close()
+        raise
+    ctx["generation_locks"] = generation_locks
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     embeddings = TEIEmbeddingClient.initialize()
@@ -174,7 +186,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
         DDLGraphDependencies(
             model=LLMMetadataGenerator(),
             memory_context=MemoryContextLoader(),
-            snapshot_publisher=MySQLAcceptedSnapshotPublisher(),
+            snapshot_publisher=MySQLAcceptedSnapshotPublisher(generation_locks),
         ),
         checkpointer,
     )
@@ -187,13 +199,17 @@ async def startup(ctx: dict[Any, Any]) -> None:
 async def shutdown(ctx: dict[Any, Any]) -> None:
     """按依赖逆序关闭 worker 资源。"""
     # 步骤一：丢弃进程上下文引用，并按依赖逆序释放所有长生命周期资源。
-    del ctx
+    generation_locks = cast(
+        GenerationLockManager | None, ctx.pop("generation_locks", None)
+    )
     try:
         await CheckpointStore.close()
         await LLMClient.close()
         await TEIEmbeddingClient.close()
         await QdrantClient.close()
         await ElasticsearchClient.close()
+        if generation_locks is not None:
+            await generation_locks.close()
         await MySQLDatabase.close()
         await RedisClient.close()
         logger.info("DDL 元数据 worker 已停止，进程内共享资源已经关闭")

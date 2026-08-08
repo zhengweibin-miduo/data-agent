@@ -258,11 +258,11 @@ async def test_api_queue_pool_declares_socket_timeouts(
     ):
         monkeypatch.setattr(manager, "initialize", lambda: object())
         monkeypatch.setattr(manager, "close", _noop_close)
+    monkeypatch.setattr(application.GenerationLockManager, "initialize", AsyncMock())
     monkeypatch.setattr(
-        application.MySQLDatabase,
-        "check_locking_service",
-        AsyncMock(),
+        application.GenerationLockManager, "check_capability", AsyncMock()
     )
+    monkeypatch.setattr(application.GenerationLockManager, "close", AsyncMock())
 
     app = FastAPI()
     async with application._lifespan(app):

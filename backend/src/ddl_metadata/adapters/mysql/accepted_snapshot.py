@@ -26,6 +26,7 @@ from ddl_metadata.meta_projection.repository import (
 from ddl_metadata.persistence.metadata_repository import MetadataRepository
 from errors import DataAgentError
 from identifiers import scope_fingerprint
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
@@ -39,7 +40,11 @@ from settings import app_config
 class MySQLAcceptedSnapshotPublisher:
     """在一个 MySQL 事务内提交 Meta、权威记忆与双索引 outbox。"""
 
-    def __init__(self, source_schemas: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        generation_locks: GenerationLockManager,
+        source_schemas: Mapping[str, str] | None = None,
+    ) -> None:
         """保存命名数据源到默认源库的可测试投影。"""
         self._source_schemas = (
             dict(source_schemas)
@@ -50,6 +55,7 @@ class MySQLAcceptedSnapshotPublisher:
                 if (database := make_url(source.url).database) is not None
             }
         )
+        self._generation_locks = generation_locks
 
     async def publish(self, snapshot: AcceptedSnapshot) -> None:
         """在单一事务中提交验证通过的 Meta 与权威记忆快照。
@@ -103,10 +109,11 @@ class MySQLAcceptedSnapshotPublisher:
         }
         try:
             # 步骤四：先持有本次全部 target generation locks，再开启唯一发布事务。
-            async with MySQLDatabase.exclusive_service_locks(
+            lock_context = self._generation_locks.write(
                 generation_locks,
-                timeout_seconds=(app_config.data_sync.generation_lock_timeout_seconds),
-            ):
+                app_config.data_sync.generation_lock_timeout_seconds,
+            )
+            async with lock_context:
                 # 步骤五：事务提交或回滚完成后，外层上下文才会释放 generation locks。
                 async with MySQLDatabase.session() as session:
                     metadata_repository = MetadataRepository(session)

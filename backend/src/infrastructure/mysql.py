@@ -5,7 +5,6 @@ import sys
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from typing import ClassVar
-from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -30,11 +29,6 @@ class AdvisoryLockReleaseError(RuntimeError):
 
 class LockingServiceUnavailableError(RuntimeError):
     """MySQL Locking Service SQL functions 不可用或返回形态错误。"""
-
-
-_GENERATION_LOCK_NAMESPACE = "data-agent-generation-v1"
-_LOCKING_SERVICE_PROBE_NAMESPACE = "data-agent-capability-v1"
-_LOCKING_SERVICE_CONTENTION_ERRORS = frozenset({3132, 3133})
 
 
 class MySQLDatabase:
@@ -147,157 +141,6 @@ class MySQLDatabase:
                         ) from release_error
 
     @classmethod
-    @asynccontextmanager
-    async def shared_service_locks(
-        cls,
-        names: Iterable[str],
-        *,
-        timeout_seconds: int,
-    ) -> AsyncIterator[None]:
-        """在专用连接上原子持有共享 generation locks。"""
-        async with cls._service_locks(
-            names,
-            function_name="service_get_read_locks",
-            timeout_seconds=timeout_seconds,
-        ):
-            yield
-
-    @classmethod
-    @asynccontextmanager
-    async def exclusive_service_locks(
-        cls,
-        names: Iterable[str],
-        *,
-        timeout_seconds: int,
-    ) -> AsyncIterator[None]:
-        """在专用连接上原子持有独占 generation locks。"""
-        async with cls._service_locks(
-            names,
-            function_name="service_get_write_locks",
-            timeout_seconds=timeout_seconds,
-        ):
-            yield
-
-    @classmethod
-    @asynccontextmanager
-    async def _service_locks(
-        cls,
-        names: Iterable[str],
-        *,
-        function_name: str,
-        timeout_seconds: int,
-    ) -> AsyncIterator[None]:
-        """通过单次 Locking Service 调用原子持有一组 generation locks。"""
-        ordered_names = _normalize_advisory_lock_names(names)
-        if (
-            not isinstance(timeout_seconds, int)
-            or isinstance(timeout_seconds, bool)
-            or timeout_seconds < 0
-        ):
-            raise ValueError("MySQL Locking Service timeout 必须是非负整数秒")
-
-        parameters: dict[str, object] = {
-            "namespace": _GENERATION_LOCK_NAMESPACE,
-            "timeout_seconds": timeout_seconds,
-        }
-        lock_arguments: list[str] = []
-        for index, name in enumerate(ordered_names):
-            parameter_name = f"lock_{index}"
-            parameters[parameter_name] = name
-            lock_arguments.append(f":{parameter_name}")
-        statement = text(
-            f"SELECT {function_name}(:namespace, "
-            f"{', '.join(lock_arguments)}, :timeout_seconds)"
-        )
-
-        # 步骤一：每个上下文独占一条连接；单次函数调用保证多 target 原子获取。
-        async with cls.get_client().connect() as connection:
-            try:
-                try:
-                    acquired = await connection.scalar(statement, parameters)
-                except DBAPIError as error:
-                    if _mysql_error_number(error) in _LOCKING_SERVICE_CONTENTION_ERRORS:
-                        raise AdvisoryLockUnavailableError(
-                            "MySQL generation lock 未在等待预算内取得"
-                        ) from error
-                    raise
-                if not acquired:
-                    raise AdvisoryLockUnavailableError(
-                        "MySQL generation lock 未在等待预算内取得"
-                    )
-                # 步骤二：锁跨业务 commit/rollback 保持，直至调用方离开临界区。
-                yield
-            finally:
-                # 步骤三：namespace 级释放失败时使 owner 连接失效，保留活动业务异常。
-                active_error = sys.exc_info()[1]
-                release_error = await _release_service_locks(connection)
-                if release_error is not None:
-                    await _invalidate_owner_connection(connection, release_error)
-                    if active_error is None:
-                        raise AdvisoryLockReleaseError(
-                            "MySQL generation lock 释放失败，owner 连接已失效"
-                        ) from release_error
-
-    @classmethod
-    async def check_locking_service(cls) -> None:
-        """探测 Locking Service SQL functions，缺失时阻断进程启动。"""
-        # 步骤一：每个进程使用唯一资源名探测 READ 与 WRITE，避免并发启动互相竞争。
-        probe_id = uuid4().hex
-        async with cls.get_client().connect() as connection:
-            try:
-                try:
-                    read_result = await connection.scalar(
-                        text(
-                            "SELECT service_get_read_locks("
-                            ":namespace, :lock_name, 0)"
-                        ),
-                        {
-                            "namespace": _LOCKING_SERVICE_PROBE_NAMESPACE,
-                            "lock_name": f"read-probe:{probe_id}",
-                        },
-                    )
-                    write_result = await connection.scalar(
-                        text(
-                            "SELECT service_get_write_locks("
-                            ":namespace, :lock_name, 0)"
-                        ),
-                        {
-                            "namespace": _LOCKING_SERVICE_PROBE_NAMESPACE,
-                            "lock_name": f"write-probe:{probe_id}",
-                        },
-                    )
-                except DBAPIError as error:
-                    raise LockingServiceUnavailableError(
-                        "MySQL Locking Service SQL functions 不可用"
-                    ) from error
-                if not read_result or not write_result:
-                    raise LockingServiceUnavailableError(
-                        "MySQL Locking Service capability probe 返回了无效结果"
-                    )
-            finally:
-                # 步骤二：无论 probe 成败都释放隔离 namespace；失败连接禁止回池。
-                active_error = sys.exc_info()[1]
-                try:
-                    released = await connection.scalar(
-                        text("SELECT service_release_locks(:namespace)"),
-                        {"namespace": _LOCKING_SERVICE_PROBE_NAMESPACE},
-                    )
-                    if not released:
-                        raise LockingServiceUnavailableError(
-                            "MySQL Locking Service release probe 返回了无效结果"
-                        )
-                except BaseException as release_error:
-                    await _invalidate_owner_connection(connection, release_error)
-                    if active_error is None:
-                        if isinstance(
-                            release_error, LockingServiceUnavailableError
-                        ):
-                            raise
-                        raise LockingServiceUnavailableError(
-                            "MySQL Locking Service SQL functions 不可用"
-                        ) from release_error
-
-    @classmethod
     async def close(cls) -> None:
         """关闭异步引擎并清除引擎与 Session 工厂。"""
         # 步骤一：在等待释放连接池前摘除两项共享状态，保留并发创建的替代实例。
@@ -340,24 +183,6 @@ async def _release_advisory_locks(
         except BaseException as error:
             release_error = release_error or error
     return release_error
-
-
-async def _release_service_locks(
-    connection: AsyncConnection,
-) -> BaseException | None:
-    """释放 owner 连接在 generation namespace 内的全部锁。"""
-    try:
-        released = await connection.scalar(
-            text("SELECT service_release_locks(:namespace)"),
-            {"namespace": _GENERATION_LOCK_NAMESPACE},
-        )
-        if not released:
-            raise AdvisoryLockReleaseError(
-                "MySQL generation lock 未由 owner 连接完整释放"
-            )
-    except BaseException as error:
-        return error
-    return None
 
 
 async def _invalidate_owner_connection(

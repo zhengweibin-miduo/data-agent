@@ -28,6 +28,7 @@ from settings import app_config
 
 _ABANDONED_TURN_TIMESTAMP = "1970-01-01 00:00:00"
 _ABANDONED_TURN_YEAR = 1970
+_QUERY_CLARIFICATION_SCAN_PAGE_SIZE = 20
 
 
 def _message(row: RowMapping) -> MessageRecord:
@@ -261,7 +262,7 @@ class ConversationRepository:
         conversation_id: int,
         user_id: str,
         turn_uid: str,
-    ) -> None:
+    ) -> str:
         """占用活动轮次门禁并把租约起点推进到当前时刻。
 
         新轮次首次占用与同一轮次的幂等回放都走这里：两者都必须刷新 `updated_at`，
@@ -273,6 +274,7 @@ class ConversationRepository:
             turn_uid: 占用门禁的轮次标识。
         """
         # 步骤一：门禁与租约起点同写，保证可见的占用必然带有最新租约。
+        claim_token = uuid4().hex
         await self._session.execute(
             update(agent_conversation)
             .where(
@@ -281,10 +283,12 @@ class ConversationRepository:
             )
             .values(
                 active_turn_uid=turn_uid,
+                active_turn_claim_token=claim_token,
                 turn_abandoned_at=None,
                 updated_at=func.now(),
             )
         )
+        return claim_token
 
     async def _turn_lease_expired(self, conversation_id: int, user_id: str) -> bool:
         """在已锁定事务中用数据库时钟判断活动轮次租约是否自然过期。"""
@@ -312,7 +316,7 @@ class ConversationRepository:
         content: str,
         *,
         semantic_fingerprint: str | None = None,
-    ) -> tuple[MessageRecord, RowMapping, bool]:
+    ) -> tuple[MessageRecord, RowMapping, bool, str | None]:
         """门禁并幂等持久化用户消息。"""
         # 步骤一：先锁定会话再检查 active_turn_uid，避免并发请求同时通过门禁。
         conversation = await self.get(
@@ -377,6 +381,7 @@ class ConversationRepository:
             # user(A) user(B) assistant(B) assistant(A) 这种错乱顺序，并污染后续摘要
             # 与记忆提炼）。两种情况都必须保持门禁不变。
             execution_owner = False
+            claim_token = None
             if str(conversation["active_turn_uid"] or "") == turn_uid:
                 execution_owner = (
                     getattr(conversation["updated_at"], "year", None)
@@ -385,12 +390,12 @@ class ConversationRepository:
                 # 非所有者的幂等轮询不能续租，否则崩溃进程留下的租约会被
                 # 轮询永久延长。只有真正重新取得执行权时才刷新占用起点。
                 if execution_owner:
-                    await self._claim_turn_gate(
+                    claim_token = await self._claim_turn_gate(
                         int(conversation["id"]),
                         user_id,
                         turn_uid,
                     )
-            return _message(existing), conversation, execution_owner
+            return _message(existing), conversation, execution_owner, claim_token
 
         # 步骤三：新消息与 active_turn_uid 在调用方事务内一并写入，确保可见的
         # 用户消息必然占住活动轮次门禁，后续助手完成只能匹配该 turn。
@@ -407,7 +412,9 @@ class ConversationRepository:
             )
         )
         message_id = _inserted_id(result, "用户消息")
-        await self._claim_turn_gate(int(conversation["id"]), user_id, turn_uid)
+        claim_token = await self._claim_turn_gate(
+            int(conversation["id"]), user_id, turn_uid
+        )
         row = (
             (
                 await self._session.execute(
@@ -417,13 +424,14 @@ class ConversationRepository:
             .mappings()
             .one()
         )
-        return _message(row), conversation, True
+        return _message(row), conversation, True, claim_token
 
     async def complete_turn(
         self,
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
         *,
         semantic_fingerprint: str | None = None,
@@ -477,7 +485,10 @@ class ConversationRepository:
                     http_status=409,
                 )
             return _message(existing)
-        if str(conversation["active_turn_uid"] or "") != turn_uid:
+        if (
+            str(conversation["active_turn_uid"] or "") != turn_uid
+            or str(conversation["active_turn_claim_token"] or "") != claim_token
+        ):
             raise DataAgentError(
                 "stale_turn",
                 "conversation_complete",
@@ -524,8 +535,14 @@ class ConversationRepository:
                 agent_conversation.c.id == conversation_id,
                 agent_conversation.c.user_id == user_id,
                 agent_conversation.c.active_turn_uid == turn_uid,
+                agent_conversation.c.active_turn_claim_token == claim_token,
             )
-            .values(active_turn_uid=None, updated_at=func.now())
+            .values(
+                active_turn_uid=None,
+                active_turn_claim_token=None,
+                turn_abandoned_at=None,
+                updated_at=func.now(),
+            )
         )
         row = (
             (
@@ -543,6 +560,7 @@ class ConversationRepository:
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
     ) -> None:
         """把仍由失败请求持有的轮次原子标记为可重新认领。"""
         await self._session.execute(
@@ -551,16 +569,22 @@ class ConversationRepository:
                 agent_conversation.c.uid == conversation_uid,
                 agent_conversation.c.user_id == user_id,
                 agent_conversation.c.active_turn_uid == turn_uid,
+                agent_conversation.c.active_turn_claim_token == claim_token,
             )
             .values(
                 active_turn_uid=turn_uid,
+                active_turn_claim_token=None,
                 turn_abandoned_at=func.now(),
                 updated_at=_ABANDONED_TURN_TIMESTAMP,
             )
         )
 
     async def renew_turn(
-        self, user_id: str, conversation_uid: str, turn_uid: str
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
     ) -> bool:
         """只刷新仍由指定轮次持有的租约，完成或替代后返回假。"""
         result = await self._session.execute(
@@ -569,6 +593,7 @@ class ConversationRepository:
                 agent_conversation.c.uid == conversation_uid,
                 agent_conversation.c.user_id == user_id,
                 agent_conversation.c.active_turn_uid == turn_uid,
+                agent_conversation.c.active_turn_claim_token == claim_token,
             )
             .values(updated_at=func.now())
         )
@@ -634,6 +659,91 @@ class ConversationRepository:
             ).mappings()
         )
         return [_message(row) for row in reversed(rows)]
+
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        """从 MySQL 权威消息中证明当前未结束 Query 澄清链。"""
+        conversation = await self.get(user_id, conversation_uid)
+        if conversation is None:
+            raise DataAgentError(
+                "conversation_not_found",
+                "query_clarification_chain",
+                "会话不存在",
+                http_status=404,
+            )
+
+        # 步骤一：从当前用户消息向前按固定小页扫描，避免在发现字符预算前
+        # 一次读取完整消息上限；主键游标保证每页都来自同一权威时间线。
+        chain: list[MessageRecord] = []
+        chars = 0
+        before_id: int | None = None
+        boundary_proven = False
+        while not boundary_proven:
+            remaining = message_limit - len(chain)
+            page_limit = min(
+                _QUERY_CLARIFICATION_SCAN_PAGE_SIZE,
+                remaining + 1,
+            )
+            filters = [
+                agent_message.c.user_id == user_id,
+                agent_message.c.conversation_id == int(conversation["id"]),
+                agent_message.c.id <= through_id,
+            ]
+            if before_id is not None:
+                filters.append(agent_message.c.id < before_id)
+            rows = list(
+                (
+                    await self._session.execute(
+                        select(agent_message)
+                        .where(*filters)
+                        .order_by(agent_message.c.id.desc())
+                        .limit(page_limit)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if not rows:
+                boundary_proven = True
+                break
+
+            # 步骤二：普通 Query 终态是链边界；澄清助手消息只提供角色上下文，
+            # 用户原文仍由调用方单独筛选为逐字证据。
+            for row in rows:
+                if (
+                    str(row["role"]) == MessageRole.ASSISTANT.value
+                    and str(row.get("semantic_fingerprint") or "")
+                    != "query:clarification"
+                ):
+                    boundary_proven = True
+                    break
+                if (
+                    len(chain) >= message_limit
+                    or chars + len(str(row["content"])) > max_chars
+                ):
+                    raise DataAgentError(
+                        "query_clarification_chain_too_large",
+                        "query_clarification_chain",
+                        "查询澄清证据链超过安全预算",
+                        http_status=422,
+                    )
+                chain.append(_message(row))
+                chars += len(str(row["content"]))
+            if boundary_proven:
+                break
+            if len(rows) < page_limit:
+                boundary_proven = True
+                break
+            before_id = int(rows[-1]["id"])
+
+        return list(reversed(chain))
 
     async def claim_extractions(
         self,

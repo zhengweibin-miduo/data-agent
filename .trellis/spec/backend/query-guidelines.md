@@ -184,6 +184,24 @@ await readonly_executor.explain(validated)
 async for batch in readonly_executor.execute(validated):
     yield batch
 ```
+
+### 8. Supplemental Time Context and Coordinated Planning
+
+- Every Query turn carries a required `supplemental_context.user_timezone` IANA
+  key. Validate it before starting the turn and include the exact key in the
+  semantic idempotency fingerprint.
+- Resolve supported natural calendar expressions from an injected UTC instant
+  into trusted half-open `[start, end)` boundaries. Interpret DATE and DATETIME
+  as user-local values; convert TIMESTAMP boundaries to UTC.
+- Trusted boundaries are server-owned parameters. The planner must emit exactly
+  one `>= :trusted_time_start` and one `< :trusted_time_end` predicate for the
+  selected time column; model literals, missing bounds, duplicates and extras
+  fail validation.
+- Load an unfinished clarification chain through the dedicated durable
+  Conversation interface, independently of the ordinary bounded context.
+- For each statically valid draft, hold the target generation READ set across
+  relationship authority, readiness and EXPLAIN. Release it before any model
+  repair and reacquire the repaired target set.
 - Supported symbolic and English filter operators participate in reverse evidence
   coverage, and multiple filter clauses must map one-to-one to distinct user
   clauses. A time-grain answer may continue to time-column clarification while

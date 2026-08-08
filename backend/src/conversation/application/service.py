@@ -1,5 +1,7 @@
 """Conversation 用例与有界上下文组装。"""
 
+from __future__ import annotations
+
 from conversation.application.contracts import (
     ConversationStore,
     LongTermMemoryReader,
@@ -130,6 +132,7 @@ class ConversationService:
                     message=started.message,
                     context=ConversationContext(summary=None, messages=[], memories=[]),
                     execution_owner=False,
+                    claim_token=None,
                 )
         # 步骤二：提交完成后再召回消息与长期记忆，模型或索引延迟不持有行锁。
         try:
@@ -141,13 +144,20 @@ class ConversationService:
                 content,
             )
         except BaseException:
-            if started.execution_owner:
-                await self._store.abandon_turn(user_id, conversation_uid, turn_uid)
+            if started.execution_owner and started.claim_token is not None:
+                try:
+                    await self._store.abandon_turn(
+                        user_id, conversation_uid, turn_uid, started.claim_token
+                    )
+                except Exception:
+                    # 清理失败不得覆盖上下文、记忆召回或取消的原始异常。
+                    pass
             raise
         return StartTurnResponse(
             message=started.message,
             context=context,
             execution_owner=started.execution_owner,
+            claim_token=started.claim_token,
         )
 
     async def complete_turn(
@@ -155,6 +165,7 @@ class ConversationService:
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
         *,
         semantic_fingerprint: str | None = None,
@@ -164,6 +175,7 @@ class ConversationService:
             user_id,
             conversation_uid,
             turn_uid,
+            claim_token,
             content,
             semantic_fingerprint=semantic_fingerprint,
         )
@@ -174,15 +186,22 @@ class ConversationService:
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
     ) -> None:
         """释放失败或取消的活动轮次门禁，使同轮次可安全重试。"""
-        await self._store.abandon_turn(user_id, conversation_uid, turn_uid)
+        await self._store.abandon_turn(user_id, conversation_uid, turn_uid, claim_token)
 
     async def renew_turn(
-        self, user_id: str, conversation_uid: str, turn_uid: str
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
     ) -> bool:
         """为仍存活的长轮次续租，避免健康 owner 被超时重入。"""
-        return await self._store.renew_turn(user_id, conversation_uid, turn_uid)
+        return await self._store.renew_turn(
+            user_id, conversation_uid, turn_uid, claim_token
+        )
 
     async def assistant_message(
         self,
@@ -195,6 +214,24 @@ class ConversationService:
             user_id,
             conversation_uid,
             turn_uid,
+        )
+
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        """从独立权威预算读取当前 Query 澄清证据链。"""
+        return await self._store.pending_query_chain(
+            user_id,
+            conversation_uid,
+            through_id=through_id,
+            message_limit=message_limit,
+            max_chars=max_chars,
         )
 
     async def delete_user_data(

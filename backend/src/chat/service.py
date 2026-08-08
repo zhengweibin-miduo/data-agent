@@ -110,12 +110,13 @@ class ChatService:
                 request.turn_uid,
             )
         except BaseException:
-            if started.execution_owner:
+            if started.execution_owner and started.claim_token is not None:
                 try:
                     await self._conversations.abandon_turn(
                         request.user_id,
                         conversation_uid,
                         request.turn_uid,
+                        started.claim_token,
                     )
                 except Exception:
                     pass
@@ -130,6 +131,15 @@ class ChatService:
                 "chat_in_progress",
                 "chat_turn",
                 "相同轮次正在执行",
+                retryable=True,
+                http_status=409,
+            )
+        claim_token = started.claim_token
+        if claim_token is None:
+            raise DataAgentError(
+                "turn_claim_missing",
+                "conversation_turn",
+                "会话轮次未返回执行代次坐标",
                 retryable=True,
                 http_status=409,
             )
@@ -160,6 +170,7 @@ class ChatService:
                 request.user_id,
                 conversation_uid,
                 request.turn_uid,
+                claim_token,
                 assistant_content,
             )
             completed_turn = True
@@ -180,6 +191,7 @@ class ChatService:
                         request.user_id,
                         conversation_uid,
                         request.turn_uid,
+                        claim_token,
                     )
                 except Exception:
                     # 清理失败不得覆盖 readiness、模型、取消或持久化的原始异常。

@@ -402,5 +402,13 @@ job = await job_store.submit_answers(job_id, request)
   `None`; preserve transaction rollback and worker classification.
 - Do not mark validation ambiguity retryable or translate it into `failed`;
   deterministic/model business rejection ends as `rejected`.
+- Reject invalid/unavailable IANA zones at request validation. Reject unsupported
+  or ambiguous natural calendar expressions before SQL planning.
+- Translate generation owner pool checkout exhaustion and Locking Service
+  contention to the stable retryable lock-unavailable error. Release failure
+  invalidates the connection and surfaces the stable release error unless a
+  business exception is already active.
+- A stale turn claim is an ownership conflict, never a successful completion or
+  best-effort abandonment.
 - Do not let API routes update Redis Hash fields directly; use `DDLJobStore` so
   transition, revision, lease, outbox, and retention rules remain atomic.

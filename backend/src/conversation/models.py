@@ -101,12 +101,21 @@ class StartTurnResponse(ContractModel):
     execution_owner: bool = Field(
         default=True, description="当前请求是否拥有该轮次的执行权。"
     )
+    claim_token: str | None = Field(
+        default=None,
+        min_length=32,
+        max_length=32,
+        description="当前执行代次的不透明 fencing 坐标。",
+    )
 
 
 class CompleteTurnRequest(ContractModel):
     """持久化一轮助手纯文本响应。"""
 
     user_id: str = Field(min_length=1, max_length=128, description="用户标识。")
+    claim_token: str = Field(
+        min_length=32, max_length=32, description="start_turn 返回的执行代次坐标。"
+    )
     content: str = Field(
         min_length=1,
         max_length=app_config.conversation.max_message_chars,

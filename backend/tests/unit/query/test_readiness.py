@@ -7,36 +7,34 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.tools import BaseTool
-from pytest import MonkeyPatch
 
 from errors import DataAgentError
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
-    MySQLDatabase,
 )
 from query.adapters import readiness as readiness_module
 from query.adapters.readiness import QueryReadinessAdapter
 
 
-async def test_query_hold_uses_shared_generation_locks(
-    monkeypatch: MonkeyPatch,
-) -> None:
+async def test_query_hold_uses_shared_generation_locks() -> None:
     """Query 必须一次共享持有全部排序后的 generation target。"""
     observed: list[tuple[tuple[str, ...], int]] = []
 
     @asynccontextmanager
     async def shared_locks(
         names: tuple[str, ...] | list[str],
-        *,
         timeout_seconds: int,
     ) -> AsyncIterator[None]:
         observed.append((tuple(names), timeout_seconds))
         yield
 
-    monkeypatch.setattr(MySQLDatabase, "shared_service_locks", shared_locks)
+    manager = Mock(spec=GenerationLockManager)
+    manager.read = shared_locks
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
+        cast(GenerationLockManager, manager),
         dw_database="dw",
         lock_timeout=2,
     )
@@ -55,24 +53,23 @@ async def test_query_hold_uses_shared_generation_locks(
     ]
 
 
-async def test_query_hold_maps_lock_contention_to_retryable_conflict(
-    monkeypatch: MonkeyPatch,
-) -> None:
+async def test_query_hold_maps_lock_contention_to_retryable_conflict() -> None:
     """共享锁竞争必须成为首事件前可安全投影的 409 业务错误。"""
 
     @asynccontextmanager
     async def unavailable(
         names: tuple[str, ...] | list[str],
-        *,
         timeout_seconds: int,
     ) -> AsyncIterator[None]:
         del names, timeout_seconds
         raise AdvisoryLockUnavailableError("busy")
         yield
 
-    monkeypatch.setattr(MySQLDatabase, "shared_service_locks", unavailable)
+    manager = Mock(spec=GenerationLockManager)
+    manager.read = unavailable
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
+        cast(GenerationLockManager, manager),
         dw_database="dw",
         lock_timeout=1,
     )
@@ -88,14 +85,13 @@ async def test_query_hold_maps_lock_contention_to_retryable_conflict(
 
 
 async def test_query_hold_logs_release_failure_after_success(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """已完成 Query 的 owner 连接失效不得追加终态后的 stream_error。"""
 
     @asynccontextmanager
     async def release_fails(
         names: tuple[str, ...] | list[str],
-        *,
         timeout_seconds: int,
     ) -> AsyncIterator[None]:
         del names, timeout_seconds
@@ -103,10 +99,12 @@ async def test_query_hold_logs_release_failure_after_success(
         raise AdvisoryLockReleaseError("owner connection invalidated")
 
     warning = Mock()
-    monkeypatch.setattr(MySQLDatabase, "shared_service_locks", release_fails)
+    manager = Mock(spec=GenerationLockManager)
+    manager.read = release_fails
     monkeypatch.setattr(readiness_module.logger, "warning", warning)
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
+        cast(GenerationLockManager, manager),
         dw_database="dw",
         lock_timeout=1,
     )

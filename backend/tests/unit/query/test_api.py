@@ -82,6 +82,7 @@ async def test_query_route_streams_one_json_object_per_line() -> None:
         "user_id": "user-1",
         "turn_uid": "turn-1",
         "question": "查询订单",
+        "supplemental_context": {"user_timezone": "Asia/Shanghai"},
         "ddl_context": {
             "source": "erp",
             "dialect": "mysql",
@@ -108,12 +109,46 @@ async def test_query_route_streams_one_json_object_per_line() -> None:
     assert invalid.status_code == 422
 
 
+async def test_query_route_requires_a_valid_iana_user_timezone() -> None:
+    """查询请求必须显式提供可用的 IANA 用户时区。"""
+    app = FastAPI()
+    app.state.query = _Query()
+    app.include_router(router)
+    transport = httpx.ASGITransport(app=app)
+    body = {
+        "user_id": "user-1",
+        "turn_uid": "turn-1",
+        "question": "查询订单",
+        "ddl_context": {
+            "source": "erp",
+            "dialect": "mysql",
+            "ddl": "CREATE TABLE orders (id BIGINT)",
+        },
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post(
+            "/api/v1/conversations/conversation-1/query-turns", json=body
+        )
+        invalid = await client.post(
+            "/api/v1/conversations/conversation-1/query-turns",
+            json={
+                **body,
+                "supplemental_context": {"user_timezone": "Mars/Olympus_Mons"},
+            },
+        )
+
+    assert missing.status_code == 422
+    assert invalid.status_code == 422
+
+
 async def test_query_route_handles_stream_errors_and_cleanup() -> None:
     """响应后错误固定投影，响应前失败也确定性关闭应用流。"""
     body = {
         "user_id": "user-1",
         "turn_uid": "turn-1",
         "question": "查询订单",
+        "supplemental_context": {"user_timezone": "Asia/Shanghai"},
         "ddl_context": {
             "source": "erp",
             "dialect": "mysql",
@@ -166,6 +201,7 @@ async def test_query_route_maps_internal_lease_loss_to_stream_error() -> None:
                 "user_id": "user-1",
                 "turn_uid": "turn-1",
                 "question": "查询订单",
+                "supplemental_context": {"user_timezone": "Asia/Shanghai"},
                 "ddl_context": {
                     "source": "erp",
                     "dialect": "mysql",

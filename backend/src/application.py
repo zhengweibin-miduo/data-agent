@@ -36,6 +36,7 @@ from ddl_metadata.persistence.memory_references import (
 )
 from errors import DataAgentError
 from infrastructure.elasticsearch import ElasticsearchClient
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.job_queue import build_queue_pool
 from infrastructure.llm_client import LLMClient
 from infrastructure.mysql import MySQLDatabase
@@ -63,7 +64,17 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     # 步骤二：按依赖顺序初始化共享外部资源，全部就绪后才允许装配业务服务。
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
-    await MySQLDatabase.check_locking_service()
+    generation_locks = GenerationLockManager(
+        app_config.mysql.url,
+        pool_size=app_config.mysql.generation_lock_pool_size,
+        pool_timeout_seconds=app_config.mysql.generation_lock_pool_timeout_seconds,
+    )
+    await generation_locks.initialize()
+    try:
+        await generation_locks.check_capability()
+    except BaseException:
+        await generation_locks.close()
+        raise
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     embeddings = TEIEmbeddingClient.initialize()
@@ -127,12 +138,17 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         planner=query_model,
         readiness=QueryReadinessAdapter(
             create_data_readiness_tool(),
+            generation_locks,
             dw_database=app_config.data_sync.dw_database,
             lock_timeout=app_config.data_sync.generation_lock_timeout_seconds,
         ),
         executor=query_executor,
         dw_database=app_config.data_sync.dw_database,
         turn_lease_seconds=app_config.conversation.turn_lease_seconds,
+        clarification_chain_message_limit=(
+            app_config.query.clarification_chain_message_limit
+        ),
+        clarification_chain_max_chars=app_config.query.clarification_chain_max_chars,
     )
     # 步骤五：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
     logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")
@@ -146,6 +162,7 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
             await TEIEmbeddingClient.close()
             await QdrantClient.close()
             await ElasticsearchClient.close()
+            await generation_locks.close()
             await MySQLDatabase.close()
             await queue.aclose()
             await RedisClient.close()

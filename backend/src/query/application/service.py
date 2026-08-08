@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from time import perf_counter
+from typing import Callable
 
 from loguru import logger
 
@@ -28,7 +30,9 @@ from query.application.contracts import (
 from query.domain import (
     QueryContext,
     QueryIntent,
+    TrustedTimeRange,
     ValidatedQuery,
+    resolve_trusted_time_range,
     validate_query,
 )
 
@@ -47,6 +51,9 @@ class QueryApplication:
         executor: QueryExecutorPort,
         dw_database: str,
         turn_lease_seconds: int = 600,
+        now: Callable[[], datetime] | None = None,
+        clarification_chain_message_limit: int = 100,
+        clarification_chain_max_chars: int = 262_144,
     ) -> None:
         """绑定查询流程的外部端口。"""
         self._conversations = conversations
@@ -57,6 +64,9 @@ class QueryApplication:
         self._executor = executor
         self._dw_database = dw_database
         self._turn_lease_seconds = turn_lease_seconds
+        self._now = now or (lambda: datetime.now(UTC))
+        self._clarification_chain_message_limit = clarification_chain_message_limit
+        self._clarification_chain_max_chars = clarification_chain_max_chars
 
     async def stream(self, request: QueryRequest) -> AsyncGenerator[QueryEvent, None]:
         """执行一轮查询并逐个产生有界 NDJSON 事件。"""
@@ -75,6 +85,7 @@ class QueryApplication:
                         "question": request.question,
                         "source": request.ddl_context.source,
                         "schema_fingerprint": schema.schema_fingerprint,
+                        "user_timezone": request.supplemental_context.user_timezone,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
@@ -89,9 +100,12 @@ class QueryApplication:
                 request.turn_uid,
             )
         except BaseException:
-            if started.execution_owner:
+            if started.execution_owner and started.claim_token is not None:
                 await self._conversations.abandon_turn(
-                    request.user_id, request.conversation_uid, request.turn_uid
+                    request.user_id,
+                    request.conversation_uid,
+                    request.turn_uid,
+                    started.claim_token,
                 )
             raise
         if existing is not None:
@@ -112,55 +126,30 @@ class QueryApplication:
                 retryable=True,
                 http_status=409,
             )
+        claim_token = started.claim_token
+        if claim_token is None:
+            raise DataAgentError(
+                "turn_claim_missing",
+                "conversation_turn",
+                "会话轮次未返回执行代次坐标",
+                retryable=True,
+                http_status=409,
+            )
         owner_task = asyncio.current_task()
         heartbeat = asyncio.create_task(
-            self._heartbeat_turn(request, owner_task),
+            self._heartbeat_turn(request, claim_token, owner_task),
             name=f"query-turn-heartbeat:{request.turn_uid}",
         )
         try:
-            # 步骤三：QueryIntent 只消费同一有界上下文中的用户原文证据。
-            messages = started.context.messages
-            clarification_indexes = [
-                index
-                for index, message in enumerate(messages)
-                if message.role == MessageRole.ASSISTANT
-                and message.semantic_fingerprint == "query:clarification"
-            ]
-            pending_clarification = bool(clarification_indexes) and not any(
-                message.role == MessageRole.ASSISTANT
-                for message in messages[clarification_indexes[-1] + 1 :]
+            # 步骤三：Query 证据链从 MySQL 权威消息独立读取，
+            # 不依赖普通 Conversation 摘要后的小窗口。
+            evidence_chain = await self._conversations.pending_query_chain(
+                request.user_id,
+                request.conversation_uid,
+                through_id=started.message.id,
+                message_limit=self._clarification_chain_message_limit,
+                max_chars=self._clarification_chain_max_chars,
             )
-            if pending_clarification:
-                clarification_index = clarification_indexes[-1]
-                prior_terminal_indexes = [
-                    index
-                    for index in range(clarification_index)
-                    if messages[index].role == MessageRole.ASSISTANT
-                    and messages[index].semantic_fingerprint != "query:clarification"
-                ]
-                terminal_index = (
-                    prior_terminal_indexes[-1] if prior_terminal_indexes else -1
-                )
-                prior_user_indexes = [
-                    index
-                    for index in range(terminal_index + 1, clarification_index)
-                    if messages[index].role == MessageRole.USER
-                ]
-                chain_start = (
-                    prior_user_indexes[0] if prior_user_indexes else clarification_index
-                )
-                evidence_chain = messages[chain_start:]
-            else:
-                current_user_indexes = [
-                    index
-                    for index, message in enumerate(messages)
-                    if message.role == MessageRole.USER
-                ]
-                evidence_chain = (
-                    messages[current_user_indexes[-1] :]
-                    if current_user_indexes
-                    else messages
-                )
             user_messages = [
                 message.content
                 for message in evidence_chain
@@ -208,6 +197,7 @@ class QueryApplication:
                 await asyncio.gather(heartbeat, return_exceptions=True)
                 await self._complete(
                     request,
+                    claim_token,
                     context_or_clarification.question,
                     semantic_fingerprint="query:clarification",
                 )
@@ -216,12 +206,13 @@ class QueryApplication:
                 )
                 return
             context = context_or_clarification
+            trusted_time_range = self._trusted_time_range(request, context, intent)
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
-            validated = await self._plan(request, context, intent)
+            validated = await self._plan(request, context, intent, trusted_time_range)
             if validated is None:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
-                await self._complete(request, DATA_PREPARING_MESSAGE)
+                await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                 return
             # 最终复核与完整结果读取共享同步 generation lock，避免 readiness
@@ -248,7 +239,7 @@ class QueryApplication:
                 if not await self._readiness.ready(validated.target_tables):
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)
-                    await self._complete(request, DATA_PREPARING_MESSAGE)
+                    await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
                     yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                     return
                 started_at = perf_counter()
@@ -318,7 +309,7 @@ class QueryApplication:
                 )
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
-                await self._complete(request, summary)
+                await self._complete(request, claim_token, summary)
                 yield QueryEvent(
                     kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
                 )
@@ -330,6 +321,7 @@ class QueryApplication:
                     request.user_id,
                     request.conversation_uid,
                     request.turn_uid,
+                    claim_token,
                 )
             except Exception as error:
                 logger.warning(
@@ -344,6 +336,7 @@ class QueryApplication:
     async def _heartbeat_turn(
         self,
         request: QueryRequest,
+        claim_token: str,
         owner_task: asyncio.Task[object] | None,
     ) -> None:
         """独立续租健康长流；续租失败时 fence 掉旧执行者。"""
@@ -352,7 +345,10 @@ class QueryApplication:
             await asyncio.sleep(interval)
             try:
                 renewed = await self._conversations.renew_turn(
-                    request.user_id, request.conversation_uid, request.turn_uid
+                    request.user_id,
+                    request.conversation_uid,
+                    request.turn_uid,
+                    claim_token,
                 )
             except Exception:
                 renewed = False
@@ -366,14 +362,16 @@ class QueryApplication:
         request: QueryRequest,
         context: QueryContext,
         intent: QueryIntent,
+        trusted_time_range: TrustedTimeRange | None,
     ) -> ValidatedQuery | None:
         """执行一次生成、静态门禁、EXPLAIN 和唯一修复闭环。"""
-        draft = await self._planner.draft(context, intent)
+        draft = await self._planner.draft(context, intent, trusted_time_range)
         for attempt in range(2):
             result = await validate_query(
                 draft,
                 context,
                 intent,
+                trusted_time_range=trusted_time_range,
                 dw_database=self._dw_database,
             )
             issues = result.issues
@@ -402,6 +400,14 @@ class QueryApplication:
                             "query_schema_changed",
                             "query_metadata",
                             "查询使用的物理模式已变化，请重试",
+                            retryable=True,
+                            http_status=409,
+                        )
+                    if not await self._metadata.bindings_are_authoritative(context):
+                        raise DataAgentError(
+                            "query_metadata_changed",
+                            "query_metadata",
+                            "查询使用的业务语义绑定已变化，请重试",
                             retryable=True,
                             http_status=409,
                         )
@@ -449,6 +455,7 @@ class QueryApplication:
                 draft = await self._planner.repair(
                     context,
                     intent,
+                    trusted_time_range,
                     draft,
                     issues,
                 )
@@ -462,9 +469,60 @@ class QueryApplication:
             )
         raise AssertionError("查询修复循环必须返回或抛出")
 
+    def _trusted_time_range(
+        self,
+        request: QueryRequest,
+        context: QueryContext,
+        intent: QueryIntent,
+    ) -> TrustedTimeRange | None:
+        """在 Meta 绑定后仅用权威字段类型派生自然时间边界。"""
+        if intent.time_quote is None or intent.time_filter is not None:
+            return None
+        if intent.time_column_quote is None:
+            raise DataAgentError(
+                "query_time_unsupported",
+                "query_validation",
+                "时间范围缺少已绑定的时间字段",
+                http_status=422,
+            )
+        column_id = context.bindings.get(intent.time_column_quote)
+        column = next(
+            (
+                column
+                for table in context.physical_schema.tables
+                for column in table.columns
+                if column.id == column_id
+            ),
+            None,
+        )
+        if column is None:
+            raise DataAgentError(
+                "query_time_unsupported",
+                "query_validation",
+                "时间范围无法绑定到权威时间字段",
+                http_status=422,
+            )
+        trusted = resolve_trusted_time_range(
+            source_quote=intent.time_quote,
+            column_id=column.id,
+            column_name=column.name,
+            data_type=column.data_type,
+            user_timezone=request.supplemental_context.user_timezone,
+            now_utc=self._now(),
+        )
+        if trusted is None:
+            raise DataAgentError(
+                "query_time_unsupported",
+                "query_validation",
+                "时间范围或时间字段类型不受支持",
+                http_status=422,
+            )
+        return trusted
+
     async def _complete(
         self,
         request: QueryRequest,
+        claim_token: str,
         content: str,
         *,
         semantic_fingerprint: str | None = None,
@@ -474,6 +532,7 @@ class QueryApplication:
             request.user_id,
             request.conversation_uid,
             request.turn_uid,
+            claim_token,
             content,
             semantic_fingerprint=semantic_fingerprint,
         )

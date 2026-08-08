@@ -79,12 +79,13 @@ one shared `LLMClient`, injects it into the readiness classifier and chat servic
 and closes it before the other shared resources during lifespan shutdown.
 
 Starting a turn atomically inserts the user message and sets
-`active_turn_uid`. It returns the persisted message plus a bounded context:
+`active_turn_uid` plus a new opaque claim token. It returns the persisted
+message, the claim token only to the execution owner, and a bounded context:
 the current summary, recent messages after its cursor, and relevant active
 `user.*` rows for the same `user_id`. Completing a turn atomically inserts
 the assistant message, inserts one extraction outbox row, releases the active
-turn, and only then reports success. Replaying the same `turn_uid` and content
-returns the existing result.
+turn by matching both ownership coordinates, and only then reports success.
+Replaying the same `turn_uid` and content returns the existing result read-only.
 
 Chat orchestration validates and parses the bounded DDL before claiming a turn,
 then runs `start_turn -> readiness -> model -> complete_turn`. The prompt contains
@@ -92,8 +93,9 @@ only the fixed DDL-assistant policy, canonical current DDL, source, bounded
 conversation context, and authoritative user-memory hits. It may explain or
 draft a DDL clarification answer, but it cannot submit
 `/metadata/ddl-jobs/{job_id}/answers`; only an explicit user confirmation may use
-that job contract. A failed model or completion call leaves the active turn
-leased, so the client must retry the same `turn_uid`, content, source, and DDL.
+that job contract. A failed model or completion call abandons only its own claim
+generation, so the client can safely retry the same `turn_uid`, content, source,
+and DDL without allowing a stale owner to affect a later reclaim.
 
 History uses the auto-increment row ID as an exclusive `before` keyset cursor.
 Rows are selected newest-first for paging and returned oldest-first for display.
@@ -268,6 +270,19 @@ await fetch(`/api/v1/conversations/${conversationUid}/chat-turns`, {
 
 The server owns model credentials, bounded context, readiness, idempotency, and
 assistant-message persistence. The browser owns only explicit user interaction.
+
+### Turn Claim and Query Clarification Contracts
+
+- Each first claim and expired reclaim creates a new opaque claim token. Renew,
+  complete and abandon compare both `turn_uid` and token; a suspended older
+  owner cannot mutate a reclaimed generation.
+- The token is an internal ownership credential. Do not log it, include it in
+  audit identity, or emit it in Query/Chat streaming events. The public
+  Conversation start/complete protocol may carry it only for the two-step owner.
+- Pending Query clarification uses authoritative persisted messages, stopping at
+  the preceding non-clarification assistant result. Its message and character
+  budgets are independent of summary/context limits; overflow fails closed with
+  `query_clarification_chain_too_large`.
 
 - Failed turns keep an independent `turn_abandoned_at` lease coordinate: the
   same `turn_uid` may retry immediately, while a different turn may take over

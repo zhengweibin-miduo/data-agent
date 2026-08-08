@@ -89,6 +89,7 @@ def _service(
                 ],
                 memories=[],
             ),
+            claim_token="c" * 32,
         )
     )
     conversations.assistant_message = AsyncMock(return_value=existing)
@@ -171,7 +172,7 @@ async def test_chat_turn_persists_fixed_not_ready_message_without_answer_call() 
 
     check_equal(
         "未就绪固定文案",
-        conversations.complete_turn.await_args.args[3],
+        conversations.complete_turn.await_args.args[4],
         "数据准备中，请稍后重试",
     )
     check_equal("未就绪不调用回答模型", model.ainvoke.await_count, 0)
@@ -293,7 +294,7 @@ async def test_chat_turn_releases_owner_when_assistant_replay_read_fails() -> No
         await service.run_turn("conversation-1", _request())
 
     conversations.abandon_turn.assert_awaited_once_with(
-        "user-1", "conversation-1", "turn-1"
+        "user-1", "conversation-1", "turn-1", "c" * 32
     )
 
 
@@ -306,5 +307,5 @@ async def test_chat_turn_releases_owner_when_assistant_replay_is_cancelled() -> 
         await service.run_turn("conversation-1", _request())
 
     conversations.abandon_turn.assert_awaited_once_with(
-        "user-1", "conversation-1", "turn-1"
+        "user-1", "conversation-1", "turn-1", "c" * 32
     )

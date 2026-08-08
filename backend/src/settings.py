@@ -139,6 +139,12 @@ class MySQLSettings(SettingsModel):
     """MySQL 连接配置。"""
 
     url: str = Field(description="SQLAlchemy asyncmy 使用的 MySQL 连接地址。")
+    generation_lock_pool_size: int = Field(
+        default=16, gt=0, le=128, description="generation lock owner 专用池容量。"
+    )
+    generation_lock_pool_timeout_seconds: float = Field(
+        default=1, gt=0, le=30, description="generation lock owner 池取连接超时。"
+    )
 
 
 class QuerySettings(SettingsModel):
@@ -162,6 +168,18 @@ class QuerySettings(SettingsModel):
         ge=4096,
         le=16_777_216,
         description="单个 NDJSON 结果批次允许占用的最大字节数。",
+    )
+    clarification_chain_message_limit: int = Field(
+        default=100,
+        gt=0,
+        le=1000,
+        description="Query 权威澄清证据链的独立消息预算。",
+    )
+    clarification_chain_max_chars: int = Field(
+        default=262_144,
+        gt=0,
+        le=1_048_576,
+        description="Query 权威澄清证据链的独立字符预算。",
     )
 
     @field_validator("read_url")
@@ -597,9 +615,7 @@ class AppSettings(SettingsModel):
             )
 
         if mysql_instance_identity(query_url) != mysql_instance_identity(mysql_url):
-            raise ValueError(
-                "query.read_url 必须与 mysql.url 连接同一 MySQL 实例"
-            )
+            raise ValueError("query.read_url 必须与 mysql.url 连接同一 MySQL 实例")
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")

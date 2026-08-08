@@ -1,8 +1,9 @@
 """Accepted snapshot generation WRITE lock 边界检查。"""
 
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -13,9 +14,33 @@ from ddl_metadata.adapters.mysql.accepted_snapshot import (
 )
 from ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from errors import DataAgentError
+from infrastructure.generation_locks import GenerationLockManager
 from models.physical import PhysicalSchema
 from models.semantic import SemanticMetadata
 from tests.helpers.checks import check_equal, check_exception
+
+
+class _GenerationLocks:
+    """把测试锁上下文投影为专用 manager 的 WRITE seam。"""
+
+    def __init__(
+        self,
+        factory: Callable[..., AbstractAsyncContextManager[None]],
+    ) -> None:
+        self._factory = factory
+
+    def write(
+        self, names: Iterable[str], timeout_seconds: int
+    ) -> AbstractAsyncContextManager[None]:
+        """以生产签名返回测试控制的锁上下文。"""
+        return self._factory(names, timeout_seconds=timeout_seconds)
+
+
+def _lock_manager(
+    factory: Callable[..., AbstractAsyncContextManager[None]],
+) -> GenerationLockManager:
+    """构造只实现本测试所需 WRITE seam 的类型化替身。"""
+    return cast(GenerationLockManager, _GenerationLocks(factory))
 
 
 def _snapshot() -> PhysicalSchema:
@@ -205,12 +230,11 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
         "build_desired_tables",
         lambda *args, **kwargs: desired,
     )
-    monkeypatch.setattr(
-        snapshots.MySQLDatabase, "exclusive_service_locks", generation_locks
-    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
-    await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
+    await MySQLAcceptedSnapshotPublisher(
+        _lock_manager(generation_locks), {"local": "source_demo"}
+    ).publish(
         _accepted_snapshot()
     )
 
@@ -272,15 +296,12 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
         "build_desired_tables",
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
-    monkeypatch.setattr(
-        snapshots.MySQLDatabase, "exclusive_service_locks", generation_locks
-    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     with pytest.raises(LookupError) as captured:
-        await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
-            _accepted_snapshot()
-        )
+        await MySQLAcceptedSnapshotPublisher(
+            _lock_manager(generation_locks), {"local": "source_demo"}
+        ).publish(_accepted_snapshot())
 
     check_equal("发布失败保留原异常实例", captured.value is signal, True)
     check_equal(
@@ -324,13 +345,12 @@ async def test_snapshot_release_failure_after_commit_does_not_reverse_success(
         "build_desired_tables",
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
-    monkeypatch.setattr(
-        snapshots.MySQLDatabase, "exclusive_service_locks", generation_locks
-    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
     monkeypatch.setattr(snapshots.logger, "warning", warnings.append)
 
-    await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
+    await MySQLAcceptedSnapshotPublisher(
+        _lock_manager(generation_locks), {"local": "source_demo"}
+    ).publish(
         _accepted_snapshot()
     )
 
@@ -369,15 +389,12 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
         "build_desired_tables",
         lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
     )
-    monkeypatch.setattr(
-        snapshots.MySQLDatabase, "exclusive_service_locks", unavailable_lock
-    )
     monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
 
     with pytest.raises(DataAgentError) as captured:
-        await MySQLAcceptedSnapshotPublisher({"local": "source_demo"}).publish(
-            _accepted_snapshot()
-        )
+        await MySQLAcceptedSnapshotPublisher(
+            _lock_manager(unavailable_lock), {"local": "source_demo"}
+        ).publish(_accepted_snapshot())
 
     check_exception("锁竞争投影为业务错误", captured.value, DataAgentError)
     check_equal("锁竞争错误码", captured.value.code, "generation_lock_unavailable")

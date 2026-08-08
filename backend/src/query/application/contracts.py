@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from typing import Literal, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from conversation.models import CompleteTurnResponse, MessageRecord, StartTurnResponse
 from models.base import ContractModel
@@ -17,8 +18,27 @@ from query.domain import (
     QueryDraft,
     QueryIntent,
     SQLValidationIssue,
+    TrustedTimeRange,
     ValidatedQuery,
 )
+
+
+class SupplementalQueryContext(ContractModel):
+    """由请求方显式提供的 Query 解释事实。"""
+
+    user_timezone: str = Field(
+        min_length=1, max_length=128, description="用户的 IANA 时区键。"
+    )
+
+    @field_validator("user_timezone")
+    @classmethod
+    def validate_user_timezone(cls, value: str) -> str:
+        """拒绝主机不可用的 IANA 时区键。"""
+        try:
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError) as error:
+            raise ValueError("用户时区必须是可用的 IANA 时区键") from error
+        return value
 
 
 class QueryRequest(ContractModel):
@@ -32,6 +52,9 @@ class QueryRequest(ContractModel):
     )
     turn_uid: str = Field(min_length=1, max_length=64, description="轮次唯一标识。")
     question: str = Field(min_length=1, max_length=32768, description="用户查询原文。")
+    supplemental_context: SupplementalQueryContext = Field(
+        description="Query 解释所需的显式补充上下文。"
+    )
     ddl_context: DDLJobRequest = Field(description="当前数据来源和 MySQL DDL。")
 
 
@@ -117,11 +140,24 @@ class ConversationPort(Protocol):
         """读取已完成轮次的助手消息。"""
         ...
 
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        """读取当前 Query 的权威未结束澄清链。"""
+        ...
+
     async def complete_turn(
         self,
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
         *,
         semantic_fingerprint: str | None = None,
@@ -134,12 +170,17 @@ class ConversationPort(Protocol):
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
     ) -> None:
         """释放失败或取消的查询轮次执行权。"""
         ...
 
     async def renew_turn(
-        self, user_id: str, conversation_uid: str, turn_uid: str
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
     ) -> bool:
         """仅当当前请求仍持有轮次时续租。"""
         ...
@@ -182,7 +223,12 @@ class QueryMetadataPort(Protocol):
 class QueryPlannerPort(Protocol):
     """生成严格 QueryDraft 并消费唯一一次修复预算。"""
 
-    async def draft(self, context: QueryContext, intent: QueryIntent) -> QueryDraft:
+    async def draft(
+        self,
+        context: QueryContext,
+        intent: QueryIntent,
+        trusted_time_range: TrustedTimeRange | None,
+    ) -> QueryDraft:
         """生成初始查询草稿。"""
         ...
 
@@ -190,6 +236,7 @@ class QueryPlannerPort(Protocol):
         self,
         context: QueryContext,
         intent: QueryIntent,
+        trusted_time_range: TrustedTimeRange | None,
         draft: QueryDraft,
         issues: tuple[SQLValidationIssue, ...],
     ) -> QueryDraft:
@@ -204,9 +251,7 @@ class QueryReadinessPort(Protocol):
         """仅当全部实际目标表处于 streaming 时返回真。"""
         ...
 
-    def hold(
-        self, target_tables: tuple[str, ...]
-    ) -> AbstractAsyncContextManager[None]:
+    def hold(self, target_tables: tuple[str, ...]) -> AbstractAsyncContextManager[None]:
         """在就绪复核和完整执行期间固定目标表同步代次。"""
         ...
 

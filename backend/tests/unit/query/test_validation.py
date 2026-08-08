@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -23,8 +24,191 @@ from query.domain import (
     QueryParameter,
     QueryType,
     SortIntent,
+    resolve_trusted_time_range,
     validate_query,
 )
+
+
+@pytest.mark.parametrize(
+    ("quote", "now", "zone", "data_type", "expected_start", "expected_end"),
+    [
+        (
+            "2024年",
+            datetime(2026, 8, 8, tzinfo=UTC),
+            "Asia/Shanghai",
+            "DATE",
+            "2024-01-01",
+            "2025-01-01",
+        ),
+        (
+            "2024年2月",
+            datetime(2026, 8, 8, tzinfo=UTC),
+            "Asia/Shanghai",
+            "DATE",
+            "2024-02-01",
+            "2024-03-01",
+        ),
+        (
+            "今年",
+            datetime(2026, 8, 8, tzinfo=UTC),
+            "Asia/Shanghai",
+            "DATETIME",
+            "2026-01-01 00:00:00",
+            "2027-01-01 00:00:00",
+        ),
+        (
+            "去年",
+            datetime(2026, 8, 8, tzinfo=UTC),
+            "Asia/Shanghai",
+            "DATETIME",
+            "2025-01-01 00:00:00",
+            "2026-01-01 00:00:00",
+        ),
+        (
+            "本月",
+            datetime(2026, 1, 15, tzinfo=UTC),
+            "Asia/Shanghai",
+            "DATE",
+            "2026-01-01",
+            "2026-02-01",
+        ),
+        (
+            "上月",
+            datetime(2026, 1, 15, tzinfo=UTC),
+            "Asia/Shanghai",
+            "DATE",
+            "2025-12-01",
+            "2026-01-01",
+        ),
+        (
+            "最近3天",
+            datetime(2026, 3, 9, 12, tzinfo=UTC),
+            "America/New_York",
+            "TIMESTAMP",
+            "2026-03-07 05:00:00",
+            "2026-03-10 04:00:00",
+        ),
+    ],
+)
+def test_supported_natural_time_ranges_use_literal_half_open_boundaries(
+    quote: str,
+    now: datetime,
+    zone: str,
+    data_type: str,
+    expected_start: str,
+    expected_end: str,
+) -> None:
+    """自然时间只由固定时钟、用户时区和权威字段类型派生。"""
+    result = resolve_trusted_time_range(
+        source_quote=quote,
+        column_id="column-created-at",
+        column_name="created_at",
+        data_type=data_type,
+        user_timezone=zone,
+        now_utc=now,
+    )
+
+    assert result is not None
+    assert result.start == expected_start
+    assert result.end == expected_end
+
+
+@pytest.mark.parametrize(
+    ("data_type", "expected_start", "expected_end"),
+    [
+        ("DATE", "2024-01-01", "2025-01-01"),
+        ("DATETIME", "2024-01-01 00:00:00", "2025-01-01 00:00:00"),
+        ("TIMESTAMP", "2023-12-31 16:00:00", "2024-12-31 16:00:00"),
+    ],
+)
+async def test_trusted_time_range_requires_both_exact_boundaries(
+    data_type: str,
+    expected_start: str,
+    expected_end: str,
+) -> None:
+    """可信时间范围只接受同一权威字段的左闭右开参数谓词。"""
+    context = _context()
+    table = context.physical_schema.tables[0]
+    context = context.model_copy(
+        update={
+            "physical_schema": context.physical_schema.model_copy(
+                update={
+                    "tables": [
+                        table.model_copy(
+                            update={
+                                "columns": [
+                                    column.model_copy(update={"data_type": data_type})
+                                    if column.id == "column-created-at"
+                                    else column
+                                    for column in table.columns
+                                ]
+                            }
+                        )
+                    ]
+                }
+            ),
+            "bindings": {
+                "金额": "column-amount",
+                "下单时间": "column-created-at",
+            }
+        }
+    )
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        aggregation="sum",
+        aggregation_quote="总和",
+        measure_quotes=["金额"],
+        time_quote="2024年",
+        time_column_quote="下单时间",
+    )
+    trusted = resolve_trusted_time_range(
+        source_quote="2024年",
+        column_id="column-created-at",
+        column_name="created_at",
+        data_type=data_type,
+        user_timezone="Asia/Shanghai",
+        now_utc=datetime(2026, 8, 8, tzinfo=UTC),
+    )
+    assert trusted is not None
+
+    valid = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT SUM(o.amount) AS total FROM dw.orders AS o "
+                "WHERE o.created_at >= :trusted_time_start "
+                "AND o.created_at < :trusted_time_end"
+            ),
+            params={
+                "trusted_time_start": expected_start,
+                "trusted_time_end": expected_end,
+            },
+            table_ids=["table-orders"],
+            column_ids=["column-amount", "column-created-at"],
+        ),
+        context,
+        intent,
+        trusted_time_range=trusted,
+        dw_database="dw",
+    )
+    missing_end = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT SUM(o.amount) AS total FROM dw.orders AS o "
+                "WHERE o.created_at >= :trusted_time_start"
+            ),
+            params={"trusted_time_start": expected_start},
+            table_ids=["table-orders"],
+            column_ids=["column-amount", "column-created-at"],
+        ),
+        context,
+        intent,
+        trusted_time_range=trusted,
+        dw_database="dw",
+    )
+
+    assert valid.validated is not None
+    assert missing_end.validated is None
+    assert missing_end.issues[0].code == "predicate_mismatch"
 
 
 def _context() -> QueryContext:
@@ -2353,9 +2537,7 @@ def test_duplicate_filter_clause_cannot_replace_another_clause() -> None:
 
 def test_each_explicit_sort_requires_a_distinct_sort_intent() -> None:
     """重复首项排序不能冒充原文中的次级排序。"""
-    duplicate = SortIntent(
-        quote="销售额", direction="desc", direction_quote="降序"
-    )
+    duplicate = SortIntent(quote="销售额", direction="desc", direction_quote="降序")
     with pytest.raises(ValueError, match="每项排序"):
         QueryIntent(
             query_type=QueryType.RANKING,

@@ -27,11 +27,13 @@ from query.application.contracts import (
     QueryBatch,
     QueryClarification,
     QueryExecutorPort,
+    QueryExplainRejected,
     QueryIntentPort,
     QueryMetadataPort,
     QueryPlannerPort,
     QueryReadinessPort,
     QueryRequest,
+    SupplementalQueryContext,
 )
 from query.application.service import QueryApplication
 from query.domain import (
@@ -42,6 +44,8 @@ from query.domain import (
     SQLValidationIssue,
     ValidatedQuery,
 )
+
+_SUPPLEMENTAL_CONTEXT = SupplementalQueryContext(user_timezone="Asia/Shanghai")
 
 
 def _message(role: MessageRole, content: str) -> MessageRecord:
@@ -63,6 +67,7 @@ class _Conversations:
         self.completed: list[str] = []
         self.abandoned = 0
         self.semantic_fingerprints: list[str | None] = []
+        self.chain = [_message(MessageRole.USER, "查询销售额总和")]
 
     async def start_turn(
         self,
@@ -78,11 +83,16 @@ class _Conversations:
                 messages=[ContextMessage(role=MessageRole.USER, content=content)],
                 memories=[],
             ),
+            claim_token="c" * 32,
         )
 
     async def assistant_message(self, *_args: object) -> MessageRecord | None:
         """表示当前轮次尚未完成。"""
         return None
+
+    async def pending_query_chain(self, *_args: object, **_kwargs: object):
+        """返回权威 Query 澄清链替身。"""
+        return self.chain
 
     async def complete_turn(
         self, *_args: object, semantic_fingerprint: str | None = None
@@ -175,6 +185,110 @@ class _MultiClarificationIntentParser(_RecordingIntentParser):
         )
 
 
+class _NaturalTimeConversations(_Conversations):
+    """Return the original time question, clarification, and short answer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chain = [
+            _message(MessageRole.USER, "查询今年销售额总和"),
+            _message(MessageRole.ASSISTANT, "请明确使用哪个时间字段").model_copy(
+                update={"semantic_fingerprint": "query:clarification"}
+            ),
+            _message(MessageRole.USER, "下单时间"),
+        ]
+
+
+class _NaturalTimeIntentParser:
+    """Reconstruct a trusted natural range from user-only chain evidence."""
+
+    async def parse(
+        self,
+        question: str,
+        context_messages: list[str],
+        evidence_messages: list[str],
+    ) -> QueryIntent:
+        assert question == "下单时间"
+        assert context_messages[0] == "user: 查询今年销售额总和"
+        assert evidence_messages == ["查询今年销售额总和", "下单时间"]
+        return QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="总和",
+            measure_quotes=["销售额"],
+            time_quote="今年",
+            time_column_quote="下单时间",
+        )
+
+
+class _NaturalTimeMetadata:
+    """Bind both the measure and clarified temporal physical column."""
+
+    async def build_context(
+        self, question: str, intent: QueryIntent, schema: PhysicalSchema
+    ) -> QueryContext:
+        del question, intent
+        table = schema.tables[0]
+        columns = {column.name: column.id for column in table.columns}
+        return QueryContext(
+            physical_schema=schema,
+            bindings={
+                "销售额": columns["amount"],
+                "下单时间": columns["created_at"],
+            },
+        )
+
+    async def relationships_are_authoritative(self, schema: PhysicalSchema) -> bool:
+        del schema
+        return True
+
+    async def bindings_are_authoritative(self, context: QueryContext) -> bool:
+        del context
+        return True
+
+
+class _NaturalTimePlanner:
+    """Emit only the two server-owned trusted temporal parameters."""
+
+    async def draft(
+        self,
+        context: QueryContext,
+        intent: QueryIntent,
+        trusted_time_range: object,
+    ) -> QueryDraft:
+        del intent
+        assert trusted_time_range is not None
+        trusted = cast(object, trusted_time_range)
+        table = context.physical_schema.tables[0]
+        columns = {column.name: column.id for column in table.columns}
+        return QueryDraft(
+            sql=(
+                "SELECT SUM(o.amount) AS total FROM dw.orders AS o "
+                "WHERE o.created_at >= :trusted_time_start "
+                "AND o.created_at < :trusted_time_end"
+            ),
+            params={
+                "trusted_time_start": getattr(trusted, "start"),
+                "trusted_time_end": getattr(trusted, "end"),
+            },
+            table_ids=[table.id],
+            column_ids=[columns["amount"], columns["created_at"]],
+        )
+
+    async def repair(
+        self,
+        context: QueryContext,
+        intent: QueryIntent,
+        trusted_time_range: object,
+        draft: QueryDraft,
+        issues: tuple[SQLValidationIssue, ...],
+    ) -> QueryDraft:
+        raise AssertionError(
+            f"trusted range draft must validate: {context} {intent} "
+            f"{trusted_time_range} {draft} {issues}"
+        )
+
+
 class _IndependentQueryConversations(_Conversations):
     """返回一个已完成旧查询和当前独立请求。"""
 
@@ -182,6 +296,7 @@ class _IndependentQueryConversations(_Conversations):
         self, *_args: object, semantic_fingerprint: str | None = None
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        self.chain = [_message(MessageRole.USER, "查询销售额总和")]
         return StartTurnResponse(
             message=_message(MessageRole.USER, "查询销售额总和"),
             context=ConversationContext(
@@ -192,6 +307,7 @@ class _IndependentQueryConversations(_Conversations):
                 ],
                 memories=[],
             ),
+            claim_token="c" * 32,
         )
 
 
@@ -202,6 +318,7 @@ class _ResolvedClarificationConversations(_Conversations):
         self, *_args: object, semantic_fingerprint: str | None = None
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        self.chain = [_message(MessageRole.USER, "查询销售额总和")]
         return StartTurnResponse(
             message=_message(MessageRole.USER, "查询销售额总和"),
             context=ConversationContext(
@@ -218,6 +335,7 @@ class _ResolvedClarificationConversations(_Conversations):
                 ],
                 memories=[],
             ),
+            claim_token="c" * 32,
         )
 
 
@@ -228,6 +346,17 @@ class _MultiClarificationConversations(_Conversations):
         self, *_args: object, semantic_fingerprint: str | None = None
     ) -> StartTurnResponse:
         del semantic_fingerprint
+        self.chain = [
+            _message(MessageRole.USER, "按地区查询销售额总和"),
+            _message(
+                MessageRole.ASSISTANT, "销售额是下单金额还是支付金额？"
+            ).model_copy(update={"semantic_fingerprint": "query:clarification"}),
+            _message(MessageRole.USER, "支付金额"),
+            _message(MessageRole.ASSISTANT, "要查询哪个地区？").model_copy(
+                update={"semantic_fingerprint": "query:clarification"}
+            ),
+            _message(MessageRole.USER, "华东"),
+        ]
         return StartTurnResponse(
             message=_message(MessageRole.USER, "华东"),
             context=ConversationContext(
@@ -250,6 +379,46 @@ class _MultiClarificationConversations(_Conversations):
                 ],
                 memories=[],
             ),
+            claim_token="c" * 32,
+        )
+
+
+class _LongClarificationConversations(_Conversations):
+    """返回超过普通 Conversation 窗口但仍在 Query 独立预算内的证据链。"""
+
+    async def start_turn(
+        self, *_args: object, semantic_fingerprint: str | None = None
+    ) -> StartTurnResponse:
+        del semantic_fingerprint
+        filler = "补充口径" * 500
+        self.chain = [
+            *[
+                _message(MessageRole.USER, f"{index}:{filler}")
+                for index in range(21)
+            ],
+            _message(MessageRole.USER, "查询销售额总和"),
+        ]
+        return StartTurnResponse(
+            message=self.chain[-1],
+            context=ConversationContext(
+                messages=[
+                    ContextMessage(role=MessageRole.USER, content="查询销售额总和")
+                ],
+                memories=[],
+            ),
+            claim_token="c" * 32,
+        )
+
+
+class _OversizedClarificationConversations(_Conversations):
+    """模拟持久化层对独立 Query 证据预算的稳定拒绝。"""
+
+    async def pending_query_chain(self, *_args: object, **_kwargs: object):
+        raise DataAgentError(
+            "query_clarification_chain_too_large",
+            "query_clarification_chain",
+            "查询澄清证据链超过安全预算",
+            http_status=422,
         )
 
 
@@ -295,6 +464,7 @@ async def test_planner_receives_configured_dw_database() -> None:
             )
         ),
         QueryIntent(query_type=QueryType.AGGREGATE),
+        None,
     )
 
     messages = runnable.ainvoke.await_args.args[0]
@@ -323,11 +493,12 @@ async def test_planner_maps_malformed_structured_draft(method: str) -> None:
 
     with pytest.raises(DataAgentError, match="SQL 草稿|修复草稿") as captured:
         if method == "draft":
-            await adapter.draft(context, intent)
+            await adapter.draft(context, intent, None)
         else:
             await adapter.repair(
                 context,
                 intent,
+                None,
                 QueryDraft(sql="SELECT 1", table_ids=["table"]),
                 (SQLValidationIssue(code="invalid"),),
             )
@@ -351,6 +522,7 @@ async def test_stream_completes_only_one_authoritative_clarification() -> None:
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -381,6 +553,7 @@ async def test_independent_query_does_not_reuse_completed_history_as_evidence() 
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额总和",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -411,6 +584,7 @@ async def test_resolved_clarification_does_not_pollute_independent_query() -> No
                 conversation_uid="conversation-1",
                 turn_uid="turn-2",
                 question="查询销售额总和",
+                supplemental_context=_SUPPLEMENTAL_CONTEXT,
                 ddl_context=DDLJobRequest(
                     source="erp",
                     ddl=(
@@ -443,6 +617,7 @@ async def test_multi_round_clarification_keeps_original_user_evidence() -> None:
                 conversation_uid="conversation-1",
                 turn_uid="turn-3",
                 question="华东",
+                supplemental_context=_SUPPLEMENTAL_CONTEXT,
                 ddl_context=DDLJobRequest(
                     source="erp",
                     ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY)",
@@ -452,6 +627,103 @@ async def test_multi_round_clarification_keeps_original_user_evidence() -> None:
     )
     assert parser.messages[0] == "user: 按地区查询销售额总和"
     assert parser.evidence_messages == ["按地区查询销售额总和", "支付金额", "华东"]
+
+
+async def test_time_column_answer_executes_the_original_natural_range() -> None:
+    """A short time-column answer completes the original trusted range flow."""
+    executor = _Executor()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _NaturalTimeConversations()),
+        intents=cast(QueryIntentPort, _NaturalTimeIntentParser()),
+        metadata=cast(QueryMetadataPort, _NaturalTimeMetadata()),
+        planner=cast(QueryPlannerPort, _NaturalTimePlanner()),
+        readiness=cast(QueryReadinessPort, _Ready()),
+        executor=cast(QueryExecutorPort, executor),
+        dw_database="dw",
+        now=lambda: datetime(2026, 8, 8, tzinfo=UTC),
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-time-column",
+        question="下单时间",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl=(
+                "CREATE TABLE orders (id BIGINT PRIMARY KEY, "
+                "amount DECIMAL(10,2), created_at TIMESTAMP)"
+            ),
+        ),
+    )
+
+    events = [event async for event in application.stream(request)]
+
+    assert events[-1].kind == "complete"
+    assert executor.explained == 2
+    assert executor.executed == 1
+
+
+async def test_query_uses_durable_chain_beyond_ordinary_context_budgets() -> None:
+    """Query 意图证据不得被 20 条/32768 字符的普通上下文预算截断。"""
+    parser = _RecordingIntentParser()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _LongClarificationConversations()),
+        intents=cast(QueryIntentPort, parser),
+        metadata=cast(QueryMetadataPort, _Metadata()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-long",
+        question="查询销售额总和",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    await anext(application.stream(request))
+
+    assert len(parser.messages) == 22
+    assert sum(map(len, parser.messages)) > 32_768
+    assert parser.evidence_messages[-1] == "查询销售额总和"
+
+
+async def test_query_propagates_independent_clarification_budget_overflow() -> None:
+    """独立澄清链超预算必须稳定失败并释放当前 turn claim。"""
+    conversations = _OversizedClarificationConversations()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, conversations),
+        intents=cast(QueryIntentPort, _MustNotRun()),
+        metadata=cast(QueryMetadataPort, _MustNotRun()),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-large",
+        question="查询销售额总和",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY)",
+        ),
+    )
+
+    with pytest.raises(DataAgentError) as captured:
+        _ = [event async for event in application.stream(request)]
+
+    assert captured.value.code == "query_clarification_chain_too_large"
+    assert conversations.abandoned == 1
 
 
 async def test_completed_turn_replays_without_duplicate_query_work() -> None:
@@ -470,6 +742,7 @@ async def test_completed_turn_replays_without_duplicate_query_work() -> None:
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -501,6 +774,7 @@ async def test_clarification_replay_preserves_terminal_event_kind() -> None:
                 conversation_uid="conversation-1",
                 turn_uid="turn-1",
                 question="查询销售额",
+                supplemental_context=_SUPPLEMENTAL_CONTEXT,
                 ddl_context=DDLJobRequest(
                     source="erp", ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY)"
                 ),
@@ -539,9 +813,11 @@ class _Planner:
 
     repairs = 0
 
-    async def draft(self, context: QueryContext, intent: QueryIntent) -> QueryDraft:
+    async def draft(
+        self, context: QueryContext, intent: QueryIntent, trusted_time_range: object
+    ) -> QueryDraft:
         """生成初始 SQL 草稿。"""
-        del intent
+        del intent, trusted_time_range
         table = context.physical_schema.tables[0]
         return QueryDraft(
             sql="SELECT SUM(o.amount) AS total FROM dw.orders AS o",
@@ -555,13 +831,14 @@ class _Planner:
         self,
         context: QueryContext,
         intent: QueryIntent,
+        trusted_time_range: object,
         draft: QueryDraft,
         issues: tuple[SQLValidationIssue, ...],
     ) -> QueryDraft:
         """记录不应发生的修复。"""
         del draft, issues
         self.repairs += 1
-        return await self.draft(context, intent)
+        return await self.draft(context, intent, trusted_time_range)
 
 
 class _Ready:
@@ -596,6 +873,124 @@ class _Executor:
         self.executed += 1
         yield QueryBatch(columns=["total"], rows=[[1], [2]])
         yield QueryBatch(columns=["total"], rows=[[3]])
+
+
+class _CoordinatedReadiness(_Ready):
+    """公开当前 generation READ 临界区，供跨层行为断言。"""
+
+    def __init__(self) -> None:
+        self.depth = 0
+
+    async def ready(self, target_tables: tuple[str, ...]) -> bool:
+        assert self.depth == 1
+        return await super().ready(target_tables)
+
+    @asynccontextmanager
+    async def hold(self, target_tables: tuple[str, ...]):
+        del target_tables
+        self.depth += 1
+        try:
+            yield
+        finally:
+            self.depth -= 1
+
+
+class _CoordinatedMetadata(_GroundedMetadata):
+    """断言 authority recheck 与 EXPLAIN 共用同一 READ 临界区。"""
+
+    def __init__(self, readiness: _CoordinatedReadiness) -> None:
+        self._readiness = readiness
+
+    async def relationships_are_authoritative(self, schema: PhysicalSchema) -> bool:
+        assert self._readiness.depth == 1
+        return await super().relationships_are_authoritative(schema)
+
+    async def bindings_are_authoritative(self, context: QueryContext) -> bool:
+        assert self._readiness.depth == 1
+        return await super().bindings_are_authoritative(context)
+
+
+class _CoordinatedExecutor(_Executor):
+    """断言规划 EXPLAIN、最终 EXPLAIN 和流式 SELECT 均受 READ 保护。"""
+
+    def __init__(self, readiness: _CoordinatedReadiness) -> None:
+        self._readiness = readiness
+        self.explained = 0
+        self.executed = 0
+
+    async def explain(self, query: ValidatedQuery) -> None:
+        assert self._readiness.depth == 1
+        await super().explain(query)
+
+    async def execute(self, query: ValidatedQuery):
+        assert self._readiness.depth == 1
+        async for batch in super().execute(query):
+            assert self._readiness.depth == 1
+            yield batch
+
+
+class _ChangingTargetPlanner(_Planner):
+    """首稿与修复稿分别引用不同的权威目标表。"""
+
+    @staticmethod
+    def _draft_for(context: QueryContext, table_name: str) -> QueryDraft:
+        table = next(
+            table
+            for table in context.physical_schema.tables
+            if table.name == table_name
+        )
+        amount = next(column for column in table.columns if column.name == "amount")
+        return QueryDraft(
+            sql=f"SELECT SUM(t.amount) AS total FROM dw.{table_name} AS t",
+            table_ids=[table.id],
+            column_ids=[amount.id],
+        )
+
+    async def draft(
+        self, context: QueryContext, intent: QueryIntent, trusted_time_range: object
+    ) -> QueryDraft:
+        """让首次数据库预检使用 orders。"""
+        del intent, trusted_time_range
+        return self._draft_for(context, "orders")
+
+    async def repair(
+        self,
+        context: QueryContext,
+        intent: QueryIntent,
+        trusted_time_range: object,
+        draft: QueryDraft,
+        issues: tuple[SQLValidationIssue, ...],
+    ) -> QueryDraft:
+        """把被 EXPLAIN 拒绝的首稿改为 refunds 目标。"""
+        del intent, trusted_time_range, draft
+        assert issues == (SQLValidationIssue(code="explain_rejected"),)
+        return self._draft_for(context, "refunds")
+
+
+class _TargetRecordingReadiness(_Ready):
+    """记录每一次 generation READ set 的实际目标。"""
+
+    def __init__(self) -> None:
+        self.held: list[tuple[str, ...]] = []
+
+    @asynccontextmanager
+    async def hold(self, target_tables: tuple[str, ...]):
+        self.held.append(target_tables)
+        yield
+
+
+class _RejectFirstExplainExecutor(_Executor):
+    """只拒绝首稿，使应用消费一次受协调的 repair 预算。"""
+
+    def __init__(self) -> None:
+        self.explained = 0
+        self.executed = 0
+
+    async def explain(self, query: ValidatedQuery) -> None:
+        self.explained += 1
+        if self.explained == 1:
+            raise QueryExplainRejected(SQLValidationIssue(code="explain_rejected"))
+        assert query.target_tables == ("refunds",)
 
 
 class _EmptyExecutor(_Executor):
@@ -684,6 +1079,7 @@ async def test_stream_explains_checks_readiness_and_keeps_all_batches() -> None:
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl=("CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))"),
@@ -718,6 +1114,7 @@ async def test_guard_entry_failure_preserves_error_and_abandons_turn() -> None:
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -751,6 +1148,7 @@ async def test_stream_preserves_empty_metadata_and_closes_early_stream(
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -783,6 +1181,7 @@ async def test_generation_cleanup_failure_does_not_replace_query_error() -> None
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -796,15 +1195,18 @@ async def test_generation_cleanup_failure_does_not_replace_query_error() -> None
 class _RepairPlanner(_Planner):
     """首稿违反星号规则，唯一修复返回安全草稿。"""
 
-    async def draft(self, context: QueryContext, intent: QueryIntent) -> QueryDraft:
+    async def draft(
+        self, context: QueryContext, intent: QueryIntent, trusted_time_range: object
+    ) -> QueryDraft:
         """返回需要静态修复的首稿。"""
-        safe = await super().draft(context, intent)
+        safe = await super().draft(context, intent, trusted_time_range)
         return safe.model_copy(update={"sql": "SELECT * FROM dw.orders"})
 
     async def repair(
         self,
         context: QueryContext,
         intent: QueryIntent,
+        trusted_time_range: object,
         draft: QueryDraft,
         issues: tuple[SQLValidationIssue, ...],
     ) -> QueryDraft:
@@ -812,7 +1214,7 @@ class _RepairPlanner(_Planner):
         del draft
         assert issues[0].code == "select_star"
         self.repairs += 1
-        return await _Planner.draft(self, context, intent)
+        return await _Planner.draft(self, context, intent, trusted_time_range)
 
 
 class _TimeoutExecutor(_Executor):
@@ -841,7 +1243,75 @@ class _FinalExplainFailingExecutor(_Executor):
                 "query_explain",
                 "最终预检超时",
                 http_status=504,
-            )
+        )
+
+
+async def test_authority_readiness_explain_and_select_share_generation_read() -> None:
+    """每个决定性数据库门禁都必须位于相同 target READ 临界区。"""
+    readiness = _CoordinatedReadiness()
+    executor = _CoordinatedExecutor(readiness)
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _Conversations()),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _CoordinatedMetadata(readiness)),
+        planner=cast(QueryPlannerPort, _Planner()),
+        readiness=cast(QueryReadinessPort, readiness),
+        executor=cast(QueryExecutorPort, executor),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-coordinated",
+        question="查询销售额总和",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    events = [event async for event in application.stream(request)]
+
+    assert events[-1].kind == "complete"
+    assert executor.explained == 2
+    assert executor.executed == 1
+    assert readiness.depth == 0
+
+
+async def test_explain_repair_reacquires_the_repaired_target_read_set() -> None:
+    """Repair 改变 AST 目标时不得沿用首稿的 generation READ set。"""
+    readiness = _TargetRecordingReadiness()
+    executor = _RejectFirstExplainExecutor()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _Conversations()),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _GroundedMetadata()),
+        planner=cast(QueryPlannerPort, _ChangingTargetPlanner()),
+        readiness=cast(QueryReadinessPort, readiness),
+        executor=cast(QueryExecutorPort, executor),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-repair-target",
+        question="查询销售额总和",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl=(
+                "CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2));"
+                "CREATE TABLE refunds (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))"
+            ),
+        ),
+    )
+
+    events = [event async for event in application.stream(request)]
+
+    assert events[-1].kind == "complete"
+    assert readiness.held == [("orders",), ("refunds",), ("refunds",)]
+    assert executor.explained == 3
 
 
 async def test_final_explain_has_execution_started_and_failed_audit(
@@ -868,6 +1338,7 @@ async def test_final_explain_has_execution_started_and_failed_audit(
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
@@ -892,6 +1363,7 @@ async def test_stream_repairs_sql_once_but_never_repairs_timeout() -> None:
         conversation_uid="conversation-1",
         turn_uid="turn-1",
         question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
         ddl_context=DDLJobRequest(
             source="erp",
             ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",

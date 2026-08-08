@@ -65,10 +65,9 @@ def _patch_api_startup(monkeypatch: MonkeyPatch) -> None:
         application.LLMClient,
     ):
         monkeypatch.setattr(manager, "initialize", Mock(return_value=object()))
+    monkeypatch.setattr(application.GenerationLockManager, "initialize", AsyncMock())
     monkeypatch.setattr(
-        application.MySQLDatabase,
-        "check_locking_service",
-        AsyncMock(),
+        application.GenerationLockManager, "check_capability", AsyncMock()
     )
 
 
@@ -98,6 +97,7 @@ _API_CLOSES = (
     (application.TEIEmbeddingClient, "tei"),
     (application.QdrantClient, "qdrant"),
     (application.ElasticsearchClient, "elasticsearch"),
+    (application.GenerationLockManager, "generation_locks"),
     (application.MySQLDatabase, "mysql"),
     (application.RedisClient, "redis"),
 )
@@ -134,6 +134,7 @@ async def test_api_lifespan_drains_after_final_stopped_log(
             "tei",
             "qdrant",
             "elasticsearch",
+            "generation_locks",
             "mysql",
             "redis",
             "application.lifecycle.stopped",

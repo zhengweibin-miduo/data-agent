@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import InitVar, dataclass
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import sqlglot
 from pydantic import Field
@@ -369,8 +370,23 @@ class QueryIntent(ContractModel):
                 raise ValueError("聚合运算必须与用户原文精确一致")
         has_time_ambiguity = any(item.slot == "time" for item in self.ambiguities)
         has_measure_ambiguity = any(item.slot == "measure" for item in self.ambiguities)
-        if self.time_quote and self.time_filter is None and not has_time_ambiguity:
-            raise ValueError("时间范围必须提供可验证的过滤契约")
+        if (
+            self.time_quote
+            and self.time_filter is None
+            and self.time_column_quote is None
+            and not has_time_ambiguity
+        ):
+            raise ValueError("时间范围必须提供时间字段或可验证过滤契约")
+        if (
+            self.time_quote
+            and self.time_filter is None
+            and not has_time_ambiguity
+            and not re.fullmatch(
+                r"(?:\d{4}年(?:\d{1,2}月)?|今年|去年|本月|上月|最近\s*\d+\s*天)",
+                self.time_quote,
+            )
+        ):
+            raise ValueError("时间范围不在可确定性解析的封闭语法内")
         if self.grain and self.time_column_quote is None and not has_time_ambiguity:
             raise ValueError("时间粒度必须提供时间字段契约")
         grain_markers = {
@@ -472,8 +488,7 @@ class QueryIntent(ContractModel):
             user_text,
         )
         if explicit_time_range and not (
-            self.time_quote
-            and ((self.time_column_quote and self.time_filter) or has_time_ambiguity)
+            self.time_quote and (self.time_column_quote or has_time_ambiguity)
         ):
             raise ValueError("用户明确表达的时间范围必须完整映射到查询意图")
         explicit_operator_pattern = re.compile(
@@ -656,6 +671,100 @@ class QueryIntent(ContractModel):
 
 
 QueryParameter = str | int | float | Decimal | bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedTimeRange:
+    """由用户证据和可信上下文确定性派生的半开时间区间。"""
+
+    source_quote: str
+    column_id: str
+    column_name: str
+    data_type: str
+    start: str
+    end: str
+    start_parameter: str = "trusted_time_start"
+    end_parameter: str = "trusted_time_end"
+
+
+def _next_month(value: date) -> date:
+    """返回给定月份后一个月的首日。"""
+    return date(value.year + (value.month == 12), value.month % 12 + 1, 1)
+
+
+def resolve_trusted_time_range(
+    *,
+    source_quote: str,
+    column_id: str,
+    column_name: str,
+    data_type: str,
+    user_timezone: str,
+    now_utc: datetime,
+) -> TrustedTimeRange | None:
+    """把封闭语法的自然时间证据解析为权威边界。"""
+    if now_utc.tzinfo is None or now_utc.utcoffset() is None:
+        raise ValueError("now_utc 必须是带时区的权威 UTC instant")
+    normalized_type = data_type.upper()
+    if not re.match(r"^(?:DATE|DATETIME|TIMESTAMP)\b", normalized_type):
+        return None
+    zone = ZoneInfo(user_timezone)
+    local_now = now_utc.astimezone(zone)
+    quote = re.sub(r"\s+", "", source_quote)
+    local_start: date
+    local_end: date
+    year_match = re.fullmatch(r"(\d{4})年", quote)
+    month_match = re.fullmatch(r"(\d{4})年(\d{1,2})月", quote)
+    recent_match = re.fullmatch(r"最近(\d+)天", quote)
+    try:
+        if month_match:
+            local_start = date(int(month_match[1]), int(month_match[2]), 1)
+            local_end = _next_month(local_start)
+        elif year_match:
+            local_start = date(int(year_match[1]), 1, 1)
+            local_end = date(local_start.year + 1, 1, 1)
+        elif quote in {"今年", "去年"}:
+            year = local_now.year - (quote == "去年")
+            local_start = date(year, 1, 1)
+            local_end = date(year + 1, 1, 1)
+        elif quote in {"本月", "上月"}:
+            this_month = date(local_now.year, local_now.month, 1)
+            if quote == "上月":
+                previous_day = this_month - timedelta(days=1)
+                local_start = date(previous_day.year, previous_day.month, 1)
+                local_end = this_month
+            else:
+                local_start = this_month
+                local_end = _next_month(this_month)
+        elif recent_match:
+            days = int(recent_match[1])
+            if not 1 <= days <= 3660:
+                return None
+            local_end = local_now.date() + timedelta(days=1)
+            local_start = local_end - timedelta(days=days)
+        else:
+            return None
+    except ValueError:
+        return None
+
+    start_local = datetime.combine(local_start, time.min, tzinfo=zone)
+    end_local = datetime.combine(local_end, time.min, tzinfo=zone)
+    if re.match(r"^DATE\b", normalized_type):
+        start = local_start.isoformat()
+        end = local_end.isoformat()
+    elif normalized_type.startswith("TIMESTAMP"):
+        start = start_local.astimezone(UTC).replace(tzinfo=None).isoformat(sep=" ")
+        end = end_local.astimezone(UTC).replace(tzinfo=None).isoformat(sep=" ")
+    else:
+        start = start_local.replace(tzinfo=None).isoformat(sep=" ")
+        end = end_local.replace(tzinfo=None).isoformat(sep=" ")
+    return TrustedTimeRange(
+        source_quote=source_quote,
+        column_id=column_id,
+        column_name=column_name,
+        data_type=normalized_type,
+        start=start,
+        end=end,
+    )
 
 
 class QueryDraft(ContractModel):
@@ -878,6 +987,7 @@ async def validate_query(
     context: QueryContext,
     intent: QueryIntent,
     *,
+    trusted_time_range: TrustedTimeRange | None = None,
     dw_database: str,
 ) -> QueryValidationResult:
     """在线程中用 SQLGlot 和当前 DDL allowlist 验证一条 MySQL SELECT。"""
@@ -886,6 +996,7 @@ async def validate_query(
         draft,
         context,
         intent,
+        trusted_time_range=trusted_time_range,
         dw_database=dw_database,
     )
 
@@ -895,11 +1006,31 @@ def _validate_query_sync(
     context: QueryContext,
     intent: QueryIntent,
     *,
+    trusted_time_range: TrustedTimeRange | None = None,
     dw_database: str,
 ) -> QueryValidationResult:
     """拥有完整 SQLGlot 解析、scope 分析和领域模型构造流水线。"""
-    if intent.time_quote and intent.time_filter is None:
+    if intent.time_quote and intent.time_filter is None and trusted_time_range is None:
         return _failed("time_contract_mismatch")
+    if intent.time_filter is not None and trusted_time_range is not None:
+        return _failed("time_contract_mismatch")
+    if trusted_time_range is not None:
+        if (
+            intent.time_quote != trusted_time_range.source_quote
+            or intent.time_column_quote is None
+            or context.bindings.get(intent.time_column_quote)
+            != trusted_time_range.column_id
+        ):
+            return _failed("time_contract_mismatch")
+        if (
+            draft.params.get(trusted_time_range.start_parameter)
+            != trusted_time_range.start
+            or draft.params.get(trusted_time_range.end_parameter)
+            != trusted_time_range.end
+            or f":{trusted_time_range.start_parameter}" not in draft.sql
+            or f":{trusted_time_range.end_parameter}" not in draft.sql
+        ):
+            return _failed("predicate_mismatch")
     if intent.grain and intent.time_column_quote is None:
         return _failed("time_contract_mismatch")
     # 步骤一：拒绝注释、多语句、解析失败和任何非 SELECT 根节点。
@@ -1171,6 +1302,7 @@ def _validate_query_sync(
         ):
             return _failed("join_forbidden")
         on = join.args["on"]
+
         def supported_join_tree(node: exp.Expression) -> bool:
             if isinstance(node, exp.And):
                 return supported_join_tree(node.this) and supported_join_tree(
@@ -1252,22 +1384,24 @@ def _validate_query_sync(
             if context.bindings.get(quote) is not None
         }
         measure_owner_tables = result_object_ids & allowed_table_ids
-        measure_owner_tables.update({
-            column_owner
-            for column_id in result_object_ids
-            if (
-                column_owner := next(
-                    (
-                        table.id
-                        for table in context.physical_schema.tables
-                        for column in table.columns
-                        if column.id == column_id
-                    ),
-                    None,
+        measure_owner_tables.update(
+            {
+                column_owner
+                for column_id in result_object_ids
+                if (
+                    column_owner := next(
+                        (
+                            table.id
+                            for table in context.physical_schema.tables
+                            for column in table.columns
+                            if column.id == column_id
+                        ),
+                        None,
+                    )
                 )
-            )
-            is not None
-        })
+                is not None
+            }
+        )
         parent_tables_by_child: dict[str, set[str]] = {}
         for child_table, parent_table in actual_join_directions:
             parent_tables_by_child.setdefault(child_table, set()).add(parent_table)
@@ -1369,6 +1503,21 @@ def _validate_query_sync(
         )
         for item in expected_filters
     ]
+    if trusted_time_range is not None:
+        expected_contracts.extend(
+            [
+                (
+                    trusted_time_range.column_id,
+                    "gte",
+                    [trusted_time_range.start],
+                ),
+                (
+                    trusted_time_range.column_id,
+                    "lt",
+                    [trusted_time_range.end],
+                ),
+            ]
+        )
     for item in [
         *intent.filters,
         *([intent.time_filter] if intent.time_filter else []),
@@ -1389,8 +1538,7 @@ def _validate_query_sync(
             re.match(r"^(?:DATETIME|TIMESTAMP)\b", data_type)
             and item.operator in {"eq", "ne"}
             and all(
-                isinstance(value, str)
-                and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+                isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
                 for value in values
             )
         ):
@@ -1487,9 +1635,11 @@ def _validate_query_sync(
     if len(public_labels) != len(set(public_labels)):
         return _failed("projection_alias_mismatch")
     for projection in root.expressions:
-        if isinstance(projection, exp.Alias) and isinstance(
-            projection.this, exp.AggFunc
-        ) and projection.alias.casefold() != "total":
+        if (
+            isinstance(projection, exp.Alias)
+            and isinstance(projection.this, exp.AggFunc)
+            and projection.alias.casefold() != "total"
+        ):
             return _failed("projection_alias_mismatch")
 
     if intent.query_type == QueryType.DETAIL:

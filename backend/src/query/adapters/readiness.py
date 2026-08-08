@@ -9,19 +9,27 @@ from loguru import logger
 from answer_readiness.models import DataReadinessToolResult
 from data_sync.locks import generation_lock_name
 from errors import DataAgentError
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
-    MySQLDatabase,
 )
 
 
 class QueryReadinessAdapter:
     """直接检查最终目标表，避免模型再次改写已经解析的依赖。"""
 
-    def __init__(self, tool: BaseTool, *, dw_database: str, lock_timeout: int) -> None:
+    def __init__(
+        self,
+        tool: BaseTool,
+        generation_locks: GenerationLockManager,
+        *,
+        dw_database: str,
+        lock_timeout: int,
+    ) -> None:
         """绑定现有只读数据就绪工具。"""
         self._tool = tool
+        self._generation_locks = generation_locks
         self._dw_database = dw_database
         self._lock_timeout = lock_timeout
 
@@ -46,9 +54,7 @@ class QueryReadinessAdapter:
         entered = False
         completed = False
         try:
-            async with MySQLDatabase.shared_service_locks(
-                names, timeout_seconds=self._lock_timeout
-            ):
+            async with self._generation_locks.read(names, self._lock_timeout):
                 entered = True
                 yield
                 completed = True
@@ -66,6 +72,5 @@ class QueryReadinessAdapter:
             if not completed:
                 raise
             logger.warning(
-                "Query 已完成，但 generation READ lock owner 连接"
-                "释放失败且已失效"
+                "Query 已完成，但 generation READ lock owner 连接释放失败且已失效"
             )

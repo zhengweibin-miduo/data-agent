@@ -14,6 +14,7 @@ from query.application.contracts import (
     QueryEvent,
     QueryRequest,
     QueryStreamError,
+    SupplementalQueryContext,
 )
 from query.application.service import QueryApplication
 from settings import app_config
@@ -30,6 +31,9 @@ class QueryTurnRequest(ContractModel):
         min_length=1,
         max_length=app_config.conversation.max_message_chars,
         description="用户查询原文。",
+    )
+    supplemental_context: SupplementalQueryContext = Field(
+        description="包含显式 IANA 用户时区的 Query 补充上下文。"
     )
     ddl_context: DDLJobRequest = Field(
         description="用于元数据绑定的当前来源和 MySQL DDL；不按来源过滤业务结果行。"
@@ -103,6 +107,7 @@ async def query_turn(
             conversation_uid=conversation_uid,
             turn_uid=body.turn_uid,
             question=body.question,
+            supplemental_context=body.supplemental_context,
             ddl_context=body.ddl_context,
         )
     )

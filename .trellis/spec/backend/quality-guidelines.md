@@ -585,3 +585,12 @@ arguments), which is separate work.
 - Claims that a skipped or unavailable live-service check passed.
 - A `data_agent` Python package, compatibility shim, or top-level `logging.py`
   that shadows the standard library.
+
+For Query correctness changes, fixed-clock tests must cover leap/calendar
+rollovers and a DST-observing IANA zone, validator tests must cover DATE,
+DATETIME and TIMESTAMP half-open predicates, and Conversation tests must prove
+stale claim fencing plus clarification chains beyond ordinary context limits.
+Generation manager tests cover bounded pool construction, READ sharing, WRITE
+exclusion, checkout timeout, cancellation, release failure and close; semantics
+that require MySQL Locking Service must be reported unavailable when the live
+service cannot be reached.

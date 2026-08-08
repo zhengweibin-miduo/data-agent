@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock
+from typing import cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from tests.helpers.data_sync import sync_task
@@ -19,6 +20,7 @@ from data_sync.models import (
     SyncPhase,
     SyncRowEvent,
 )
+from infrastructure.generation_locks import GenerationLockManager
 from settings import app_config
 
 
@@ -79,11 +81,6 @@ async def test_materialization_holds_generation_lock_through_commit(
             assert await check_authority()
             events.append("schema_exit")
 
-    monkeypatch.setattr(
-        mysql_adapters.MySQLDatabase,
-        "exclusive_service_locks",
-        generation_locks,
-    )
     monkeypatch.setattr(mysql_adapters.MySQLDatabase, "session", session_context)
     monkeypatch.setattr(
         mysql_adapters,
@@ -91,6 +88,10 @@ async def test_materialization_holds_generation_lock_through_commit(
         lambda session: repository,
     )
     monkeypatch.setattr(mysql_adapters, "DWSchemaSynchronizer", FakeSynchronizer)
+    lock_manager = Mock()
+    lock_manager.write.side_effect = lambda names, timeout: generation_locks(
+        names, timeout_seconds=timeout
+    )
     settings = app_config.data_sync.model_copy(
         update={
             "dw_database": "dw",
@@ -100,6 +101,7 @@ async def test_materialization_holds_generation_lock_through_commit(
     adapter = mysql_adapters.MySQLMaterializationAdapter(
         settings,
         lambda session, desired: AsyncMock(),
+        cast(GenerationLockManager, lock_manager),
     )
 
     await adapter.synchronize_schema(task)
@@ -155,14 +157,13 @@ async def test_generation_reset_holds_write_lock_through_commit(
         events.append("reset_rows")
         return True
 
-    monkeypatch.setattr(
-        mysql_adapters.MySQLDatabase,
-        "exclusive_service_locks",
-        generation_locks,
-    )
     monkeypatch.setattr(mysql_adapters.MySQLDatabase, "session", session_context)
     monkeypatch.setattr(mysql_adapters, "DataSyncRepository", lambda _: repository)
     monkeypatch.setattr(mysql_adapters, "reset_source_rows", reset_rows)
+    lock_manager = Mock()
+    lock_manager.write.side_effect = lambda names, timeout: generation_locks(
+        names, timeout_seconds=timeout
+    )
     settings = app_config.data_sync.model_copy(
         update={
             "dw_database": "dw",
@@ -172,6 +173,7 @@ async def test_generation_reset_holds_write_lock_through_commit(
     adapter = mysql_adapters.MySQLMaterializationAdapter(
         settings,
         lambda current_session, desired: AsyncMock(),
+        cast(GenerationLockManager, lock_manager),
     )
 
     await adapter.reset_generation(task, coordinate, limit=100)

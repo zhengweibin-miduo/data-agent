@@ -57,21 +57,24 @@ and `close()` detaches the current engine and Session factory before awaiting
 `AsyncEngine.dispose()`. This preserves a replacement created concurrently
 while the old engine is disposing.
 
-Generation coordination uses the MySQL 8.4 Locking Service through three
-additional manager-owned boundaries:
+Generation coordination uses the MySQL 8.4 Locking Service through a
+process-local dedicated manager:
 
 ```python
-await MySQLDatabase.check_locking_service()
-async with MySQLDatabase.shared_service_locks(names, timeout_seconds=2): ...
-async with MySQLDatabase.exclusive_service_locks(names, timeout_seconds=2): ...
+await generation_locks.initialize()
+await generation_locks.check_capability()
+async with generation_locks.read(names, 2): ...
+async with generation_locks.write(names, 2): ...
+await generation_locks.close()
 ```
 
 The probe runs during API, DDL worker, and Data Sync worker startup. It acquires
 one READ and one WRITE lock with timeout zero under per-probe unique resource
 names in a dedicated capability namespace, then always releases that namespace,
 so concurrent process startup cannot create false contention and a partial
-function install fails closed without touching generation resources. Each business lock context
-owns one dedicated connection, sorts and deduplicates names, and sends all names
+function install fails closed without touching generation resources. The manager
+owns a bounded engine with `max_overflow=0`; each business lock context checks
+out one owner connection, sorts and deduplicates names, and sends all names
 in one SQL function call under the fixed generation namespace. Query
 uses shared READ locks; accepted snapshots, schema synchronization, and
 generation reset use exclusive WRITE locks. Commit and rollback do not release
@@ -528,8 +531,8 @@ await ValueProjectionParticipant.prepare(table_ref) -> PreparedValueProjection
   checks, auto-commit DDL, phase settlement, and managed Session commit. The
   global order is `generation -> schema -> task`; no path may acquire those
   resources in reverse.
-- `shared_service_locks()` and `exclusive_service_locks()` own one dedicated
-  engine connection and release the complete fixed namespace on exit. MySQL
+- `GenerationLockManager.read()` and `write()` own one connection from the
+  process-local dedicated pool and release the complete fixed namespace on exit. MySQL
   guarantees one acquisition call is all-or-nothing, so a failed multi-target
   request leaves no partial generation lock. A release failure invalidates the
   owner connection; an active business exception remains authoritative. If an
@@ -667,9 +670,9 @@ if await authority_repository.has_authority(task):
 
 # Correct: publisher and worker share the same outer generation lock; the
 # worker rechecks authority inside the schema lock with its DDL Session.
-async with MySQLDatabase.exclusive_service_locks(
+async with generation_locks.write(
     [generation_lock_name(dw_database, target_table)],
-    timeout_seconds=settings.generation_lock_timeout_seconds,
+    settings.generation_lock_timeout_seconds,
 ):
     async with MySQLDatabase.session() as ddl_session:
         repository = DataSyncRepository(ddl_session)
@@ -836,23 +839,21 @@ Conversation history is authoritative in schema-qualified MySQL tables
 `agent_conversation`, `agent_message`, and `conversation_memory_outbox`.
 Messages are text-only and keyset-paged by their auto-increment `id`; Redis
 checkpoints never store conversation history. Starting a turn persists the
-user message and acquires the conversation's single `active_turn_uid`.
+user message and acquires the conversation's single `active_turn_uid` plus a
+new opaque `active_turn_claim_token` execution generation.
 Completing it commits the assistant message, extraction outbox row, and gate
 release in one transaction.
 
-The `active_turn_uid` gate is leased, not permanent. `complete_turn` is the only
-release path, so a caller that dies between start and completion — or loses its
-`turn_uid` — would otherwise lock the conversation out of every future turn with
-`conversation_busy` until someone edits the database. Because `start_turn` writes
-`active_turn_uid` and `updated_at` in the same statement, `updated_at` is the
-occupancy start and no extra column is needed. `start_turn` therefore treats the
-gate as claimable when it is unset, already held by the same `turn_uid`, or older
-than `conversation.turn_lease_seconds`. The staleness comparison is pushed into
-SQL with `func.timestampadd(text("SECOND"), -lease, func.now())` for the same
-reason back-off deadlines are: a naive Python timestamp compared against a
-database clock in another time zone either expires the lease immediately or never.
-A preempted turn's later `complete_turn` still fails its `active_turn_uid` check,
-so it cannot overwrite the turn that replaced it.
+The `active_turn_uid` gate is leased, not permanent. A failed or cancelled owner
+may call `abandon_turn` with its claim token so the same turn can reclaim
+immediately; a different turn waits for the finite lease. Because `start_turn`
+writes `active_turn_uid`, a fresh claim token, and `updated_at` together,
+`updated_at` is the occupancy start. Expiry comparison is pushed into SQL with
+`func.timestampadd(text("SECOND"), -lease, func.now())` so ownership uses the
+database clock. Every first claim or reclaim replaces the token. `renew_turn`,
+first `complete_turn`, and `abandon_turn` compare both coordinates, so a
+preempted owner cannot renew, complete, or abandon the generation that replaced
+it. Completed-message replay is read-only and does not reactivate the gate.
 
 Conversation-derived `agent_memory` rows use
 `source=data_agent_conversation`, a non-null `user_id`, nullable
@@ -960,6 +961,14 @@ targets.
   payload, and historical DW upserts use the same 1 MiB payload budget.
 - Normalize explicit zero fractional-second precision for `DATETIME`,
   `TIMESTAMP`, and `TIME` to MySQL's introspected default form.
+- Generation READ/WRITE owners use a process-local dedicated async engine with
+  bounded capacity, `max_overflow=0`, and a short checkout timeout. They never
+  borrow the ordinary transaction pool.
+- Create, capability-probe, inject and close this manager in every API, DDL and
+  Data Sync process lifecycle. Acquire sorted target sets atomically and
+  invalidate an owner connection whenever namespace release fails.
+- Keep ordinary advisory locks in the shared MySQL infrastructure; do not move
+  transaction/session ownership into the generation manager.
 - A data-sync generation hash describes the physical table contract. Metric
   dependency metadata and the global schema fingerprint remain durable
   control-plane data but do not reset CDC coordinates or historical backfill.

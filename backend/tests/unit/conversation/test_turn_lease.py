@@ -51,6 +51,60 @@ class _RecordingSession:
         return _FakeResult(self._row)
 
 
+class _RowsResult:
+    """返回预置多行映射结果的替身。"""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        """绑定预置行。"""
+        self._rows = rows
+
+    def mappings(self) -> _RowsResult:
+        """沿用同一替身暴露行映射视图。"""
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        """返回全部预置行。"""
+        return self._rows
+
+
+class _PendingChainSession:
+    """依次返回会话归属与倒序权威消息。"""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        """绑定仓储查询应读取的倒序消息。"""
+        self._rows = rows
+        self._calls = 0
+        self._cursor = 0
+
+    async def execute(self, _statement: ClauseElement) -> object:
+        """第一次返回会话，第二次返回倒序消息。"""
+        self._calls += 1
+        if self._calls == 1:
+            return _FakeResult({"id": 7})
+        page = self._rows[self._cursor : self._cursor + 20]
+        self._cursor += len(page)
+        return _RowsResult(page)
+
+
+def _pending_message(
+    identifier: int,
+    role: MessageRole,
+    content: str,
+    *,
+    semantic_fingerprint: str | None = None,
+) -> dict[str, object]:
+    """构造权威澄清链消息行。"""
+    return {
+        "id": identifier,
+        "uid": f"message-{identifier}",
+        "turn_uid": f"turn-{identifier}",
+        "role": role.value,
+        "content": content,
+        "semantic_fingerprint": semantic_fingerprint,
+        "created_at": datetime.now(UTC),
+    }
+
+
 def _rendered(statement: ClauseElement) -> str:
     """渲染语句文本与参数，供断言检查关键子句和取值。"""
     compiled = statement.compile(dialect=mysql.dialect())
@@ -93,6 +147,62 @@ async def test_turn_gate_uses_database_side_lease_deadline() -> None:
         actual=rendered,
         expected="失败时间参与有限租约判定",
     )
+
+
+async def test_pending_query_chain_ignores_ordinary_context_budgets() -> None:
+    """权威澄清链可超过普通 20 条与 32768 字符窗口。"""
+    terminal = _pending_message(
+        1,
+        MessageRole.ASSISTANT,
+        "旧查询已完成",
+        semantic_fingerprint="query:complete",
+    )
+    chain = [
+        _pending_message(
+            identifier,
+            MessageRole.USER if identifier % 2 == 0 else MessageRole.ASSISTANT,
+            f"证据-{identifier}-" + "甲" * 1600,
+            semantic_fingerprint=(
+                None if identifier % 2 == 0 else "query:clarification"
+            ),
+        )
+        for identifier in range(2, 24)
+    ]
+    session = _PendingChainSession(list(reversed([terminal, *chain])))
+    repository = ConversationRepository(cast(AsyncSession, session))
+
+    result = await repository.pending_query_chain(
+        "user-1",
+        "conversation-1",
+        through_id=23,
+        message_limit=100,
+        max_chars=262_144,
+    )
+
+    assert [message.id for message in result] == list(range(2, 24))
+    assert sum(len(message.content) for message in result) > 32_768
+
+
+async def test_pending_query_chain_fails_closed_at_its_own_message_budget() -> None:
+    """无法在独立消息预算内证明链边界时稳定拒绝。"""
+    rows = [
+        _pending_message(identifier, MessageRole.USER, f"证据-{identifier}")
+        for identifier in range(101, 0, -1)
+    ]
+    repository = ConversationRepository(
+        cast(AsyncSession, _PendingChainSession(rows))
+    )
+
+    with pytest.raises(DataAgentError) as captured:
+        await repository.pending_query_chain(
+            "user-1",
+            "conversation-1",
+            through_id=101,
+            message_limit=100,
+            max_chars=262_144,
+        )
+
+    assert captured.value.code == "query_clarification_chain_too_large"
 
 
 async def test_turn_gate_rejects_live_turn_and_allows_expired_turn() -> None:
@@ -162,12 +272,13 @@ async def test_idempotent_replay_does_not_renew_turn_lease() -> None:
     session = _ReplaySession(conversation, message, {"id": 8})
     repository = ConversationRepository(cast(AsyncSession, session))
 
-    record, _, execution_owner = await repository.start_turn(
+    record, _, execution_owner, claim_token = await repository.start_turn(
         "user-1", "conv-1", "turn-1", "订单口径是什么"
     )
 
     check_equal("幂等回放返回既有消息", record.uid, "message-7")
     check_equal("在途幂等回放不取得执行权", execution_owner, False)
+    assert claim_token is None
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("非所有者幂等回放不续租", len(updates), 0)
 
@@ -218,7 +329,7 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
     session = _ReplaySession(conversation, message, {"id": 8})
     repository = ConversationRepository(cast(AsyncSession, session))
 
-    record, _, execution_owner = await repository.start_turn(
+    record, _, execution_owner, claim_token = await repository.start_turn(
         "user-1",
         "conv-1",
         "turn-1",
@@ -227,6 +338,7 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
 
     check_equal("仍返回既有用户消息", record.uid, "message-7")
     check_equal("已完成轮次不取得执行权", execution_owner, False)
+    assert claim_token is None
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("已完成轮次不重新占用门禁", updates, [])
 
@@ -250,11 +362,12 @@ async def test_abandoned_turn_replay_reclaims_execution_owner() -> None:
         cast(AsyncSession, _ReplaySession(conversation, message))
     )
 
-    _, _, execution_owner = await repository.start_turn(
+    _, _, execution_owner, claim_token = await repository.start_turn(
         "user-1", "conv-1", "turn-1", "订单口径是什么"
     )
 
     check_equal("失败轮次重新取得执行权", execution_owner, True)
+    assert claim_token is not None and len(claim_token) == 32
 
 
 async def test_preempted_turn_replay_does_not_reclaim_gate() -> None:
@@ -308,8 +421,9 @@ async def test_expired_same_turn_reclaims_execution_owner() -> None:
         cast(AsyncSession, _ExpiredReplaySession(conversation, message))
     )
 
-    _, _, execution_owner = await repository.start_turn(
+    _, _, execution_owner, claim_token = await repository.start_turn(
         "user-1", "conv-1", "turn-1", "订单口径是什么"
     )
 
     assert execution_owner is True
+    assert claim_token is not None and len(claim_token) == 32

@@ -20,6 +20,7 @@ from query.domain import (
     QueryDraft,
     QueryIntent,
     SQLValidationIssue,
+    TrustedTimeRange,
 )
 from settings import app_config
 
@@ -41,7 +42,9 @@ Use only the supplied dw_database and columns in the physical schema and binding
 Return one SELECT or WITH ... SELECT, named placeholders for user values, and exact
 referenced table/column/metric IDs. Do not use SELECT star, comments, user variables,
 dangerous functions, file output, unsupported joins, or a LIMIT the QueryIntent did not
-explicitly request. Return only the typed structured result and no hidden reasoning."""
+explicitly request. When trusted_time_range is present, emit exactly
+column >= :trusted_time_start AND column < :trusted_time_end with the supplied values.
+Return only the typed structured result and no hidden reasoning."""
 
 
 class QueryLLMAdapter:
@@ -85,7 +88,12 @@ class QueryLLMAdapter:
             http_status=422,
         )
 
-    async def draft(self, context: QueryContext, intent: QueryIntent) -> QueryDraft:
+    async def draft(
+        self,
+        context: QueryContext,
+        intent: QueryIntent,
+        trusted_time_range: TrustedTimeRange | None,
+    ) -> QueryDraft:
         """从有界权威上下文生成首个不可直接执行的 QueryDraft。"""
         try:
             return await self._invoke(
@@ -94,6 +102,20 @@ class QueryLLMAdapter:
                 {
                     "intent": intent.model_dump(mode="json"),
                     "context": context.model_dump(mode="json"),
+                    "trusted_time_range": (
+                        None
+                        if trusted_time_range is None
+                        else {
+                            "source_quote": trusted_time_range.source_quote,
+                            "column_id": trusted_time_range.column_id,
+                            "column_name": trusted_time_range.column_name,
+                            "data_type": trusted_time_range.data_type,
+                            "start": trusted_time_range.start,
+                            "end": trusted_time_range.end,
+                            "start_parameter": trusted_time_range.start_parameter,
+                            "end_parameter": trusted_time_range.end_parameter,
+                        }
+                    ),
                     "dw_database": self._dw_database,
                 },
             )
@@ -109,6 +131,7 @@ class QueryLLMAdapter:
         self,
         context: QueryContext,
         intent: QueryIntent,
+        trusted_time_range: TrustedTimeRange | None,
         draft: QueryDraft,
         issues: tuple[SQLValidationIssue, ...],
     ) -> QueryDraft:
@@ -120,6 +143,20 @@ class QueryLLMAdapter:
                 {
                     "intent": intent.model_dump(mode="json"),
                     "context": context.model_dump(mode="json"),
+                    "trusted_time_range": (
+                        None
+                        if trusted_time_range is None
+                        else {
+                            "source_quote": trusted_time_range.source_quote,
+                            "column_id": trusted_time_range.column_id,
+                            "column_name": trusted_time_range.column_name,
+                            "data_type": trusted_time_range.data_type,
+                            "start": trusted_time_range.start,
+                            "end": trusted_time_range.end,
+                            "start_parameter": trusted_time_range.start_parameter,
+                            "end_parameter": trusted_time_range.end_parameter,
+                        }
+                    ),
                     "dw_database": self._dw_database,
                     "previous_draft": draft.model_dump(mode="json"),
                     "validation_feedback": [

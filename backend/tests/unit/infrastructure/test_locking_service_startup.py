@@ -26,10 +26,12 @@ async def test_api_probe_failure_stops_business_composition(
         application.RedisClient, "initialize", Mock(return_value=object())
     )
     monkeypatch.setattr(application.MySQLDatabase, "initialize", Mock())
+    lock_manager = Mock()
+    lock_manager.initialize = AsyncMock()
+    lock_manager.check_capability = AsyncMock(side_effect=failure)
+    lock_manager.close = AsyncMock()
     monkeypatch.setattr(
-        application.MySQLDatabase,
-        "check_locking_service",
-        AsyncMock(side_effect=failure),
+        application, "GenerationLockManager", Mock(return_value=lock_manager)
     )
     monkeypatch.setattr(
         application.ElasticsearchClient,
@@ -42,6 +44,7 @@ async def test_api_probe_failure_stops_business_composition(
             pytest.fail("能力 probe 失败后不得进入 API 服务期")
 
     assert captured.value is failure
+    lock_manager.close.assert_awaited_once_with()
     elasticsearch_initialize.assert_not_called()
 
 
@@ -57,10 +60,12 @@ async def test_ddl_worker_probe_failure_stops_index_composition(
         lifecycle.RedisClient, "initialize", Mock(return_value=object())
     )
     monkeypatch.setattr(lifecycle.MySQLDatabase, "initialize", Mock())
+    lock_manager = Mock()
+    lock_manager.initialize = AsyncMock()
+    lock_manager.check_capability = AsyncMock(side_effect=failure)
+    lock_manager.close = AsyncMock()
     monkeypatch.setattr(
-        lifecycle.MySQLDatabase,
-        "check_locking_service",
-        AsyncMock(side_effect=failure),
+        lifecycle, "GenerationLockManager", Mock(return_value=lock_manager)
     )
     monkeypatch.setattr(
         lifecycle.ElasticsearchClient,
@@ -72,6 +77,7 @@ async def test_ddl_worker_probe_failure_stops_index_composition(
         await lifecycle.startup({"redis": object()})
 
     assert captured.value is failure
+    lock_manager.close.assert_awaited_once_with()
     elasticsearch_initialize.assert_not_called()
 
 
@@ -83,10 +89,12 @@ async def test_data_sync_probe_failure_stops_runtime_composition(
     source_client = Mock()
     monkeypatch.setattr(data_sync_worker, "setup_logging", Mock())
     monkeypatch.setattr(data_sync_worker.MySQLDatabase, "initialize", Mock())
+    lock_manager = Mock()
+    lock_manager.initialize = AsyncMock()
+    lock_manager.check_capability = AsyncMock(side_effect=failure)
+    lock_manager.close = AsyncMock()
     monkeypatch.setattr(
-        data_sync_worker.MySQLDatabase,
-        "check_locking_service",
-        AsyncMock(side_effect=failure),
+        data_sync_worker, "GenerationLockManager", Mock(return_value=lock_manager)
     )
     monkeypatch.setattr(data_sync_worker, "MySQLSourceClient", source_client)
 
@@ -94,6 +102,7 @@ async def test_data_sync_probe_failure_stops_runtime_composition(
         await data_sync_worker.run_worker()
 
     assert captured.value is failure
+    lock_manager.close.assert_awaited_once_with()
     source_client.assert_not_called()
 
 
