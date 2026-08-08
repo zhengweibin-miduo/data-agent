@@ -2297,6 +2297,41 @@ def test_unmodeled_exclusion_cannot_be_omitted(question: str) -> None:
         ).validate_evidence([question])
 
 
+@pytest.mark.parametrize("connector", ["与", "及"])
+def test_all_conjunctive_filter_connectors_require_every_clause(
+    connector: str,
+) -> None:
+    """“与/及”连接的过滤条件不能只抽取第一项。"""
+    question = f"地区=华东{connector}状态=完成的订单数量"
+    with pytest.raises(ValueError, match="每项过滤条件"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="=",
+                    value_quotes=["华东"],
+                    clause_quote="地区=华东",
+                )
+            ],
+        ).validate_evidence([question])
+
+
+@pytest.mark.parametrize("question", ["销售额是多少", "销售额？"])
+def test_result_shape_requires_explicit_user_action(question: str) -> None:
+    """问句后缀不能让裸业务对象默认成为全量明细。"""
+    with pytest.raises(ValueError, match="查询形态"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["销售额"],
+        ).validate_evidence([question])
+
+
 async def test_aggregate_alias_cannot_claim_another_business_identity() -> None:
     """聚合公开别名不能冒充另一业务指标或分组列。"""
     result = await validate_query(

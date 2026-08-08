@@ -116,10 +116,9 @@ class MySQLQueryExecutor:
             columns = list(result.keys())
             pending: list[list[object]] = []
             pending_bytes = 0
-            # 驱动按配置行数批量取数，进程内仍逐行执行字节预算切分。
-            # 驱动批次还需受字节预算保护；在未知结果宽度时使用保守硬上限，
-            # 避免数百个大字段在逐行门禁前同时物化。
-            driver_fetch_rows = min(self._fetch_batch_rows, 16)
+            # 驱动层无法在 fetchmany 物化后才补做字节限制；未知行宽时必须
+            # 单行读取，让每行先通过字节门禁，再进入进程内的事件批次。
+            driver_fetch_rows = 1
             partitions = result.partitions(driver_fetch_rows).__aiter__()
             while True:
                 try:
