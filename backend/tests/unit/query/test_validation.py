@@ -303,9 +303,7 @@ def test_result_count_unit_cannot_be_omitted_from_ranking(unit: str) -> None:
             query_type=QueryType.DETAIL,
             measure_quotes=["记录"],
             sorts=[
-                SortIntent(
-                    quote="销售额", direction="desc", direction_quote="降序"
-                )
+                SortIntent(quote="销售额", direction="desc", direction_quote="降序")
             ],
         ).validate_evidence([f"销售额降序的10{unit}记录"])
 
@@ -721,9 +719,7 @@ def test_incomplete_trend_can_reach_single_slot_clarification() -> None:
         measure_quotes=["销售额"],
         ambiguities=[
             QueryAmbiguity(slot="time", quote="趋势", question="请明确时间粒度？"),
-            QueryAmbiguity(
-                slot="measure", quote="销售额", question="请明确聚合口径？"
-            ),
+            QueryAmbiguity(slot="measure", quote="销售额", question="请明确聚合口径？"),
         ],
     )
 
@@ -1946,6 +1942,93 @@ def test_different_dimension_is_not_distinct_intent() -> None:
         measure_quotes=["销售额"],
         dimension_quotes=["地区"],
     ).validate_evidence(["比较不同地区的销售额合计"])
+
+
+def test_distinct_measure_is_not_hidden_by_different_dimension() -> None:
+    """分组维度只能豁免对应的“不同”，不能掩盖去重计数。"""
+    with pytest.raises(ValueError, match="去重语义"):
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            query_type_quote="按",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["客户编号"],
+            dimension_quotes=["地区"],
+        ).validate_evidence(["按不同地区统计不同客户编号数量"])
+
+
+def test_filter_clauses_must_bijectively_match_intents() -> None:
+    """跨越另一子句的嵌套证据不能重复冒充首项过滤。"""
+    with pytest.raises(ValueError, match="一一对应"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="=",
+                    value_quotes=["华东"],
+                    clause_quote="地区=华东",
+                ),
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="=",
+                    value_quotes=["华东"],
+                    clause_quote="地区=华东且状态=完成",
+                ),
+            ],
+        ).validate_evidence(["地区=华东且状态=完成的订单数量"])
+
+
+def test_sorting_by_phrase_is_not_treated_as_grouping() -> None:
+    """“按字段排序列出”属于排名，不应发明分组维度。"""
+    QueryIntent(
+        query_type=QueryType.RANKING,
+        query_type_quote="列出前10条",
+        measure_quotes=["订单编号"],
+        sorts=[SortIntent(quote="销售额", direction="desc", direction_quote="降序")],
+        limit=10,
+        limit_quote="前10条",
+    ).validate_evidence(["按销售额降序列出前10条订单编号"])
+
+
+def test_bare_business_object_requires_shape_evidence() -> None:
+    """裸字段或表名不能被模型默认为全量明细。"""
+    with pytest.raises(ValueError, match="查询形态"):
+        QueryIntent(
+            query_type=QueryType.DETAIL, measure_quotes=["销售额"]
+        ).validate_evidence(["销售额"])
+
+
+async def test_table_count_only_accepts_count_star() -> None:
+    """表主体计数只能使用 COUNT(*)，不能统计可空列或常量。"""
+    context = _context().model_copy(update={"bindings": {"订单": "table-orders"}})
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="数量",
+        aggregation="count",
+        aggregation_quote="数量",
+        measure_quotes=["订单"],
+    )
+    for sql in (
+        "SELECT COUNT(o.amount) AS total FROM dw.orders o",
+        "SELECT COUNT(NULL) AS total FROM dw.orders o",
+    ):
+        result = await validate_query(
+            QueryDraft(
+                sql=sql,
+                table_ids=["table-orders"],
+                column_ids=["column-amount"] if "amount" in sql else [],
+            ),
+            context,
+            intent,
+            dw_database="dw",
+        )
+        assert result.issues[0].code == "aggregation_operand_mismatch"
 
 
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:

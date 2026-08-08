@@ -272,18 +272,17 @@ class QueryIntent(ContractModel):
             if evidenced_operator != item.operator:
                 raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
-        different_dimension = any(
-            f"不同{quote}" in user_text for quote in self.dimension_quotes
-        )
-        if (
-            ("不同" in user_text and not different_dimension)
-            or any(marker in user_text for marker in ("去重", "唯一", "distinct"))
+        unclaimed_different_text = user_text
+        for quote in self.dimension_quotes:
+            unclaimed_different_text = unclaimed_different_text.replace(
+                f"不同{quote}", ""
+            )
+        if "不同" in unclaimed_different_text or any(
+            marker in user_text for marker in ("去重", "唯一", "distinct")
         ):
             raise ValueError("去重语义尚未建模，必须先澄清")
         boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", user_text)
-        if any(
-            marker in boolean_text for marker in ("或", "或者", " or ")
-        ):
+        if any(marker in boolean_text for marker in ("或", "或者", " or ")):
             raise ValueError("过滤条件包含尚未建模的 OR 关系")
         if len(all_filters) > 1 and any(
             item.clause_quote
@@ -390,6 +389,11 @@ class QueryIntent(ContractModel):
             for marker in shape_markers[self.query_type]
         ):
             raise ValueError("查询形态必须与用户原文动作证据一致")
+        result_object_quotes = [*self.measure_quotes, *self.dimension_quotes]
+        if self.query_type_quote is None and user_text.strip() in {
+            quote.casefold() for quote in result_object_quotes
+        }:
+            raise ValueError("查询形态必须具有明确的用户原文动作证据")
         trend_markers = (
             "趋势",
             "按日",
@@ -417,6 +421,11 @@ class QueryIntent(ContractModel):
         explicit_dimensions = [
             dimension
             for match in grouping_matches
+            if not re.search(
+                r"(?:升序|降序|从低到高|从高到低|\basc\b|\bdesc\b|列出)",
+                match,
+                re.IGNORECASE,
+            )
             for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
             if dimension.strip()
         ]
@@ -489,7 +498,21 @@ class QueryIntent(ContractModel):
             raise ValueError("用户明确表达的每项过滤条件必须完整映射到查询意图")
         if len(all_filters) > 1:
             clause_quotes = [item.clause_quote for item in all_filters]
-            if None in clause_quotes or len(set(clause_quotes)) != len(clause_quotes):
+            clause_matches = [
+                [
+                    clause
+                    for clause in explicit_filter_clauses
+                    if quote is not None and quote in clause
+                ]
+                for quote in clause_quotes
+            ]
+            if (
+                None in clause_quotes
+                or len(set(clause_quotes)) != len(clause_quotes)
+                or any(len(matches) != 1 for matches in clause_matches)
+                or len({matches[0] for matches in clause_matches if matches})
+                != len(explicit_filter_clauses)
+            ):
                 raise ValueError("每项过滤条件必须与不同的用户原文子句一一对应")
         aggregation_action = any(
             marker in user_text for marker in ("总和", "合计", "平均", "均值")
@@ -1475,6 +1498,12 @@ def _validate_query_sync(
             item for item in context.candidates if item.object_id == metric_id
         )
         required_measure_columns.update(candidate.related_column_ids)
+    table_count_subject = bool(required_table_ids) and intent.aggregation == "count"
+    if table_count_subject and any(
+        not isinstance(aggregate, exp.Count) or aggregate.find(exp.Star) is None
+        for aggregate in top_level_aggregates
+    ):
+        return _failed("aggregation_operand_mismatch")
     for aggregate in top_level_aggregates:
         if isinstance(aggregate, exp.Count) and aggregate.find(exp.Star) is not None:
             continue
