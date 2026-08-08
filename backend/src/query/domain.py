@@ -217,7 +217,9 @@ class QueryIntent(ContractModel):
         }
         unsupported_negations = ("不包含", "不含", "不在", "not in", "not like")
         user_text = " ".join(user_messages).casefold()
-        if any(marker in user_text for marker in unsupported_negations):
+        if any(marker in user_text for marker in unsupported_negations) or re.search(
+            r"(?:^|[\s，。,.；;])非\S+|除\S+以外", user_text
+        ):
             raise ValueError("过滤操作包含尚未建模的否定语义")
         normalized_inequalities = {
             "大于等于": "gte",
@@ -232,6 +234,7 @@ class QueryIntent(ContractModel):
             "不超过": "lte",
         }
         normalized_equalities = {"不等于": "ne", "不是": "ne"}
+        normalized_symbols = {">=": "gte", "<=": "lte", "!=": "ne", "<>": "ne"}
         for item in [*self.filters, *([self.time_filter] if self.time_filter else [])]:
             quote = item.operator_quote
             if quote is not None and any(
@@ -241,10 +244,18 @@ class QueryIntent(ContractModel):
             evidenced_operator = next(
                 (
                     operator
+                    for marker, operator in normalized_symbols.items()
+                    if quote is not None and quote.strip() == marker
+                ),
+                None,
+            )
+            evidenced_operator = next(
+                (
+                    operator
                     for marker, operator in normalized_inequalities.items()
                     if quote is not None and marker in quote.casefold()
                 ),
-                None,
+                evidenced_operator,
             )
             evidenced_operator = next(
                 (
@@ -546,6 +557,28 @@ class QueryIntent(ContractModel):
         )
         if len(explicit_sorts) > len(self.sorts):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
+        matched_sort_indexes: set[int] = set()
+        for explicit_object, explicit_direction in explicit_sorts:
+            normalized_direction = next(
+                (
+                    direction
+                    for direction, markers in direction_markers.items()
+                    if any(
+                        marker in explicit_direction.casefold() for marker in markers
+                    )
+                ),
+                None,
+            )
+            matches = [
+                index
+                for index, item in enumerate(self.sorts)
+                if index not in matched_sort_indexes
+                and item.direction == normalized_direction
+                and item.quote in explicit_object
+            ]
+            if len(matches) != 1:
+                raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
+            matched_sort_indexes.add(matches[0])
         if self.query_type == QueryType.DETAIL:
             detail_evidence_text = user_text
             for item in all_filters:

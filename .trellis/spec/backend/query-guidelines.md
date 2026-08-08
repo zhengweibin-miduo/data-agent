@@ -188,6 +188,9 @@ async for batch in readonly_executor.execute(validated):
   coverage, and multiple filter clauses must map one-to-one to distinct user
   clauses. A time-grain answer may continue to time-column clarification while
   a trusted `time` ambiguity remains.
+- Multi-character symbolic filter operators are parsed atomically, explicit
+  sort clauses map one-to-one to trusted sort intents, and unsupported natural-
+  language exclusion phrases fail closed before planning.
 - Aggregate public labels cannot claim arbitrary business identities or collide
   with another result column. Completed-turn replay is resolved from durable
   messages before remote memory context is recalled.

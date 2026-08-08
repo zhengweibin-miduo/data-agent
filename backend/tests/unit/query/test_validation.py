@@ -2244,6 +2244,59 @@ def test_duplicate_filter_clause_cannot_replace_another_clause() -> None:
         ).validate_evidence(["地区是华东且状态是完成的订单数量"])
 
 
+def test_each_explicit_sort_requires_a_distinct_sort_intent() -> None:
+    """重复首项排序不能冒充原文中的次级排序。"""
+    duplicate = SortIntent(
+        quote="销售额", direction="desc", direction_quote="降序"
+    )
+    with pytest.raises(ValueError, match="每项排序"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="前10条",
+            measure_quotes=["订单编号"],
+            sorts=[duplicate, duplicate.model_copy()],
+            limit=10,
+            limit_quote="前10条",
+        ).validate_evidence(["销售额降序、订单编号升序的前10条订单编号"])
+
+
+@pytest.mark.parametrize(
+    ("operator_quote", "operator"),
+    [(">=", "gte"), ("<=", "lte"), ("!=", "ne"), ("<>", "ne")],
+)
+def test_multi_character_symbolic_operator_is_parsed_atomically(
+    operator_quote: str, operator: Literal["gte", "lte", "ne"]
+) -> None:
+    """多字符符号操作符必须优先于其单字符子串解析。"""
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        query_type_quote="列出",
+        measure_quotes=["订单编号"],
+        filters=[
+            FilterIntent(
+                column_quote="金额",
+                operator=operator,
+                operator_quote=operator_quote,
+                value_quotes=["100"],
+                clause_quote=f"金额{operator_quote}100",
+            )
+        ],
+    ).validate_evidence([f"列出金额{operator_quote}100的订单编号"])
+
+
+@pytest.mark.parametrize("question", ["非华东地区的订单数量", "除华东以外的订单数量"])
+def test_unmodeled_exclusion_cannot_be_omitted(question: str) -> None:
+    """未建模的自然语言排除语义不能从意图中静默省略。"""
+    with pytest.raises(ValueError, match="否定语义"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+        ).validate_evidence([question])
+
+
 async def test_aggregate_alias_cannot_claim_another_business_identity() -> None:
     """聚合公开别名不能冒充另一业务指标或分组列。"""
     result = await validate_query(
