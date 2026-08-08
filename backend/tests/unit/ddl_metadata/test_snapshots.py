@@ -90,9 +90,7 @@ def _install_repository_fakes(
         def __init__(self, session: object) -> None:
             del session
 
-        async def authority_target_tables_overlapping(
-            self, schema: object
-        ) -> set[str]:
+        async def authority_target_tables_overlapping(self, schema: object) -> set[str]:
             del schema
             return set()
 
@@ -212,17 +210,24 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
         *,
         timeout_seconds: int,
     ) -> AsyncIterator[None]:
-        check_equal(
-            "publisher 使用目标 generation WRITE 锁",
-            set(names),
-            {
-                generation_lock_name("dw", "a_table"),
-                generation_lock_name("dw", "z_table"),
-            },
-        )
-        events.append(f"generation_enter:{len(set(names))}:{timeout_seconds}")
+        lock_names = set(names)
+        expected_targets = {
+            generation_lock_name("dw", "a_table"),
+            generation_lock_name("dw", "z_table"),
+        }
+        if lock_names == {generation_lock_name("metadata-authority-publish", "local")}:
+            events.append(f"publisher_enter:{timeout_seconds}")
+        else:
+            check_equal(
+                "publisher 使用目标 generation WRITE 锁",
+                lock_names,
+                expected_targets,
+            )
+            events.append(f"generation_enter:{len(lock_names)}:{timeout_seconds}")
         yield
-        events.append("generation_exit")
+        events.append(
+            "generation_exit" if lock_names == expected_targets else "publisher_exit"
+        )
 
     @asynccontextmanager
     async def session() -> AsyncIterator[object]:
@@ -251,6 +256,7 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
         "发布事务位于 generation lock 内",
         events,
         [
+            "publisher_enter:10",
             "session_enter",
             "session_commit",
             "generation_enter:2:10",
@@ -263,6 +269,7 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
             "memory",
             "session_commit",
             "generation_exit",
+            "publisher_exit",
         ],
     )
 
@@ -277,10 +284,14 @@ async def test_snapshot_locks_every_table_from_an_overlapping_authority_scope(
     async def generation_locks(
         names: Iterable[str], *, timeout_seconds: int
     ) -> AsyncIterator[None]:
-        assert set(names) == {
-            generation_lock_name("dw", "orders"),
-            generation_lock_name("dw", "customers"),
-        }
+        lock_names = set(names)
+        assert lock_names in (
+            {generation_lock_name("metadata-authority-publish", "local")},
+            {
+                generation_lock_name("dw", "orders"),
+                generation_lock_name("dw", "customers"),
+            },
+        )
         del timeout_seconds
         yield
 
@@ -305,6 +316,59 @@ async def test_snapshot_locks_every_table_from_an_overlapping_authority_scope(
     await MySQLAcceptedSnapshotPublisher(
         _lock_manager(generation_locks), {"local": "source_demo"}
     ).publish(_accepted_snapshot())
+
+
+async def test_snapshot_serializes_source_before_scanning_authority_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同源发布者必须先串行化，再扫描会被撤销的 authority scope。"""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def generation_locks(
+        names: Iterable[str], *, timeout_seconds: int
+    ) -> AsyncIterator[None]:
+        del timeout_seconds
+        lock_names = set(names)
+        if lock_names == {generation_lock_name("metadata-authority-publish", "local")}:
+            events.append("source_enter")
+            yield
+            events.append("source_exit")
+            return
+        events.append("targets_enter")
+        yield
+        events.append("targets_exit")
+
+    @asynccontextmanager
+    async def session() -> AsyncIterator[object]:
+        yield object()
+
+    async def authority_targets(self: object, schema: object) -> set[str]:
+        del self, schema
+        events.append("authority_scan")
+        return {"orders"}
+
+    _install_repository_fakes(monkeypatch, events)
+    monkeypatch.setattr(snapshots, "build_accepted_memories", lambda *a, **k: [])
+    monkeypatch.setattr(
+        snapshots,
+        "build_desired_tables",
+        lambda *a, **k: [SimpleNamespace(target_table="orders")],
+    )
+    monkeypatch.setattr(snapshots.MySQLDatabase, "session", session)
+    monkeypatch.setattr(
+        snapshots.MetadataRepository,
+        "authority_target_tables_overlapping",
+        authority_targets,
+    )
+
+    await MySQLAcceptedSnapshotPublisher(
+        _lock_manager(generation_locks), {"local": "source_demo"}
+    ).publish(_accepted_snapshot())
+
+    assert events.index("source_enter") < events.index("authority_scan")
+    assert events.index("authority_scan") < events.index("targets_enter")
+    assert events.index("targets_exit") < events.index("source_exit")
 
 
 async def test_snapshot_rollback_completes_before_generation_lock_release(
@@ -357,8 +421,8 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
     check_equal("发布失败保留原异常实例", captured.value is signal, True)
     check_equal(
         "发布回滚早于 generation lock 释放",
-        events[-3:],
-        ["memory", "session_rollback", "generation_exit"],
+        events[-4:],
+        ["memory", "session_rollback", "generation_exit", "generation_exit"],
     )
 
 
@@ -401,9 +465,7 @@ async def test_snapshot_release_failure_after_commit_does_not_reverse_success(
 
     await MySQLAcceptedSnapshotPublisher(
         _lock_manager(generation_locks), {"local": "source_demo"}
-    ).publish(
-        _accepted_snapshot()
-    )
+    ).publish(_accepted_snapshot())
 
     check_equal("锁清理失败发生前发布事务已提交", events[-1], "session_commit")
     check_equal("提交后锁清理失败只记录一次告警", len(warnings), 1)
@@ -456,4 +518,4 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
     check_equal("锁竞争错误码", captured.value.code, "generation_lock_unavailable")
     check_equal("锁竞争允许上层安全重试", captured.value.retryable, True)
     check_equal("锁竞争 HTTP 状态", captured.value.http_status, 503)
-    check_equal("锁竞争前仅执行 authority 影响面只读", session_entries, ["entered"])
+    check_equal("source 锁竞争前不扫描 authority", session_entries, [])

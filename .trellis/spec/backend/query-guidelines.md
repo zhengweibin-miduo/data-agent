@@ -220,7 +220,9 @@ async for batch in readonly_executor.execute(validated):
   turns form an independent-query boundary.
 - Publishing an accepted snapshot locks every DW target in each overlapping
   authority scope before invalidating that scope, not only the newly submitted
-  targets.
+  targets. Publishers for the same source are serialized before scanning those
+  overlapping scopes, so the scan and target-lock acquisition cannot race with
+  another accepted snapshot publication.
 - BOOLEAN filter evidence is normalized to typed parameters and rejected when
   it is outside the closed true/false vocabulary.
 - TIMESTAMP trend buckets convert the UTC session value to the trusted user
