@@ -1592,6 +1592,37 @@ async def test_many_to_one_join_allows_parent_dimension_for_child_measure() -> N
     assert result.validated is not None
 
 
+async def test_table_count_rejects_joining_one_to_many_child() -> None:
+    """表绑定的计数主体不能沿一对多方向连接子表。"""
+    context = _context().model_copy(
+        update={
+            "relationships_authoritative": True,
+            "bindings": {"客户": "table-customers", "金额": "column-amount"},
+        }
+    )
+    result = await validate_query(
+        QueryDraft(
+            sql=(
+                "SELECT o.amount, COUNT(*) AS total FROM dw.customers c "
+                "JOIN dw.orders o ON o.id = c.id GROUP BY o.amount"
+            ),
+            table_ids=["table-customers", "table-orders"],
+            column_ids=["column-customer-id", "column-id", "column-amount"],
+        ),
+        context,
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            query_type_quote="按",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["客户"],
+            dimension_quotes=["金额"],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_cardinality_unsupported"
+
+
 @pytest.mark.parametrize(
     ("sql", "sorts"),
     [
@@ -1847,6 +1878,74 @@ def test_intent_requires_every_explicit_filter_and_grouping_dimension() -> None:
             measure_quotes=["销售额"],
             dimension_quotes=["地区"],
         ).validate_evidence(["按地区和产品统计销售额合计"])
+
+
+@pytest.mark.parametrize("separator", ["，", ","])
+def test_intent_requires_every_comma_separated_grouping_dimension(
+    separator: str,
+) -> None:
+    """逗号列举的分组维度必须逐项进入可信意图。"""
+    with pytest.raises(ValueError, match="分组维度"):
+        QueryIntent(
+            query_type=QueryType.COMPARISON,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            dimension_quotes=["地区"],
+        ).validate_evidence([f"按地区{separator}状态统计销售额合计"])
+
+
+def test_intent_requires_every_symbol_filter_clause() -> None:
+    """符号操作符连接的多项过滤不能只抽取首项。"""
+    with pytest.raises(ValueError, match="每项过滤"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[
+                FilterIntent(
+                    column_quote="地区",
+                    operator="eq",
+                    operator_quote="=",
+                    value_quotes=["华东"],
+                    clause_quote="地区=华东",
+                )
+            ],
+        ).validate_evidence(["地区=华东且状态=完成的订单数量"])
+
+
+def test_sort_and_field_words_do_not_invent_aggregation() -> None:
+    """排序方向和字段名称中的聚合词不会强制创建聚合槽位。"""
+    QueryIntent(
+        query_type=QueryType.RANKING,
+        measure_quotes=["订单编号"],
+        sorts=[
+            SortIntent(
+                quote="销售额",
+                direction="desc",
+                direction_quote="最高",
+            )
+        ],
+        limit=10,
+        limit_quote="前10条",
+    ).validate_evidence(["销售额最高的前10条订单编号"])
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        measure_quotes=["订单编号", "订单数量"],
+    ).validate_evidence(["列出订单编号和订单数量"])
+
+
+def test_different_dimension_is_not_distinct_intent() -> None:
+    """“不同地区”表示分组维度，而不是未建模 DISTINCT。"""
+    QueryIntent(
+        query_type=QueryType.COMPARISON,
+        query_type_quote="比较",
+        aggregation="sum",
+        aggregation_quote="合计",
+        measure_quotes=["销售额"],
+        dimension_quotes=["地区"],
+    ).validate_evidence(["比较不同地区的销售额合计"])
 
 
 def test_intent_rejects_negated_positive_operator_and_inconsistent_shape() -> None:

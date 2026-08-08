@@ -272,7 +272,13 @@ class QueryIntent(ContractModel):
             if evidenced_operator != item.operator:
                 raise ValueError("过滤操作必须携带与枚举精确一致的用户原文证据")
         all_filters = [*self.filters, *([self.time_filter] if self.time_filter else [])]
-        if any(marker in user_text for marker in ("不同", "去重", "唯一", "distinct")):
+        different_dimension = any(
+            f"不同{quote}" in user_text for quote in self.dimension_quotes
+        )
+        if (
+            ("不同" in user_text and not different_dimension)
+            or any(marker in user_text for marker in ("去重", "唯一", "distinct"))
+        ):
             raise ValueError("去重语义尚未建模，必须先澄清")
         boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", user_text)
         if any(
@@ -405,16 +411,16 @@ class QueryIntent(ContractModel):
         ):
             raise ValueError("用户明确表达的趋势形态必须完整映射到查询意图")
         grouping_matches = re.findall(
-            r"按(?!照|日|周|月|季|季度|年)([^，。,.；;\s]+)", user_text
+            r"按(?!照|日|周|月|季|季度|年)(.+?)(?=统计|查询|查看|展示|比较|对比|。|；|;|$)",
+            user_text,
         )
         explicit_dimensions = [
             dimension
             for match in grouping_matches
-            for dimension in re.split(
-                r"(?:和|与|及|、)", re.split(r"(?:统计|查看|展示|比较|对比)", match)[0]
-            )
-            if dimension
+            for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
+            if dimension.strip()
         ]
+        explicit_dimensions = [item.strip(" 的") for item in explicit_dimensions]
         if explicit_dimensions and any(
             not any(
                 dimension in quote or quote in dimension
@@ -467,38 +473,40 @@ class QueryIntent(ContractModel):
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
         filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
         filter_evidence_text = re.sub(r"(?:以及|和)", "且", filter_evidence_text)
-        explicit_filter_clauses = re.findall(
-            r"[^且，。,.；;]+(?:大于或等于|小于或等于|大于等于|小于等于|"
+        filter_operator_pattern = re.compile(
+            r"(?:大于或等于|小于或等于|大于等于|小于等于|"
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
-            r"等于|属于|包含|是|为)[^且，。,.；;]+",
-            filter_evidence_text,
+            r"等于|属于|包含|是|为|!=|<>|>=|<=|(?<![<>!])=(?!=)|"
+            r"\b(?:in|like)\b)",
+            re.IGNORECASE,
         )
+        explicit_filter_clauses = [
+            clause.strip()
+            for clause in re.split(r"[且，。,.；;]", filter_evidence_text)
+            if filter_operator_pattern.search(clause)
+        ]
         if len(explicit_filter_clauses) > len(all_filters):
             raise ValueError("用户明确表达的每项过滤条件必须完整映射到查询意图")
         if len(all_filters) > 1:
             clause_quotes = [item.clause_quote for item in all_filters]
             if None in clause_quotes or len(set(clause_quotes)) != len(clause_quotes):
                 raise ValueError("每项过滤条件必须与不同的用户原文子句一一对应")
-        if (
-            any(
+        aggregation_action = any(
+            marker in user_text for marker in ("总和", "合计", "平均", "均值")
+        )
+        aggregation_action = aggregation_action or any(
+            marker in user_text
+            and not any(marker in quote for quote in self.measure_quotes)
+            for marker in ("数量", "个数")
+        )
+        aggregation_action = aggregation_action or (
+            self.query_type != QueryType.RANKING
+            and any(
                 marker in user_text
-                for marker in (
-                    "总和",
-                    "合计",
-                    "平均",
-                    "均值",
-                    "数量",
-                    "个数",
-                    "最大值",
-                    "最大",
-                    "最高",
-                    "最小值",
-                    "最小",
-                    "最低",
-                )
+                for marker in ("最大值", "最大", "最高", "最小值", "最小", "最低")
             )
-            and self.aggregation is None
-        ):
+        )
+        if aggregation_action and self.aggregation is None:
             raise ValueError("用户明确表达的聚合必须完整映射到查询意图")
         if (
             any(
@@ -1165,14 +1173,15 @@ def _validate_query_sync(
         if candidate.object_id in required_metric_ids:
             required_column_ids.update(candidate.related_column_ids)
     if list(root.find_all(exp.Join)):
-        result_column_ids = {
+        result_object_ids = {
             context.bindings[quote]
             for quote in intent.measure_quotes
             if context.bindings.get(quote) is not None
         }
-        measure_owner_tables = {
+        measure_owner_tables = result_object_ids & allowed_table_ids
+        measure_owner_tables.update({
             column_owner
-            for column_id in result_column_ids
+            for column_id in result_object_ids
             if (
                 column_owner := next(
                     (
@@ -1185,7 +1194,7 @@ def _validate_query_sync(
                 )
             )
             is not None
-        }
+        })
         parent_tables_by_child: dict[str, set[str]] = {}
         for child_table, parent_table in actual_join_directions:
             parent_tables_by_child.setdefault(child_table, set()).add(parent_table)
