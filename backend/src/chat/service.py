@@ -109,7 +109,7 @@ class ChatService:
                 conversation_uid,
                 request.turn_uid,
             )
-        except Exception:
+        except BaseException:
             if started.execution_owner:
                 try:
                     await self._conversations.abandon_turn(

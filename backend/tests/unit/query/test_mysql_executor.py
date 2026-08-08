@@ -95,8 +95,26 @@ async def test_query_executor_expands_driver_reads_after_row_width_is_known() ->
     query = Mock(sql="SELECT payload FROM dw.items", params={})
     batches = [batch async for batch in executor.execute(query)]
 
-    assert result.partition_sizes == [1, 4, 4, 4]
+    assert result.partition_sizes == [1, 2, 2, 2, 2, 2]
     assert sum(len(batch.rows) for batch in batches) == 9
+
+
+async def test_query_executor_grows_driver_reads_conservatively() -> None:
+    """窄首行不能让下一次读取直接放大到配置上限。"""
+    executor = MySQLQueryExecutor(
+        "mysql+asyncmy://query:secret@localhost/dw",
+        timeout_seconds=10,
+        fetch_batch_rows=500,
+        max_batch_bytes=1024 * 1024,
+    )
+    result = _AdaptiveResult([("x",), ("y" * 900_000,), ("z" * 900_000,)])
+    executor._engine = Mock(connect=Mock(return_value=_Connection(result)))
+
+    query = Mock(sql="SELECT payload FROM dw.items", params={})
+    batches = [batch async for batch in executor.execute(query)]
+
+    assert result.partition_sizes[:2] == [1, 2]
+    assert sum(len(batch.rows) for batch in batches) == 3
 
 
 def test_query_engine_initializes_utc_session(

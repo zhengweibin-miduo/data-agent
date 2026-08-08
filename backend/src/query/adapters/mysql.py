@@ -3,8 +3,8 @@
 import asyncio
 import base64
 import json
-from collections.abc import AsyncGenerator, Awaitable
-from typing import TypeVar
+from collections.abc import AsyncGenerator, Awaitable, Sequence
+from typing import TypeVar, cast
 
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -119,6 +119,7 @@ class MySQLQueryExecutor:
             # 首行单独读取以建立保守行宽上界；通过字节门禁后，再按该上界
             # 与配置行数选择驱动批次，避免永久退化为逐行游标 await。
             driver_fetch_rows = 1
+            max_observed_row_bytes = 0
             fetchmany = getattr(result, "fetchmany", None)
             partitions = (
                 None
@@ -129,7 +130,11 @@ class MySQLQueryExecutor:
                 try:
                     if callable(fetchmany):
                         partition = await _within_budget(
-                            fetchmany(driver_fetch_rows), remaining
+                            cast(
+                                Awaitable[list[Sequence[object]]],
+                                fetchmany(driver_fetch_rows),
+                            ),
+                            remaining,
                         )
                         if not partition:
                             break
@@ -155,6 +160,7 @@ class MySQLQueryExecutor:
                             "单行结果超过流式批次字节预算",
                             http_status=422,
                         )
+                    max_observed_row_bytes = max(max_observed_row_bytes, row_bytes)
                     if pending and (
                         len(pending) >= self._fetch_batch_rows
                         or pending_bytes + row_bytes + 1024 > self._max_batch_bytes
@@ -166,7 +172,15 @@ class MySQLQueryExecutor:
                     pending_bytes += row_bytes
                     driver_fetch_rows = min(
                         self._fetch_batch_rows,
-                        max(1, self._max_batch_bytes // (row_bytes + 1024)),
+                        # 未知的下一行可能突然变宽。驱动层最多同时预取两行，
+                        # 既避免永久逐行 await，也把门禁前的最坏预物化量限制
+                        # 在两个合法单行预算内，不能因一串窄行放大到 500 行。
+                        2,
+                        max(
+                            1,
+                            self._max_batch_bytes
+                            // (max_observed_row_bytes + 1024),
+                        ),
                     )
             # 空结果仍需要把数据库返回的字段名交给 metadata 事件。
             yield QueryBatch(columns=columns, rows=pending)

@@ -875,6 +875,22 @@ async def test_cte_validates_physical_column_but_allows_outer_projection() -> No
     assert invalid.issues[0].code == "column_unknown"
 
 
+async def test_reused_physical_alias_across_scopes_fails_closed() -> None:
+    """逐 scope 血缘完成前，局部别名复用不能进入全局字段坐标。"""
+    result = await validate_query(
+        _draft(
+            "WITH used AS (SELECT t.amount FROM dw.orders AS t), "
+            "unused AS (SELECT t.id FROM dw.customers AS t) "
+            "SELECT amount FROM used"
+        ),
+        _context().model_copy(update={"bindings": {"金额": "column-amount"}}),
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["金额"]),
+        dw_database="dw",
+    )
+
+    assert result.issues[0].code == "alias_scope_ambiguous"
+
+
 @pytest.mark.parametrize(
     "sql",
     [

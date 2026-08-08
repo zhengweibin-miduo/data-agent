@@ -1145,6 +1145,11 @@ def _validate_query_sync(
     aliases = {
         table.alias_or_name: tables_by_name[table.name] for table in physical_tables
     }
+    physical_aliases = [table.alias_or_name.casefold() for table in physical_tables]
+    if len(physical_aliases) != len(set(physical_aliases)):
+        # columns_by_coordinate 是全局坐标表；在完成逐 Scope 血缘前，复用局部
+        # 别名会使后访问的 scope 覆盖先前映射，必须失败关闭。
+        return _failed("alias_scope_ambiguous")
     columns_by_coordinate = {
         (alias, column.name): column.id
         for alias, table in aliases.items()

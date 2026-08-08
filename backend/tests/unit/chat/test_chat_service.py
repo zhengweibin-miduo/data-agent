@@ -1,5 +1,6 @@
 """当前 DDL 上下文聊天编排测试。"""
 
+import asyncio
 from datetime import UTC, datetime
 from typing import cast
 from unittest.mock import AsyncMock, Mock
@@ -289,6 +290,19 @@ async def test_chat_turn_releases_owner_when_assistant_replay_read_fails() -> No
     conversations.assistant_message = AsyncMock(side_effect=RuntimeError("read failed"))
 
     with pytest.raises(RuntimeError, match="read failed"):
+        await service.run_turn("conversation-1", _request())
+
+    conversations.abandon_turn.assert_awaited_once_with(
+        "user-1", "conversation-1", "turn-1"
+    )
+
+
+async def test_chat_turn_releases_owner_when_assistant_replay_is_cancelled() -> None:
+    """助手消息回读取消也必须释放已经取得的轮次。"""
+    service, conversations, _, _ = _service()
+    conversations.assistant_message = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
         await service.run_turn("conversation-1", _request())
 
     conversations.abandon_turn.assert_awaited_once_with(
