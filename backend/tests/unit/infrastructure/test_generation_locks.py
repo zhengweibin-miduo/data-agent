@@ -210,3 +210,25 @@ async def test_cancellation_releases_before_propagating(
             raise asyncio.CancelledError
 
     assert "service_release_locks" in connection.calls[-1][0]
+
+
+async def test_read_owner_is_kept_alive_while_caller_is_paused(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """长流暂停期间 owner 必须主动保活，避免服务端空闲回收 READ 锁。"""
+    connection = _Connection([1, 1, 1])
+    engine = _Engine(connection)
+    monkeypatch.setattr(
+        module,
+        "create_async_engine",
+        lambda *_args, **_kwargs: cast(AsyncEngine, engine),
+    )
+    manager = GenerationLockManager(
+        "mysql+asyncmy://user:pass@localhost/meta", io_timeout_seconds=0.05
+    )
+    await manager.initialize()
+
+    async with manager.read(["table:a"], 0):
+        await asyncio.sleep(0.04)
+
+    assert any("SELECT 1" in sql for sql, _ in connection.calls)

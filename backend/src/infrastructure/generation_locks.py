@@ -226,6 +226,8 @@ class GenerationLockManager:
         try:
             connection_context = self._client().connect()
             async with connection_context as connection:
+                owner_task = asyncio.current_task()
+                keepalive: asyncio.Task[None] | None = None
                 try:
                     try:
                         acquired = await self._scalar(connection, statement, parameters)
@@ -239,8 +241,15 @@ class GenerationLockManager:
                         raise AdvisoryLockUnavailableError(
                             "MySQL generation lock 未在等待预算内取得"
                         )
+                    keepalive = asyncio.create_task(
+                        self._keep_owner_alive(connection, owner_task),
+                        name="generation-lock-owner-keepalive",
+                    )
                     yield
                 finally:
+                    if keepalive is not None:
+                        keepalive.cancel()
+                        await asyncio.gather(keepalive, return_exceptions=True)
                     active_error = sys.exc_info()[1]
                     release_error = await self._release(connection)
                     if release_error is not None:
@@ -253,6 +262,22 @@ class GenerationLockManager:
             raise AdvisoryLockUnavailableError(
                 "MySQL generation lock owner 池已满"
             ) from error
+
+    async def _keep_owner_alive(
+        self,
+        connection: AsyncConnection,
+        owner_task: asyncio.Task[object] | None,
+    ) -> None:
+        """在长临界区内保活 owner；连接失效时 fence 当前调用方。"""
+        interval = max(0.01, min(1.0, self._io_timeout_seconds / 2))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._scalar(connection, text("SELECT 1"), {})
+            except BaseException:
+                if owner_task is not None:
+                    owner_task.cancel("generation_lock_owner_lost")
+                return
 
     async def _release(self, connection: AsyncConnection) -> BaseException | None:
         """释放 owner 在 generation namespace 内的全部锁。"""

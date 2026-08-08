@@ -29,6 +29,25 @@ from query.domain import (
 )
 
 
+def test_relative_and_absolute_time_ranges_are_semantically_deduplicated() -> None:
+    """澄清回答可用绝对年份复述原问题中的同一相对年份。"""
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="合计",
+        aggregation="sum",
+        aggregation_quote="合计",
+        measure_quotes=["销售额"],
+        time_quote="今年",
+        time_column_quote="订单日期",
+    )
+
+    intent.validate_evidence(
+        ["查看今年销售额合计", "订单日期看2026年"],
+        now_utc=datetime(2026, 8, 8, tzinfo=UTC),
+        user_timezone="Asia/Shanghai",
+    )
+
+
 @pytest.mark.parametrize(
     ("quote", "now", "zone", "data_type", "expected_start", "expected_end"),
     [

@@ -167,7 +167,13 @@ class QueryIntent(ContractModel):
         default_factory=list, max_length=20, description="未解决歧义。"
     )
 
-    def validate_evidence(self, user_messages: list[str]) -> None:
+    def validate_evidence(
+        self,
+        user_messages: list[str],
+        *,
+        now_utc: datetime | None = None,
+        user_timezone: str = "UTC",
+    ) -> None:
         """确认每个关键短语都逐字来自同租户用户消息。"""
         quotes = [
             *([self.query_type_quote] if self.query_type_quote else []),
@@ -521,9 +527,21 @@ class QueryIntent(ContractModel):
             r"最近\s*\d+\s*(?:天|周|月|年))",
             user_text,
         )
-        distinct_time_ranges = {
-            re.sub(r"\s+", "", item).casefold() for item in explicit_time_ranges
-        }
+        reference_now = now_utc or datetime.now(UTC)
+        distinct_time_ranges: set[tuple[str, str] | str] = set()
+        for item in explicit_time_ranges:
+            normalized = re.sub(r"\s+", "", item).casefold()
+            resolved = resolve_trusted_time_range(
+                source_quote=item,
+                column_id="evidence-time-column",
+                column_name="evidence_time_column",
+                data_type="DATE",
+                user_timezone=user_timezone,
+                now_utc=reference_now,
+            )
+            distinct_time_ranges.add(
+                normalized if resolved is None else (resolved.start, resolved.end)
+            )
         if len(distinct_time_ranges) > 1:
             raise ValueError("多个时间范围尚未建模，必须先澄清")
         if explicit_time_ranges and not (
@@ -655,18 +673,25 @@ class QueryIntent(ContractModel):
             or re.search(r"\b(?:asc|desc)\b", user_text, re.IGNORECASE)
         ) and not self.sorts:
             raise ValueError("用户明确表达的排序必须完整映射到查询意图")
-        explicit_sorts = re.findall(
-            r"([^，。,.；;、]+?)(升序|降序|从低到高|从高到低|\basc\b|\bdesc\b)",
-            user_text,
-            re.IGNORECASE,
-        )
-        explicit_sorts.extend(
-            (sort_object, direction)
-            for sort_object, direction in re.findall(
-                r"([^，。,.；;、]+?)(最高|最低)(?=的?前\s*\d+)",
-                user_text,
+        explicit_sorts: list[tuple[str, str]] = []
+        if any(
+            marker in user_text
+            for marker in ("升序", "降序", "从低到高", "从高到低", "asc", "desc")
+        ):
+            explicit_sorts.extend(
+                re.findall(
+                    r"([^，。,.；;、]+?)(升序|降序|从低到高|从高到低|\basc\b|\bdesc\b)",
+                    user_text,
+                    re.IGNORECASE,
+                )
             )
-        )
+        if ("最高" in user_text or "最低" in user_text) and "前" in user_text:
+            explicit_sorts.extend(
+                re.findall(
+                    r"([^，。,.；;、]+?)(最高|最低)(?=的?前\s*\d+)",
+                    user_text,
+                )
+            )
         if len(explicit_sorts) > len(self.sorts):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
         matched_sort_indexes: set[int] = set()

@@ -239,15 +239,20 @@ async for batch in readonly_executor.execute(validated):
 - Reverse intent coverage treats `各<维度>`、`每个<维度>` and `分<维度>` as explicit
   grouping evidence. Until an explicit `LIKE ... ESCAPE` contract exists,
   contains evidence with backslashes, `%`, or `_` fails closed.
-- Repeated evidence for the same normalized time range is one semantic range;
-  only distinct ranges trigger the unsupported-multiple-range guard.
+- Repeated evidence for the same resolved half-open time interval is one
+  semantic range, even when relative and absolute phrases differ; resolution
+  uses the injected clock and trusted user timezone before deduplication.
 - Aggregate action detection excludes trusted measure names, and Top-N extreme
   phrases bind only the measure expression after any grouping prefix.
 - Until a trusted outer-join contract exists, a nullable foreign key cannot
   authorize an inner child-to-parent join that would discard driving rows.
 - Query claim heartbeats distinguish a failed compare-and-swap renewal from a
   transient renewal transport error. A confirmed claim loss fences execution
-  and projects the same stable retryable error before or after the first event.
+  and projects the same stable retryable error before or after the first event;
+  every supported lease value renews strictly before its expiry boundary.
+- Generation lock owners stay active throughout long streaming critical
+  sections. A bounded keepalive detects owner-session loss and fences the
+  active operation before it can continue outside the protected generation.
 - Chat claim heartbeats follow the same rule and stop before the terminal
   completion transaction, so a transient renewal failure does not fence a live
   owner and a successful completion cannot cancel itself after clearing the claim.

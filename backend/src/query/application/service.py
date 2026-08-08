@@ -160,11 +160,20 @@ class QueryApplication:
             intent_context = [
                 f"{message.role.value}: {message.content}" for message in evidence_chain
             ]
+            evidence_now = self._now()
             intent = await self._intents.parse(
-                request.question, intent_context, user_messages
+                request.question,
+                intent_context,
+                user_messages,
+                now_utc=evidence_now,
+                user_timezone=request.supplemental_context.user_timezone,
             )
             try:
-                intent.validate_evidence(user_messages)
+                intent.validate_evidence(
+                    user_messages,
+                    now_utc=evidence_now,
+                    user_timezone=request.supplemental_context.user_timezone,
+                )
             except ValueError as error:
                 raise DataAgentError(
                     "query_intent_invalid",
@@ -353,7 +362,7 @@ class QueryApplication:
         owner_task: asyncio.Task[object] | None,
     ) -> None:
         """独立续租健康长流；续租失败时 fence 掉旧执行者。"""
-        interval = max(1.0, self._turn_lease_seconds / 3)
+        interval = max(0.01, self._turn_lease_seconds / 3)
         while True:
             await asyncio.sleep(interval)
             try:

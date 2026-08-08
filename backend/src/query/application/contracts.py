@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime
 from typing import Literal, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -194,6 +195,9 @@ class QueryIntentPort(Protocol):
         question: str,
         context_messages: list[str],
         evidence_messages: list[str],
+        *,
+        now_utc: datetime | None = None,
+        user_timezone: str = "UTC",
     ) -> QueryIntent:
         """使用角色上下文解析，并仅用用户原文验证证据。"""
         ...

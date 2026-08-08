@@ -1,5 +1,6 @@
 """自然语言查询应用 seam 的行为测试。"""
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -137,6 +138,7 @@ class _IntentParser:
         _question: str,
         _context_messages: list[str],
         _evidence_messages: list[str],
+        **_kwargs: object,
     ) -> QueryIntent:
         """返回一个聚合指标意图。"""
         return QueryIntent(
@@ -159,10 +161,13 @@ class _RecordingIntentParser(_IntentParser):
         question: str,
         context_messages: list[str],
         evidence_messages: list[str],
+        **kwargs: object,
     ) -> QueryIntent:
         self.messages = context_messages
         self.evidence_messages = evidence_messages
-        return await super().parse(question, context_messages, evidence_messages)
+        return await super().parse(
+            question, context_messages, evidence_messages, **kwargs
+        )
 
 
 class _MultiClarificationIntentParser(_RecordingIntentParser):
@@ -173,6 +178,7 @@ class _MultiClarificationIntentParser(_RecordingIntentParser):
         question: str,
         context_messages: list[str],
         evidence_messages: list[str],
+        **_kwargs: object,
     ) -> QueryIntent:
         self.messages = context_messages
         self.evidence_messages = evidence_messages
@@ -207,6 +213,7 @@ class _NaturalTimeIntentParser:
         question: str,
         context_messages: list[str],
         evidence_messages: list[str],
+        **_kwargs: object,
     ) -> QueryIntent:
         assert question == "下单时间"
         assert context_messages[0] == "user: 查询今年销售额总和"
@@ -1400,3 +1407,49 @@ async def test_stream_repairs_sql_once_but_never_repairs_timeout() -> None:
         _ = [event async for event in timeout_application.stream(request)]
     assert timeout_planner.repairs == 0
     assert timeout_conversations.abandoned == 1
+
+
+async def test_one_second_turn_lease_renews_before_expiry() -> None:
+    """最小合法租约的首次心跳必须严格早于一秒到期边界。"""
+
+    class Conversations(_Conversations):
+        renewals = 0
+
+        async def renew_turn(self, *_args: object) -> bool:
+            self.renewals += 1
+            return True
+
+    conversations = Conversations()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, conversations),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _GroundedMetadata()),
+        planner=cast(QueryPlannerPort, _Planner()),
+        readiness=cast(QueryReadinessPort, _Ready()),
+        executor=cast(QueryExecutorPort, _Executor()),
+        dw_database="dw",
+        turn_lease_seconds=1,
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+    owner = asyncio.current_task()
+    assert owner is not None
+    heartbeat = asyncio.create_task(
+        application._heartbeat_turn(request, "claim", owner)  # pyright: ignore[reportPrivateUsage]
+    )
+    try:
+        await asyncio.sleep(0.5)
+    finally:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
+
+    assert conversations.renewals >= 1

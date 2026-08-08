@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime
 from typing import TypeVar, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -61,6 +62,9 @@ class QueryLLMAdapter:
         question: str,
         context_messages: list[str],
         evidence_messages: list[str],
+        *,
+        now_utc: datetime | None = None,
+        user_timezone: str = "UTC",
     ) -> QueryIntent:
         """提取严格 QueryIntent；契约错误仅修复一次并最终失败关闭。"""
         payload: dict[str, object] = {
@@ -77,7 +81,11 @@ class QueryLLMAdapter:
                 )
             try:
                 intent = await self._invoke(QueryIntent, _INTENT_PROMPT, payload)
-                intent.validate_evidence(evidence_messages)
+                intent.validate_evidence(
+                    evidence_messages,
+                    now_utc=now_utc,
+                    user_timezone=user_timezone,
+                )
             except (TypeError, ValueError):
                 continue
             return intent
