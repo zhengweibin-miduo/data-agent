@@ -1395,7 +1395,7 @@ def _validate_query_sync(
     for candidate in context.candidates:
         if candidate.object_id in required_metric_ids:
             required_column_ids.update(candidate.related_column_ids)
-    if list(root.find_all(exp.Join)) and intent.aggregation is not None:
+    if list(root.find_all(exp.Join)):
         result_object_ids = {
             context.bindings[quote]
             for quote in intent.measure_quotes
@@ -1423,6 +1423,7 @@ def _validate_query_sync(
         parent_tables_by_child: dict[str, set[str]] = {}
         for child_table, parent_table in actual_join_directions:
             parent_tables_by_child.setdefault(child_table, set()).add(parent_table)
+        safe_owner_count = 0
         for measure_table in measure_owner_tables:
             reachable = {measure_table}
             pending = [measure_table]
@@ -1432,8 +1433,12 @@ def _validate_query_sync(
                     if parent not in reachable:
                         reachable.add(parent)
                         pending.append(parent)
-            if not referenced_tables.issubset(reachable):
+            if referenced_tables.issubset(reachable):
+                safe_owner_count += 1
+            elif intent.aggregation is not None:
                 return _failed("join_cardinality_unsupported")
+        if intent.aggregation is None and safe_owner_count == 0:
+            return _failed("join_cardinality_unsupported")
     if not required_metric_ids.issubset(draft.metric_ids):
         return _failed("binding_missing")
     if not required_table_ids.issubset(referenced_tables):

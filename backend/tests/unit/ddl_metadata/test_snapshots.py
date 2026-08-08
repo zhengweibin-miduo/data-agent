@@ -40,6 +40,27 @@ class _GenerationLocks:
         """以生产签名返回测试控制的锁上下文。"""
         return self._factory(names, timeout_seconds=timeout_seconds)
 
+    def expandable_write(
+        self, names: Iterable[str], timeout_seconds: int
+    ) -> AbstractAsyncContextManager[object]:
+        """复用同一 owner 的测试 seam。"""
+        factory = self._factory
+
+        @asynccontextmanager
+        async def owner() -> AsyncIterator[object]:
+            async with factory(names, timeout_seconds=timeout_seconds):
+
+                class Owner:
+                    async def acquire(
+                        self, more_names: Iterable[str], more_timeout: int
+                    ) -> None:
+                        context = factory(more_names, timeout_seconds=more_timeout)
+                        await context.__aenter__()
+
+                yield Owner()
+
+        return owner()
+
 
 def _lock_manager(
     factory: Callable[..., AbstractAsyncContextManager[None]],
@@ -268,7 +289,6 @@ async def test_snapshot_holds_generation_lock_through_session_commit(
             "metadata_outbox",
             "memory",
             "session_commit",
-            "generation_exit",
             "publisher_exit",
         ],
     )
@@ -368,7 +388,7 @@ async def test_snapshot_serializes_source_before_scanning_authority_scopes(
 
     assert events.index("source_enter") < events.index("authority_scan")
     assert events.index("authority_scan") < events.index("targets_enter")
-    assert events.index("targets_exit") < events.index("source_exit")
+    assert events.index("targets_enter") < events.index("source_exit")
 
 
 async def test_snapshot_rollback_completes_before_generation_lock_release(
@@ -422,7 +442,7 @@ async def test_snapshot_rollback_completes_before_generation_lock_release(
     check_equal(
         "发布回滚早于 generation lock 释放",
         events[-4:],
-        ["memory", "session_rollback", "generation_exit", "generation_exit"],
+        ["metadata_outbox", "memory", "session_rollback", "generation_exit"],
     )
 
 

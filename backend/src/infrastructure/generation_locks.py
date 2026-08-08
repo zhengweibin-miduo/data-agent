@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.sql.elements import TextClause
 
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
@@ -24,6 +25,71 @@ from infrastructure.mysql import (
 _GENERATION_LOCK_NAMESPACE = "data-agent-generation-v1"
 _PROBE_NAMESPACE = "data-agent-capability-v1"
 _CONTENTION_ERRORS = frozenset({3132, 3133})
+
+
+class ExpandableWriteOwner:
+    """在同一 owner connection 上逐步扩展 WRITE 锁集合。"""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        """绑定本次发布独占的 owner connection。"""
+        self._connection = connection
+        self._held: set[str] = set()
+
+    async def acquire(self, names: Iterable[str], timeout_seconds: int) -> None:
+        """原子取得尚未持有的名称，避免嵌套 checkout owner 池。"""
+        ordered = tuple(
+            name
+            for name in _normalize_advisory_lock_names(names)
+            if name not in self._held
+        )
+        if not ordered:
+            return
+        statement, parameters = _lock_statement(
+            ordered,
+            function_name="service_get_write_locks",
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            acquired = await self._connection.scalar(statement, parameters)
+        except DBAPIError as error:
+            if _mysql_error_number(error) in _CONTENTION_ERRORS:
+                raise AdvisoryLockUnavailableError(
+                    "MySQL generation lock 未在等待预算内取得"
+                ) from error
+            raise
+        if not acquired:
+            raise AdvisoryLockUnavailableError(
+                "MySQL generation lock 未在等待预算内取得"
+            )
+        self._held.update(ordered)
+
+
+def _lock_statement(
+    ordered: tuple[str, ...], *, function_name: str, timeout_seconds: int
+) -> tuple[TextClause, dict[str, object]]:
+    """构造一次 Locking Service 多名称调用。"""
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or timeout_seconds < 0
+    ):
+        raise ValueError("MySQL Locking Service timeout 必须是非负整数秒")
+    parameters: dict[str, object] = {
+        "namespace": _GENERATION_LOCK_NAMESPACE,
+        "timeout_seconds": timeout_seconds,
+    }
+    arguments: list[str] = []
+    for index, name in enumerate(ordered):
+        key = f"lock_{index}"
+        parameters[key] = name
+        arguments.append(f":{key}")
+    return (
+        text(
+            f"SELECT {function_name}(:namespace, "
+            f"{', '.join(arguments)}, :timeout_seconds)"
+        ),
+        parameters,
+    )
 
 
 class GenerationLockManager:
@@ -81,6 +147,37 @@ class GenerationLockManager:
             timeout_seconds=timeout_seconds,
         )
 
+    def expandable_write(
+        self, names: Iterable[str], timeout_seconds: int
+    ) -> AbstractAsyncContextManager[ExpandableWriteOwner]:
+        """用一个 owner connection 持有初始锁并允许后续扩展。"""
+        return self._expandable_write(names, timeout_seconds)
+
+    @asynccontextmanager
+    async def _expandable_write(
+        self, names: Iterable[str], timeout_seconds: int
+    ) -> AsyncIterator[ExpandableWriteOwner]:
+        owner: ExpandableWriteOwner | None = None
+        try:
+            async with self._client().connect() as connection:
+                owner = ExpandableWriteOwner(connection)
+                try:
+                    await owner.acquire(names, timeout_seconds)
+                    yield owner
+                finally:
+                    active_error = sys.exc_info()[1]
+                    release_error = await self._release(connection)
+                    if release_error is not None:
+                        await _invalidate_owner_connection(connection, release_error)
+                        if active_error is None:
+                            raise AdvisoryLockReleaseError(
+                                "MySQL generation lock 释放失败，owner 连接已失效"
+                            ) from release_error
+        except SQLAlchemyTimeoutError as error:
+            raise AdvisoryLockUnavailableError(
+                "MySQL generation lock owner 池已满"
+            ) from error
+
     @asynccontextmanager
     async def _locks(
         self,
@@ -91,24 +188,10 @@ class GenerationLockManager:
     ) -> AsyncIterator[None]:
         """用一次 Locking Service 调用原子持有多目标。"""
         ordered = _normalize_advisory_lock_names(names)
-        if (
-            not isinstance(timeout_seconds, int)
-            or isinstance(timeout_seconds, bool)
-            or timeout_seconds < 0
-        ):
-            raise ValueError("MySQL Locking Service timeout 必须是非负整数秒")
-        parameters: dict[str, object] = {
-            "namespace": _GENERATION_LOCK_NAMESPACE,
-            "timeout_seconds": timeout_seconds,
-        }
-        arguments: list[str] = []
-        for index, name in enumerate(ordered):
-            key = f"lock_{index}"
-            parameters[key] = name
-            arguments.append(f":{key}")
-        statement = text(
-            f"SELECT {function_name}(:namespace, "
-            f"{', '.join(arguments)}, :timeout_seconds)"
+        statement, parameters = _lock_statement(
+            ordered,
+            function_name=function_name,
+            timeout_seconds=timeout_seconds,
         )
         try:
             connection_context = self._client().connect()

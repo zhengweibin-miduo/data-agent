@@ -61,10 +61,12 @@ class _Engine:
         checkout_error: BaseException | None = None,
     ) -> None:
         self.closed = False
+        self.connect_count = 0
         self.connection = connection
         self.checkout_error = checkout_error
 
     def connect(self) -> _ConnectionContext:
+        self.connect_count += 1
         if self.checkout_error is not None:
             raise self.checkout_error
         assert self.connection is not None
@@ -131,6 +133,23 @@ async def test_read_acquires_sorted_targets_atomically_and_releases(
     assert parameters["lock_0"] == "table:a"
     assert parameters["lock_1"] == "table:b"
     assert "service_release_locks" in connection.calls[1][0]
+
+
+async def test_expandable_write_reuses_one_owner_connection(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """发布者扩展目标锁时不得为嵌套锁再次 checkout。"""
+    connection = _Connection([1, 1, 1])
+    engine = _Engine(connection)
+    manager = await _manager(monkeypatch, engine)
+
+    async with manager.expandable_write(["publisher:source"], 3) as owner:
+        await owner.acquire(["table:a", "table:b"], 3)
+
+    assert engine.connect_count == 1
+    assert "service_get_write_locks" in connection.calls[0][0]
+    assert "service_get_write_locks" in connection.calls[1][0]
+    assert "service_release_locks" in connection.calls[2][0]
 
 
 async def test_checkout_exhaustion_has_stable_unavailable_error(

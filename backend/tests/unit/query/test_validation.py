@@ -150,7 +150,7 @@ async def test_trusted_time_range_requires_both_exact_boundaries(
             "bindings": {
                 "金额": "column-amount",
                 "下单时间": "column-created-at",
-            }
+            },
         }
     )
     intent = QueryIntent(
@@ -1834,6 +1834,100 @@ async def test_join_rejects_sibling_fact_fanout_from_measure_grain() -> None:
             aggregation_quote="总和",
             measure_quotes=["金额"],
             dimension_quotes=["地区", "退款原因"],
+        ),
+        dw_database="dw",
+    )
+    assert result.issues[0].code == "join_cardinality_unsupported"
+
+
+async def test_detail_join_rejects_sibling_fact_fanout() -> None:
+    """明细结果也必须保留一个可证明的 driving row grain。"""
+    schema = PhysicalSchema(
+        source="erp",
+        canonical_ddl="schema",
+        ddl_hash="ddl",
+        schema_fingerprint="schema",
+        tables=[
+            PhysicalTable(
+                id="table-orders",
+                name="orders",
+                qualified_name="orders",
+                columns=[
+                    PhysicalColumn(id="order-id", name="id", data_type="BIGINT"),
+                    PhysicalColumn(
+                        id="order-customer", name="customer_id", data_type="BIGINT"
+                    ),
+                ],
+            ),
+            PhysicalTable(
+                id="table-customers",
+                name="customers",
+                qualified_name="customers",
+                primary_key=["id"],
+                columns=[
+                    PhysicalColumn(id="customer-id", name="id", data_type="BIGINT")
+                ],
+            ),
+            PhysicalTable(
+                id="table-refunds",
+                name="refunds",
+                qualified_name="refunds",
+                columns=[
+                    PhysicalColumn(id="refund-id", name="id", data_type="BIGINT"),
+                    PhysicalColumn(
+                        id="refund-customer", name="customer_id", data_type="BIGINT"
+                    ),
+                ],
+            ),
+        ],
+        relationships=[
+            PhysicalRelationship(
+                source_table_id="table-orders",
+                source_column_id="order-customer",
+                target_table="customers",
+                target_column="id",
+                constraint_id="orders_customer",
+            ),
+            PhysicalRelationship(
+                source_table_id="table-refunds",
+                source_column_id="refund-customer",
+                target_table="customers",
+                target_column="id",
+                constraint_id="refunds_customer",
+            ),
+        ],
+    )
+    context = QueryContext(
+        physical_schema=schema,
+        candidates=[],
+        bindings={
+            "订单编号": "order-id",
+            "客户编号": "customer-id",
+            "退款编号": "refund-id",
+        },
+        relationships_authoritative=True,
+    )
+    draft = QueryDraft(
+        sql=(
+            "SELECT o.id, c.id, r.id FROM dw.orders o "
+            "JOIN dw.customers c ON o.customer_id = c.id "
+            "JOIN dw.refunds r ON r.customer_id = c.id"
+        ),
+        table_ids=["table-orders", "table-customers", "table-refunds"],
+        column_ids=[
+            "order-id",
+            "order-customer",
+            "customer-id",
+            "refund-id",
+            "refund-customer",
+        ],
+    )
+    result = await validate_query(
+        draft,
+        context,
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号", "客户编号", "退款编号"],
         ),
         dw_database="dw",
     )
