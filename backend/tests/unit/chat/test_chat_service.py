@@ -1,10 +1,12 @@
 """当前 DDL 上下文聊天编排测试。"""
 
+import asyncio
 from datetime import UTC, datetime
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import httpx
+import pytest
 from fastapi.routing import APIRoute
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -87,6 +89,7 @@ def _service(
                 ],
                 memories=[],
             ),
+            claim_token="c" * 32,
         )
     )
     conversations.assistant_message = AsyncMock(return_value=existing)
@@ -96,6 +99,8 @@ def _service(
             message=_message(MessageRole.ASSISTANT, "按支付成功金额定义。")
         ),
     )
+    conversations.abandon_turn = AsyncMock()
+    conversations.renew_turn = AsyncMock(return_value=True)
     readiness = Mock(spec=AnswerReadinessService)
     readiness.evaluate = AsyncMock(
         return_value=AnswerGateResult(
@@ -113,8 +118,84 @@ def _service(
         cast(ConversationService, conversations),
         cast(AnswerReadinessService, readiness),
         cast(BaseChatModel, model),
+        turn_lease_seconds=0.03,
     )
     return service, conversations, readiness, model
+
+
+async def test_chat_turn_renews_claim_during_slow_model_call() -> None:
+    """健康 Chat 在长模型调用期间持续续租当前 claim。"""
+    release = asyncio.Event()
+
+    async def slow_model(*_args: object, **_kwargs: object) -> AIMessage:
+        await release.wait()
+        return AIMessage(content="按支付成功金额定义。")
+
+    service, conversations, _, model = _service()
+    model.ainvoke = AsyncMock(side_effect=slow_model)
+
+    task = asyncio.create_task(service.run_turn("conversation-1", _request()))
+    for _ in range(20):
+        if conversations.renew_turn.await_count:
+            break
+        await asyncio.sleep(0.01)
+    assert conversations.renew_turn.await_count >= 1
+    release.set()
+    await task
+
+
+async def test_chat_turn_stops_when_claim_renewal_is_lost() -> None:
+    """Chat claim 续租 CAS 失败时 fence 旧执行者并返回稳定错误。"""
+    service, conversations, _, model = _service()
+    conversations.renew_turn = AsyncMock(return_value=False)
+
+    async def slow_model(*_args: object, **_kwargs: object) -> AIMessage:
+        await asyncio.sleep(1)
+        return AIMessage(content="不会完成")
+
+    model.ainvoke = AsyncMock(side_effect=slow_model)
+
+    with pytest.raises(DataAgentError) as caught:
+        await service.run_turn("conversation-1", _request())
+
+    assert caught.value.code == "chat_lease_lost"
+
+
+async def test_chat_turn_ignores_transient_claim_renewal_error() -> None:
+    """续租传输异常不能被误判为 claim 已经被替代。"""
+    service, conversations, _, model = _service()
+    conversations.renew_turn = AsyncMock(
+        side_effect=[RuntimeError("temporary database failure"), True]
+    )
+
+    async def slow_model(*_args: object, **_kwargs: object) -> AIMessage:
+        await asyncio.sleep(0.04)
+        return AIMessage(content="按支付成功金额定义。")
+
+    model.ainvoke = AsyncMock(side_effect=slow_model)
+
+    result = await service.run_turn("conversation-1", _request())
+
+    assert result.message.content == "按支付成功金额定义。"
+    assert conversations.renew_turn.await_count >= 2
+
+
+async def test_chat_turn_stops_heartbeat_before_completion() -> None:
+    """完成事务开始前必须停止 heartbeat，避免成功提交后自我 fence。"""
+    service, conversations, _, _ = _service()
+
+    async def complete(*_args: object) -> CompleteTurnResponse:
+        await asyncio.sleep(0.04)
+        return CompleteTurnResponse(
+            message=_message(MessageRole.ASSISTANT, "按支付成功金额定义。")
+        )
+
+    conversations.complete_turn = AsyncMock(side_effect=complete)
+
+    result = await service.run_turn("conversation-1", _request())
+
+    assert result.message.content == "按支付成功金额定义。"
+    assert conversations.renew_turn.await_count == 0
 
 
 async def test_chat_turn_reuses_context_readiness_and_shared_model() -> None:
@@ -168,7 +249,7 @@ async def test_chat_turn_persists_fixed_not_ready_message_without_answer_call() 
 
     check_equal(
         "未就绪固定文案",
-        conversations.complete_turn.await_args.args[3],
+        conversations.complete_turn.await_args.args[4],
         "数据准备中，请稍后重试",
     )
     check_equal("未就绪不调用回答模型", model.ainvoke.await_count, 0)
@@ -250,7 +331,9 @@ async def test_chat_turn_rejects_oversized_ddl_before_starting_turn() -> None:
 
 async def test_chat_turn_preserves_completion_failure() -> None:
     """助手消息持久化失败时保留原始事务异常。"""
-    service, _, _, _ = _service(completion_error=RuntimeError("write failed"))
+    service, conversations, _, _ = _service(
+        completion_error=RuntimeError("write failed")
+    )
 
     try:
         await service.run_turn("conversation-1", _request())
@@ -263,3 +346,43 @@ async def test_chat_turn_preserves_completion_failure() -> None:
             actual="未抛异常",
             expected="RuntimeError",
         )
+    check_equal("完成失败释放执行权", conversations.abandon_turn.await_count, 1)
+
+
+async def test_chat_turn_releases_execution_owner_after_model_failure() -> None:
+    """模型失败后释放当前轮次，使同一 turn_uid 可安全重试。"""
+    timeout = APITimeoutError(request=httpx.Request("POST", "http://model.test"))
+    service, conversations, _, _ = _service(model_result=timeout)
+
+    try:
+        await service.run_turn("conversation-1", _request())
+    except DataAgentError:
+        pass
+
+    check_equal("模型失败释放执行权", conversations.abandon_turn.await_count, 1)
+
+
+async def test_chat_turn_releases_owner_when_assistant_replay_read_fails() -> None:
+    """取得执行权后的助手消息回读失败必须立即释放轮次。"""
+    service, conversations, _, _ = _service()
+    conversations.assistant_message = AsyncMock(side_effect=RuntimeError("read failed"))
+
+    with pytest.raises(RuntimeError, match="read failed"):
+        await service.run_turn("conversation-1", _request())
+
+    conversations.abandon_turn.assert_awaited_once_with(
+        "user-1", "conversation-1", "turn-1", "c" * 32
+    )
+
+
+async def test_chat_turn_releases_owner_when_assistant_replay_is_cancelled() -> None:
+    """助手消息回读取消也必须释放已经取得的轮次。"""
+    service, conversations, _, _ = _service()
+    conversations.assistant_message = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.run_turn("conversation-1", _request())
+
+    conversations.abandon_turn.assert_awaited_once_with(
+        "user-1", "conversation-1", "turn-1", "c" * 32
+    )

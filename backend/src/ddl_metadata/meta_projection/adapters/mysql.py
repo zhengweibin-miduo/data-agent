@@ -132,15 +132,27 @@ class MySQLProjectionReader:
         async with MySQLDatabase.session() as session:
             return await MetadataProjectionRepository(session).eligible_table_ids()
 
+    async def schema_is_authoritative(
+        self, source: str, schema_fingerprint: str
+    ) -> bool:
+        """短事务核验完整 accepted schema 指纹。"""
+        async with MySQLDatabase.session() as session:
+            return await MetadataProjectionRepository(session).schema_is_authoritative(
+                source, schema_fingerprint
+            )
+
     async def authoritative_candidates(
         self,
         identities: list[MetadataSemanticHit],
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataCandidate]:
         """按派生索引顺序回读当前 Meta 候选。"""
         async with MySQLDatabase.session() as session:
-            return await MetadataProjectionRepository(
-                session
-            ).authoritative_candidates(identities)
+            return await MetadataProjectionRepository(session).authoritative_candidates(
+                identities, table_ids=table_ids, column_ids=column_ids
+            )
 
     async def resolve_value_scope(
         self,
@@ -159,6 +171,6 @@ class MySQLProjectionReader:
     ) -> list[MetadataValueCandidate]:
         """拒绝越界或过期的字段值命中。"""
         async with MySQLDatabase.session() as session:
-            return MetadataProjectionRepository(
-                session
-            ).authoritative_value_candidates(projections, scope)
+            return MetadataProjectionRepository(session).authoritative_value_candidates(
+                projections, scope
+            )

@@ -145,6 +145,9 @@ class MetadataQdrantIndex:
         vector: list[float],
         kinds: set[MetadataObjectKind] | None,
         limit: int,
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataSemanticHit]:
         """使用 Qdrant RRF 融合 dense 与服务端 BM25 候选。"""
         if len(vector) != app_config.qdrant.vector_size:
@@ -176,6 +179,22 @@ class MetadataQdrantIndex:
                 ]
             )
         )
+        if table_ids is not None or column_ids is not None:
+            allowed_objects = sorted((table_ids or set()) | (column_ids or set()))
+            scope_conditions = []
+            if allowed_objects:
+                scope_conditions.append(
+                    FieldCondition(
+                        key="object_id", match=MatchAny(any=allowed_objects)
+                    )
+                )
+            if table_ids:
+                scope_conditions.append(
+                    FieldCondition(
+                        key="table_id", match=MatchAny(any=sorted(table_ids))
+                    )
+                )
+            query_filter.should = scope_conditions
         result = await self._client.query_points(
             collection_name=self._collection,
             prefetch=[

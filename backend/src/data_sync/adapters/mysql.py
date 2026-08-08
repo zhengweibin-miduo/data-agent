@@ -36,6 +36,7 @@ from data_sync.schema_sync import (
 from ddl_metadata.meta_projection.application.value_input import (
     ValueProjectionParticipant,
 )
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockUnavailableError,
     MySQLDatabase,
@@ -181,10 +182,12 @@ class MySQLMaterializationAdapter:
         self,
         settings: DataSyncSettings,
         projection_factory: ValueProjectionFactory,
+        generation_locks: GenerationLockManager,
     ) -> None:
         """保存物化配置和 composition root 选择的 projection adapter。"""
         self._settings = settings
         self._projection_factory = projection_factory
+        self._generation_locks = generation_locks
 
     async def synchronize_schema(self, task: ClaimedSyncTask) -> None:
         """在 generation 锁内同步结构并持久化 BUFFERING。"""
@@ -194,10 +197,10 @@ class MySQLMaterializationAdapter:
         )
         try:
             # 步骤一：generation lock 跨越 DDL Session 提交，保持全局锁顺序。
-            async with MySQLDatabase.advisory_locks(
-                [lock_name],
-                timeout_seconds=self._settings.generation_lock_timeout_seconds,
-            ):
+            lock_context = self._generation_locks.write(
+                [lock_name], self._settings.generation_lock_timeout_seconds
+            )
+            async with lock_context:
                 async with MySQLDatabase.session() as session:
                     await session.connection(
                         execution_options={"isolation_level": "READ COMMITTED"}
@@ -227,6 +230,27 @@ class MySQLMaterializationAdapter:
             raise SyncResourceBusyError("DW generation 或 schema 资源被占用") from error
 
     async def reset_generation(
+        self,
+        task: ClaimedSyncTask,
+        coordinate: BinlogCoordinate,
+        *,
+        limit: int,
+    ) -> None:
+        """在 generation lock 内清理旧代次，避免与只读查询交错。"""
+        lock_name = generation_lock_name(
+            self._settings.dw_database,
+            task.desired.target_table,
+        )
+        try:
+            lock_context = self._generation_locks.write(
+                [lock_name], self._settings.generation_lock_timeout_seconds
+            )
+            async with lock_context:
+                await self._reset_generation(task, coordinate, limit=limit)
+        except AdvisoryLockUnavailableError as error:
+            raise SyncResourceBusyError("DW generation 资源被占用") from error
+
+    async def _reset_generation(
         self,
         task: ClaimedSyncTask,
         coordinate: BinlogCoordinate,

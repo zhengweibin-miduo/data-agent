@@ -91,24 +91,29 @@ def _reference_parts(reference: exp.Reference) -> tuple[str, list[str]] | None:
     return qualified_name, columns
 
 
-def _foreign_key_pairs(create: exp.Create) -> list[tuple[str, str, str]]:
+def _foreign_key_pairs(create: exp.Create) -> list[tuple[str, str, str, int]]:
     """按 DDL 顺序提取本表字段、目标表、目标字段。"""
     schema = create.this
     if not isinstance(schema, exp.Schema):
         return []
-    pairs: list[tuple[str, str, str]] = []
+    pairs: list[tuple[str, str, str, int]] = []
+    constraint_index = 0
     for item in schema.expressions:
         if isinstance(item, exp.ColumnDef):
             for constraint in item.constraints:
                 reference = constraint.kind.find(exp.Reference)
                 if isinstance(reference, exp.Reference):
+                    constraint_index += 1
                     target = _reference_parts(reference)
                     if target and len(target[1]) == 1:
-                        pairs.append((item.name, target[0], target[1][0]))
+                        pairs.append(
+                            (item.name, target[0], target[1][0], constraint_index)
+                        )
         expressions = item.expressions if isinstance(item, exp.Constraint) else [item]
         for constraint in expressions:
             if not isinstance(constraint, exp.ForeignKey):
                 continue
+            constraint_index += 1
             reference = constraint.args.get("reference")
             target = (
                 _reference_parts(reference)
@@ -122,7 +127,7 @@ def _foreign_key_pairs(create: exp.Create) -> list[tuple[str, str, str]]:
             ]
             if target and len(source_columns) == len(target[1]):
                 pairs.extend(
-                    (source_column, target[0], target_column)
+                    (source_column, target[0], target_column, constraint_index)
                     for source_column, target_column in zip(
                         source_columns, target[1], strict=True
                     )
@@ -138,7 +143,12 @@ def _physical_relationships(
     relationships: list[PhysicalRelationship] = []
     for create, table in zip(creates, tables, strict=True):
         columns = {column.name.casefold(): column for column in table.columns}
-        for source_name, target_table, target_column in _foreign_key_pairs(create):
+        for (
+            source_name,
+            target_table,
+            target_column,
+            constraint_index,
+        ) in _foreign_key_pairs(create):
             source_column = columns.get(source_name.casefold())
             if source_column is None:
                 continue
@@ -148,6 +158,7 @@ def _physical_relationships(
                     source_column_id=source_column.id,
                     target_table=target_table,
                     target_column=target_column,
+                    constraint_id=f"{table.id}:fk:{constraint_index}",
                 )
             )
     return relationships
@@ -375,24 +386,23 @@ def _parse_ddl_document_sync(
         {
             "tables": [
                 {
-                "qualified_name": table.qualified_name,
-                "comment": table.comment,
-                "columns": [
-                    {
-                        "name": column.name,
-                        "type": column.data_type,
-                        "comment": column.comment,
-                        "nullable": column.nullable,
-                        "role": column.structural_role,
-                    }
-                    for column in table.columns
-                ],
+                    "qualified_name": table.qualified_name,
+                    "comment": table.comment,
+                    "columns": [
+                        {
+                            "name": column.name,
+                            "type": column.data_type,
+                            "comment": column.comment,
+                            "nullable": column.nullable,
+                            "role": column.structural_role,
+                        }
+                        for column in table.columns
+                    ],
                 }
                 for table in tables
             ],
             "relationships": [
-                relationship.model_dump(mode="json")
-                for relationship in relationships
+                relationship.model_dump(mode="json") for relationship in relationships
             ],
         },
         ensure_ascii=False,
@@ -434,7 +444,12 @@ def _preview_relationships(
         source_columns = {
             column.name.casefold(): column for column in source_table.columns
         }
-        for source_name, target_name, target_column_name in _foreign_key_pairs(create):
+        for (
+            source_name,
+            target_name,
+            target_column_name,
+            _,
+        ) in _foreign_key_pairs(create):
             source_qualifier, separator, _ = source_table.qualified_name.rpartition(".")
             target_qualified_name = (
                 f"{source_qualifier}.{target_name}"
@@ -450,14 +465,18 @@ def _preview_relationships(
             )
             if source_column is None:
                 continue
-            target_column = next(
-                (
-                    column
-                    for column in target_table.columns
-                    if column.name.casefold() == target_column_name.casefold()
-                ),
-                None,
-            ) if target_table else None
+            target_column = (
+                next(
+                    (
+                        column
+                        for column in target_table.columns
+                        if column.name.casefold() == target_column_name.casefold()
+                    ),
+                    None,
+                )
+                if target_table
+                else None
+            )
             relationships.append(
                 DDLPreviewRelationship(
                     source_table_id=source_table.id,

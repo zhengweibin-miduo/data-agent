@@ -398,9 +398,10 @@ class _SearchReader:
     scopes: list[tuple[dict[str, tuple[str, str]], bool]]
 
     async def authoritative_candidates(
-        self, identities: list[MetadataSemanticHit]
+        self, identities: list[MetadataSemanticHit], **kwargs: object
     ) -> list[object]:
         """仅返回当前指纹的第一个候选。"""
+        del kwargs
         return [identities[0]] if identities else []
 
     async def resolve_value_scope(
@@ -424,8 +425,7 @@ class _SearchReader:
                 frequency=item.frequency,
             )
             for item in projections
-            if scope.get(item.column_id)
-            == (item.table_id, item.schema_fingerprint)
+            if scope.get(item.column_id) == (item.table_id, item.schema_fingerprint)
         ]
 
 

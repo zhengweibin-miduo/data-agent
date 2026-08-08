@@ -25,6 +25,8 @@ class StartedConversationTurn:
     conversation_id: int
     summary: str | None
     summary_through_message_id: int | None
+    execution_owner: bool = True
+    claim_token: str | None = None
 
 
 class ConversationStore(Protocol):
@@ -65,6 +67,8 @@ class ConversationStore(Protocol):
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartedConversationTurn:
         """原子写入用户消息并占用轮次门禁。"""
         ...
@@ -74,9 +78,28 @@ class ConversationStore(Protocol):
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
         """原子写入助手消息、outbox 并释放轮次门禁。"""
+        ...
+
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> None:
+        """释放失败或取消的活动轮次门禁。"""
+        ...
+
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str, claim_token: str
+    ) -> bool:
+        """仅续租仍由指定轮次持有的门禁。"""
         ...
 
     async def assistant_message(
@@ -97,6 +120,18 @@ class ConversationStore(Protocol):
         limit: int,
     ) -> list[MessageRecord]:
         """读取摘要游标后的有界消息。"""
+        ...
+
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        """从权威消息读取当前未结束 Query 证据链。"""
         ...
 
 

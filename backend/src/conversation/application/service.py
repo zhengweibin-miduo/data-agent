@@ -1,5 +1,7 @@
 """Conversation 用例与有界上下文组装。"""
 
+from __future__ import annotations
+
 from conversation.application.contracts import (
     ConversationStore,
     LongTermMemoryReader,
@@ -103,40 +105,103 @@ class ConversationService:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartTurnResponse:
         """提交用户消息后，基于已提交状态构建同用户的有界上下文。"""
         # 步骤一：store 在短事务中提交消息与活动轮次门禁，再返回会话快照。
-        started = await self._store.start_turn(
-            user_id,
-            conversation_uid,
-            turn_uid,
-            content,
-        )
+        if semantic_fingerprint is None:
+            started = await self._store.start_turn(
+                user_id, conversation_uid, turn_uid, content
+            )
+        else:
+            started = await self._store.start_turn(
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
+            )
+        # 已完成轮次的幂等回放不依赖长期记忆或远程检索。
+        if not started.execution_owner:
+            existing_assistant = await self._store.assistant_message(
+                user_id, conversation_uid, turn_uid
+            )
+            if existing_assistant is not None:
+                return StartTurnResponse(
+                    message=started.message,
+                    context=ConversationContext(summary=None, messages=[], memories=[]),
+                    execution_owner=False,
+                    claim_token=None,
+                )
         # 步骤二：提交完成后再召回消息与长期记忆，模型或索引延迟不持有行锁。
-        context = await self._context(
-            user_id,
-            started.conversation_id,
-            started.summary,
-            started.summary_through_message_id,
-            content,
+        try:
+            context = await self._context(
+                user_id,
+                started.conversation_id,
+                started.summary,
+                started.summary_through_message_id,
+                content,
+            )
+        except BaseException:
+            if started.execution_owner and started.claim_token is not None:
+                try:
+                    await self._store.abandon_turn(
+                        user_id, conversation_uid, turn_uid, started.claim_token
+                    )
+                except Exception:
+                    # 清理失败不得覆盖上下文、记忆召回或取消的原始异常。
+                    pass
+            raise
+        return StartTurnResponse(
+            message=started.message,
+            context=context,
+            execution_owner=started.execution_owner,
+            claim_token=started.claim_token,
         )
-        return StartTurnResponse(message=started.message, context=context)
 
     async def complete_turn(
         self,
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> CompleteTurnResponse:
         """提交助手消息和提炼 outbox 后才报告完成。"""
         message = await self._store.complete_turn(
             user_id,
             conversation_uid,
             turn_uid,
+            claim_token,
             content,
+            semantic_fingerprint=semantic_fingerprint,
         )
         return CompleteTurnResponse(message=message)
+
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> None:
+        """释放失败或取消的活动轮次门禁，使同轮次可安全重试。"""
+        await self._store.abandon_turn(user_id, conversation_uid, turn_uid, claim_token)
+
+    async def renew_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> bool:
+        """为仍存活的长轮次续租，避免健康 owner 被超时重入。"""
+        return await self._store.renew_turn(
+            user_id, conversation_uid, turn_uid, claim_token
+        )
 
     async def assistant_message(
         self,
@@ -149,6 +214,24 @@ class ConversationService:
             user_id,
             conversation_uid,
             turn_uid,
+        )
+
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        """从独立权威预算读取当前 Query 澄清证据链。"""
+        return await self._store.pending_query_chain(
+            user_id,
+            conversation_uid,
+            through_id=through_id,
+            message_limit=message_limit,
+            max_chars=max_chars,
         )
 
     async def delete_user_data(
@@ -188,7 +271,13 @@ class ConversationService:
             if remaining <= 0:
                 break
             text = message.content[-remaining:]
-            bounded.append(ContextMessage(role=message.role, content=text))
+            bounded.append(
+                ContextMessage(
+                    role=message.role,
+                    content=text,
+                    semantic_fingerprint=message.semantic_fingerprint,
+                )
+            )
             remaining -= len(text)
         bounded.reverse()
         # 步骤四：摘要、近期消息和 Long-term Memory 保持独立预算。

@@ -26,6 +26,7 @@ from ddl_metadata.meta_projection.repository import (
 from ddl_metadata.persistence.metadata_repository import MetadataRepository
 from errors import DataAgentError
 from identifiers import scope_fingerprint
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
@@ -39,7 +40,11 @@ from settings import app_config
 class MySQLAcceptedSnapshotPublisher:
     """在一个 MySQL 事务内提交 Meta、权威记忆与双索引 outbox。"""
 
-    def __init__(self, source_schemas: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        generation_locks: GenerationLockManager,
+        source_schemas: Mapping[str, str] | None = None,
+    ) -> None:
         """保存命名数据源到默认源库的可测试投影。"""
         self._source_schemas = (
             dict(source_schemas)
@@ -50,6 +55,7 @@ class MySQLAcceptedSnapshotPublisher:
                 if (database := make_url(source.url).database) is not None
             }
         )
+        self._generation_locks = generation_locks
 
     async def publish(self, snapshot: AcceptedSnapshot) -> None:
         """在单一事务中提交验证通过的 Meta 与权威记忆快照。
@@ -101,13 +107,30 @@ class MySQLAcceptedSnapshotPublisher:
             generation_lock_name(app_config.data_sync.dw_database, item.target_table)
             for item in desired_tables
         }
+        publisher_lock = generation_lock_name(
+            "metadata-authority-publish", schema.source
+        )
         try:
-            # 步骤四：先持有本次全部 target generation locks，再开启唯一发布事务。
-            async with MySQLDatabase.advisory_locks(
-                generation_locks,
-                timeout_seconds=(app_config.data_sync.generation_lock_timeout_seconds),
-            ):
-                # 步骤五：事务提交或回滚完成后，外层上下文才会释放 generation locks。
+            # 步骤四：先按 source 串行化发布者，再扫描 authority 影响面，避免
+            # 另一发布者在扫描与 target 锁获取之间新增会被本次撤销的 scope。
+            publisher_context = self._generation_locks.expandable_write(
+                {publisher_lock},
+                app_config.data_sync.generation_lock_timeout_seconds,
+            )
+            async with publisher_context as lock_owner:
+                async with MySQLDatabase.session() as authority_session:
+                    authority_targets = await MetadataRepository(
+                        authority_session
+                    ).authority_target_tables_overlapping(schema)
+                generation_locks.update(
+                    generation_lock_name(app_config.data_sync.dw_database, target)
+                    for target in authority_targets
+                )
+                await lock_owner.acquire(
+                    generation_locks,
+                    app_config.data_sync.generation_lock_timeout_seconds,
+                )
+                # 步骤五：事务提交或回滚完成后，外层上下文才会释放锁。
                 async with MySQLDatabase.session() as session:
                     metadata_repository = MetadataRepository(session)
                     (
@@ -115,11 +138,11 @@ class MySQLAcceptedSnapshotPublisher:
                         previous_metrics,
                     ) = await metadata_repository.semantic_scope_before_sync(schema)
                     # 步骤六：计算本次提交范围内可能受结构变化影响的记忆键。
-                    expiration_memory_keys = (
-                        await metadata_repository.fingerprint_expiration_memory_keys(
-                            schema,
-                            metrics,
-                        )
+                    fingerprint_expiration = (
+                        metadata_repository.fingerprint_expiration_memory_keys
+                    )
+                    expiration_memory_keys = await fingerprint_expiration(
+                        schema, metrics
                     )
                     memory_repository = MemoryRepository(session)
                     # 步骤七：在写入新快照前过期指纹不再兼容的权威记忆版本。
@@ -194,7 +217,7 @@ class MySQLAcceptedSnapshotPublisher:
                 http_status=503,
             ) from error
         except AdvisoryLockReleaseError:
-            # 业务 Session 已在 advisory lock 上下文退出前提交；owner 连接也已
+            # 业务 Session 已在 generation WRITE lock 上下文退出前提交；owner 连接也已
             # 失效。此时锁清理故障只能降级为运维告警，不能反转权威快照结果。
             logger.warning(
                 "accepted snapshot 已提交，但 generation lock owner 连接"

@@ -17,6 +17,7 @@ from ddl_metadata.workflow.contracts import DDLGraphDependencies
 from ddl_metadata.workflow.graph import build_ddl_metadata_graph
 from ddl_metadata.workflow.memory_context import MemoryContextLoader
 from infrastructure.checkpoint_store import CheckpointStore
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import MySQLDatabase
 from infrastructure.redis import RedisClient
 from memory.mysql.tables import agent_memory
@@ -65,7 +66,7 @@ def _config(job_id: str) -> RunnableConfig:
     return {"configurable": {"thread_id": job_id}}
 
 
-async def _test_flow() -> None:
+async def _test_flow(generation_lock_manager: GenerationLockManager) -> None:
     """完成提交、interrupt、回答、持久化及精确记忆复用。"""
     await ensure_schema()
     check_equal(
@@ -91,7 +92,9 @@ async def _test_flow() -> None:
             DDLGraphDependencies(
                 model,
                 MemoryContextLoader(),
-                MySQLAcceptedSnapshotPublisher({source: "source_demo"}),
+                MySQLAcceptedSnapshotPublisher(
+                    generation_lock_manager, {source: "source_demo"}
+                ),
             ),
             checkpointer,
         )
@@ -207,7 +210,9 @@ async def _test_flow() -> None:
             DDLGraphDependencies(
                 reuse_model,
                 MemoryContextLoader(),
-                MySQLAcceptedSnapshotPublisher({source: "source_demo"}),
+                MySQLAcceptedSnapshotPublisher(
+                    generation_lock_manager, {source: "source_demo"}
+                ),
             ),
             checkpointer,
         )
@@ -249,6 +254,8 @@ async def _test_flow() -> None:
 
 
 @pytest.mark.integration
-async def test_ddl_metadata_flow() -> None:
+async def test_ddl_metadata_flow(
+    generation_lock_manager: GenerationLockManager,
+) -> None:
     """运行端到端恢复流。"""
-    await _test_flow()
+    await _test_flow(generation_lock_manager)

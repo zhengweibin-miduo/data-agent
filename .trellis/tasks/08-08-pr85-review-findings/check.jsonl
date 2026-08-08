@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend review routing and package scope."}
+{"file": ".trellis/spec/backend/query-guidelines.md", "reason": "Check Query evidence, validation, generation and stream behavior."}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "Check claim fencing, clarification authority and context behavior."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check MySQL lifecycle, UTC semantics, bootstrap and lock ownership."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check stable error classification and cleanup precedence."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Execute the repository backend quality gates."}
+{"file": ".trellis/tasks/08-08-pr85-review-findings/research/evidence-map.md", "reason": "Cross-check every unresolved thread against implementation evidence."}

@@ -161,6 +161,20 @@ class MetadataProjectionRepository:
         """绑定只读或调用方事务 Session。"""
         self._session = session
 
+    async def schema_is_authoritative(
+        self, source: str, schema_fingerprint: str
+    ) -> bool:
+        """确认请求结构与最近一次 accepted snapshot 完全一致。"""
+        from ddl_metadata.persistence.tables import physical_schema_authority
+
+        current = await self._session.scalar(
+            select(physical_schema_authority.c.source).where(
+                physical_schema_authority.c.source == source,
+                physical_schema_authority.c.schema_fingerprint == schema_fingerprint,
+            )
+        )
+        return current is not None
+
     async def semantic_projection(
         self,
         kind: MetadataObjectKind,
@@ -525,10 +539,26 @@ class MetadataProjectionRepository:
     async def authoritative_candidates(
         self,
         identities: list[MetadataSemanticHit],
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataCandidate]:
         """按 Qdrant 顺序回读当前 Meta 对象，拒绝已删除候选。"""
         if not identities:
             return []
+        scope_object_ids = {hit.object_id for hit in identities}
+        if column_ids:
+            scope_object_ids.update(column_ids)
+            metric_rows = (
+                await self._session.execute(
+                    select(column_metric.c.metric_id).where(
+                        column_metric.c.column_id.in_(column_ids)
+                    )
+                )
+            ).all()
+            scope_object_ids.update(str(metric_id) for (metric_id,) in metric_rows)
+        if table_ids:
+            scope_object_ids.update(table_ids)
         pending_rows = (
             await self._session.execute(
                 select(
@@ -537,9 +567,7 @@ class MetadataProjectionRepository:
                 ).where(
                     metadata_index_outbox.c.target
                     == MetadataIndexTarget.SEMANTIC.value,
-                    metadata_index_outbox.c.object_id.in_(
-                        {hit.object_id for hit in identities}
-                    ),
+                    metadata_index_outbox.c.object_id.in_(scope_object_ids),
                 )
             )
         ).all()
@@ -547,6 +575,10 @@ class MetadataProjectionRepository:
             (MetadataObjectKind(str(kind)), str(object_id))
             for kind, object_id in pending_rows
         }
+        # 唯一绑定只能建立在完整收敛的作用域上。只要本次完整身份召回中存在
+        # pending/retry/dead-letter 对象，就不能用剩余候选证明唯一。
+        if pending:
+            return []
         active_hits = [
             hit for hit in identities if (hit.kind, hit.object_id) not in pending
         ]

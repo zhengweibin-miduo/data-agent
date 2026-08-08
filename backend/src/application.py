@@ -11,6 +11,7 @@ from redis.exceptions import RedisError
 
 from answer_readiness.classifier import AnswerReadinessClassifier
 from answer_readiness.service import AnswerReadinessService
+from answer_readiness.tool import create_data_readiness_tool
 from app_logging import (
     RequestLoggingContextMiddleware,
     logging_boundary,
@@ -27,11 +28,15 @@ from conversation.api import router as conversation_router
 from conversation.application.service import ConversationService
 from ddl_metadata.api.router import router as ddl_metadata_router
 from ddl_metadata.jobs.store import DDLJobStore
+from ddl_metadata.meta_projection.adapters.composition import (
+    compose_meta_projection_runtime,
+)
 from ddl_metadata.persistence.memory_references import (
     MetadataMemoryReferenceValidator,
 )
 from errors import DataAgentError
 from infrastructure.elasticsearch import ElasticsearchClient
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.job_queue import build_queue_pool
 from infrastructure.llm_client import LLMClient
 from infrastructure.mysql import MySQLDatabase
@@ -39,6 +44,12 @@ from infrastructure.qdrant import QdrantClient
 from infrastructure.redis import RedisClient
 from infrastructure.tei_embeddings import TEIEmbeddingClient
 from memory.adapters.composition import build_memory_runtime
+from query.adapters.http import router as query_router
+from query.adapters.llm import QueryLLMAdapter
+from query.adapters.metadata import QueryMetadataAdapter
+from query.adapters.mysql import MySQLQueryExecutor
+from query.adapters.readiness import QueryReadinessAdapter
+from query.application.service import QueryApplication
 from settings import app_config
 
 
@@ -53,6 +64,18 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     # 步骤二：按依赖顺序初始化共享外部资源，全部就绪后才允许装配业务服务。
     redis = RedisClient.initialize()
     MySQLDatabase.initialize()
+    generation_locks = GenerationLockManager(
+        app_config.mysql.url,
+        pool_size=app_config.mysql.generation_lock_pool_size,
+        pool_timeout_seconds=app_config.mysql.generation_lock_pool_timeout_seconds,
+        io_timeout_seconds=app_config.mysql.generation_lock_io_timeout_seconds,
+    )
+    await generation_locks.initialize()
+    try:
+        await generation_locks.check_capability()
+    except BaseException:
+        await generation_locks.close()
+        raise
     elasticsearch = ElasticsearchClient.initialize()
     qdrant = QdrantClient.initialize()
     embeddings = TEIEmbeddingClient.initialize()
@@ -93,6 +116,42 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         conversations,
         AnswerReadinessService(AnswerReadinessClassifier(model)),
         model,
+        turn_lease_seconds=app_config.conversation.turn_lease_seconds,
+    )
+    meta_projection = compose_meta_projection_runtime(
+        elasticsearch=elasticsearch,
+        qdrant=qdrant,
+        embeddings=embeddings,
+    )
+    query_model = QueryLLMAdapter(
+        model,
+        dw_database=app_config.data_sync.dw_database,
+    )
+    query_executor = MySQLQueryExecutor(
+        app_config.query.read_url,
+        timeout_seconds=app_config.query.timeout_seconds,
+        fetch_batch_rows=app_config.query.fetch_batch_rows,
+        max_batch_bytes=app_config.query.max_batch_bytes,
+    )
+    app.state.query = QueryApplication(
+        conversations=conversations,
+        intents=query_model,
+        metadata=QueryMetadataAdapter(meta_projection.search),
+        planner=query_model,
+        readiness=QueryReadinessAdapter(
+            create_data_readiness_tool(),
+            generation_locks,
+            dw_database=app_config.data_sync.dw_database,
+            lock_timeout=app_config.data_sync.generation_lock_timeout_seconds,
+        ),
+        executor=query_executor,
+        dw_database=app_config.data_sync.dw_database,
+        control_io_timeout_seconds=app_config.query.timeout_seconds,
+        turn_lease_seconds=app_config.conversation.turn_lease_seconds,
+        clarification_chain_message_limit=(
+            app_config.query.clarification_chain_message_limit
+        ),
+        clarification_chain_max_chars=app_config.query.clarification_chain_max_chars,
     )
     # 步骤五：记录启动完成后把控制权交给 FastAPI，直至服务退出或运行异常。
     logger.info("API 服务已启动，数据库、缓存与派生检索资源均已就绪")
@@ -101,10 +160,12 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     finally:
         # 步骤六：按初始化逆序关闭外部资源，避免先释放仍被下游客户端依赖的资源。
         try:
+            await query_executor.close()
             await LLMClient.close()
             await TEIEmbeddingClient.close()
             await QdrantClient.close()
             await ElasticsearchClient.close()
+            await generation_locks.close()
             await MySQLDatabase.close()
             await queue.aclose()
             await RedisClient.close()
@@ -180,6 +241,7 @@ def create_app() -> FastAPI:
     app.include_router(ddl_metadata_router)
     app.include_router(conversation_router)
     app.include_router(chat_router)
+    app.include_router(query_router)
 
     @app.get("/api/v1/health", tags=["health"])
     async def health() -> dict[str, object]:

@@ -1,0 +1,6 @@
+{"file":"CONTEXT.md","reason":"使用 Query Intent、Validated Query、Meta Snapshot 统一语言"}
+{"file":".trellis/spec/backend/index.md","reason":"后端预开发清单和相关规范路由"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"MySQL 连接、事务和命名锁生命周期规范"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"锁竞争和能力失败的稳定错误边界"}
+{"file":".trellis/spec/backend/query-guidelines.md","reason":"Query generation 一致性与 NDJSON 契约"}
+{"file":".trellis/tasks/08-07-query-generation-read-coordination/research/coordination-analysis.md","reason":"当前调用流、推荐协议和测试 seam 取证"}

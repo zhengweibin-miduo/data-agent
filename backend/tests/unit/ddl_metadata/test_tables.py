@@ -4,10 +4,15 @@ from pathlib import Path
 
 from sqlglot import exp, parse
 
+from ddl_metadata.persistence.metadata_repository import (
+    authority_scope_key,
+    authority_scopes_overlap,
+)
 from ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
     metric_info,
+    physical_schema_authority,
     table_info,
 )
 from tests.helpers.checks import check_equal
@@ -28,7 +33,13 @@ def test_meta_core_columns_match_bootstrap_script() -> None:
         if isinstance(statement, exp.Create)
         and isinstance(statement.this, exp.Schema)
     }
-    tables = (table_info, column_info, metric_info, column_metric)
+    tables = (
+        table_info,
+        column_info,
+        metric_info,
+        column_metric,
+        physical_schema_authority,
+    )
     check_equal("Meta 表集合", {table.name for table in tables}, set(creates))
     for table in tables:
         check_equal(
@@ -38,3 +49,19 @@ def test_meta_core_columns_match_bootstrap_script() -> None:
         )
     check_equal("字段资格列不可为空", column_info.c.index_profile.nullable, False)
     check_equal("指标事实表列不可为空", metric_info.c.fact_table_id.nullable, False)
+
+
+def test_authority_scope_key_is_order_independent_and_scope_specific() -> None:
+    """局部 accepted 快照按表集合共存，同一集合更新时命中同一权威槽位。"""
+    check_equal(
+        "表顺序不影响 scope key",
+        authority_scope_key(["table-a", "table-b"]),
+        authority_scope_key(["table-b", "table-a"]),
+    )
+    assert authority_scope_key(["table-a"]) != authority_scope_key(["table-b"])
+
+
+def test_authority_scope_overlap_invalidates_only_intersecting_snapshots() -> None:
+    """重新验收表 A 时应失效包含 A 的旧组合，但保留不相交表 B。"""
+    assert authority_scopes_overlap(["table-a", "table-b"], ["table-a"])
+    assert not authority_scopes_overlap(["table-b"], ["table-a"])

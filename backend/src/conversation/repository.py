@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,10 @@ from errors import DataAgentError
 from identifiers import stable_id
 from settings import app_config
 
+_ABANDONED_TURN_TIMESTAMP = "1970-01-01 00:00:00"
+_ABANDONED_TURN_YEAR = 1970
+_QUERY_CLARIFICATION_SCAN_PAGE_SIZE = 20
+
 
 def _message(row: RowMapping) -> MessageRecord:
     """把数据库行转换为纯文本消息。"""
@@ -35,6 +39,11 @@ def _message(row: RowMapping) -> MessageRecord:
         turn_uid=str(row["turn_uid"]),
         role=MessageRole(str(row["role"])),
         content=str(row["content"]),
+        semantic_fingerprint=(
+            str(row["semantic_fingerprint"])
+            if row.get("semantic_fingerprint") is not None
+            else None
+        ),
         created_at=row["created_at"],
     )
 
@@ -66,13 +75,17 @@ class ConversationRepository:
 
         # 步骤二：按新主键和同一用户边界回读数据库时间戳，避免返回应用时钟推测值。
         row = (
-            await self._session.execute(
-                select(agent_conversation).where(
-                    agent_conversation.c.id == identifier,
-                    agent_conversation.c.user_id == user_id,
+            (
+                await self._session.execute(
+                    select(agent_conversation).where(
+                        agent_conversation.c.id == identifier,
+                        agent_conversation.c.user_id == user_id,
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         return ConversationRecord(
             uid=uid,
             created_at=row["created_at"],
@@ -135,9 +148,7 @@ class ConversationRepository:
         # 步骤二：事务型调用按需追加行锁，普通读取沿用相同归属条件。
         if for_update:
             statement = statement.with_for_update()
-        return (
-            (await self._session.execute(statement)).mappings().one_or_none()
-        )
+        return (await self._session.execute(statement)).mappings().one_or_none()
 
     async def delete(self, user_id: str, conversation_uid: str) -> bool:
         """只删除指定用户拥有的会话。"""
@@ -156,9 +167,7 @@ class ConversationRepository:
         """硬删除用户的全部对话数据。"""
         # 步骤一：按用户边界删除会话，依靠外键级联同步清除消息和待提炼任务。
         await self._session.execute(
-            delete(agent_conversation).where(
-                agent_conversation.c.user_id == user_id
-            )
+            delete(agent_conversation).where(agent_conversation.c.user_id == user_id)
         )
 
     async def history(
@@ -230,11 +239,16 @@ class ConversationRepository:
                     or_(
                         agent_conversation.c.active_turn_uid.is_(None),
                         agent_conversation.c.active_turn_uid == turn_uid,
-                        agent_conversation.c.updated_at
-                        <= func.timestampadd(
-                            text("SECOND"),
-                            -app_config.conversation.turn_lease_seconds,
-                            func.now(),
+                        and_(
+                            func.coalesce(
+                                agent_conversation.c.turn_abandoned_at,
+                                agent_conversation.c.updated_at,
+                            )
+                            <= func.timestampadd(
+                                text("SECOND"),
+                                -app_config.conversation.turn_lease_seconds,
+                                func.now(),
+                            ),
                         ),
                     ),
                 )
@@ -248,7 +262,7 @@ class ConversationRepository:
         conversation_id: int,
         user_id: str,
         turn_uid: str,
-    ) -> None:
+    ) -> str:
         """占用活动轮次门禁并把租约起点推进到当前时刻。
 
         新轮次首次占用与同一轮次的幂等回放都走这里：两者都必须刷新 `updated_at`，
@@ -260,14 +274,39 @@ class ConversationRepository:
             turn_uid: 占用门禁的轮次标识。
         """
         # 步骤一：门禁与租约起点同写，保证可见的占用必然带有最新租约。
+        claim_token = uuid4().hex
         await self._session.execute(
             update(agent_conversation)
             .where(
                 agent_conversation.c.id == conversation_id,
                 agent_conversation.c.user_id == user_id,
             )
-            .values(active_turn_uid=turn_uid, updated_at=func.now())
+            .values(
+                active_turn_uid=turn_uid,
+                active_turn_claim_token=claim_token,
+                turn_abandoned_at=None,
+                updated_at=func.now(),
+            )
         )
+        return claim_token
+
+    async def _turn_lease_expired(self, conversation_id: int, user_id: str) -> bool:
+        """在已锁定事务中用数据库时钟判断活动轮次租约是否自然过期。"""
+        row = (
+            await self._session.execute(
+                select(agent_conversation.c.id).where(
+                    agent_conversation.c.id == conversation_id,
+                    agent_conversation.c.user_id == user_id,
+                    agent_conversation.c.updated_at
+                    <= func.timestampadd(
+                        text("SECOND"),
+                        -app_config.conversation.turn_lease_seconds,
+                        func.now(),
+                    ),
+                )
+            )
+        ).one_or_none()
+        return row is not None
 
     async def start_turn(
         self,
@@ -275,7 +314,9 @@ class ConversationRepository:
         conversation_uid: str,
         turn_uid: str,
         content: str,
-    ) -> tuple[MessageRecord, RowMapping]:
+        *,
+        semantic_fingerprint: str | None = None,
+    ) -> tuple[MessageRecord, RowMapping, bool, str | None]:
         """门禁并幂等持久化用户消息。"""
         # 步骤一：先锁定会话再检查 active_turn_uid，避免并发请求同时通过门禁。
         conversation = await self.get(
@@ -310,17 +351,23 @@ class ConversationRepository:
         # 步骤二：在持锁事务内回查用户消息；同一 turn 仅允许相同内容幂等回放，
         # 内容变化必须拒绝，不能覆盖已经成为会话历史的输入。
         existing = (
-            await self._session.execute(
-                select(agent_message).where(
-                    agent_message.c.user_id == user_id,
-                    agent_message.c.conversation_id == int(conversation["id"]),
-                    agent_message.c.turn_uid == turn_uid,
-                    agent_message.c.role == MessageRole.USER.value,
+            (
+                await self._session.execute(
+                    select(agent_message).where(
+                        agent_message.c.user_id == user_id,
+                        agent_message.c.conversation_id == int(conversation["id"]),
+                        agent_message.c.turn_uid == turn_uid,
+                        agent_message.c.role == MessageRole.USER.value,
+                    )
                 )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if existing is not None:
-            if str(existing["content"]) != content:
+            if str(existing["content"]) != content or str(
+                existing.get("semantic_fingerprint") or ""
+            ) != (semantic_fingerprint or ""):
                 raise DataAgentError(
                     "idempotency_conflict",
                     "conversation_turn",
@@ -333,13 +380,22 @@ class ConversationRepository:
             # 后续轮次抢占（重新占用会让陈旧轮次在替代轮次完成后写入助手消息，形成
             # user(A) user(B) assistant(B) assistant(A) 这种错乱顺序，并污染后续摘要
             # 与记忆提炼）。两种情况都必须保持门禁不变。
+            execution_owner = False
+            claim_token = None
             if str(conversation["active_turn_uid"] or "") == turn_uid:
-                await self._claim_turn_gate(
-                    int(conversation["id"]),
-                    user_id,
-                    turn_uid,
-                )
-            return _message(existing), conversation
+                execution_owner = (
+                    getattr(conversation["updated_at"], "year", None)
+                    == _ABANDONED_TURN_YEAR
+                ) or await self._turn_lease_expired(int(conversation["id"]), user_id)
+                # 非所有者的幂等轮询不能续租，否则崩溃进程留下的租约会被
+                # 轮询永久延长。只有真正重新取得执行权时才刷新占用起点。
+                if execution_owner:
+                    claim_token = await self._claim_turn_gate(
+                        int(conversation["id"]),
+                        user_id,
+                        turn_uid,
+                    )
+            return _message(existing), conversation, execution_owner, claim_token
 
         # 步骤三：新消息与 active_turn_uid 在调用方事务内一并写入，确保可见的
         # 用户消息必然占住活动轮次门禁，后续助手完成只能匹配该 turn。
@@ -352,23 +408,33 @@ class ConversationRepository:
                 turn_uid=turn_uid,
                 role=MessageRole.USER.value,
                 content=content,
+                semantic_fingerprint=semantic_fingerprint,
             )
         )
         message_id = _inserted_id(result, "用户消息")
-        await self._claim_turn_gate(int(conversation["id"]), user_id, turn_uid)
+        claim_token = await self._claim_turn_gate(
+            int(conversation["id"]), user_id, turn_uid
+        )
         row = (
-            await self._session.execute(
-                select(agent_message).where(agent_message.c.id == message_id)
+            (
+                await self._session.execute(
+                    select(agent_message).where(agent_message.c.id == message_id)
+                )
             )
-        ).mappings().one()
-        return _message(row), conversation
+            .mappings()
+            .one()
+        )
+        return _message(row), conversation, True, claim_token
 
     async def complete_turn(
         self,
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
         """原子持久化助手消息、提炼任务并清除门禁。"""
         # 步骤一：锁定会话并读取该 turn 的已持久化消息，使启动状态、幂等回放
@@ -419,7 +485,10 @@ class ConversationRepository:
                     http_status=409,
                 )
             return _message(existing)
-        if str(conversation["active_turn_uid"] or "") != turn_uid:
+        if (
+            str(conversation["active_turn_uid"] or "") != turn_uid
+            or str(conversation["active_turn_claim_token"] or "") != claim_token
+        ):
             raise DataAgentError(
                 "stale_turn",
                 "conversation_complete",
@@ -442,36 +511,93 @@ class ConversationRepository:
                 turn_uid=turn_uid,
                 role=MessageRole.ASSISTANT.value,
                 content=content,
+                semantic_fingerprint=semantic_fingerprint,
             )
         )
         assistant_id = _inserted_id(result, "助手消息")
-        outbox = insert(conversation_memory_outbox).values(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            turn_uid=turn_uid,
-            user_message_id=int(user_message["id"]),
-            assistant_message_id=assistant_id,
-        )
-        await self._session.execute(
-            outbox.on_duplicate_key_update(
-                assistant_message_id=outbox.inserted.assistant_message_id
+        # 澄清不是 Query 终态；在用户回答前不能让异步摘要游标越过原始问题。
+        if semantic_fingerprint != "query:clarification":
+            outbox = insert(conversation_memory_outbox).values(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn_uid=turn_uid,
+                user_message_id=int(user_message["id"]),
+                assistant_message_id=assistant_id,
             )
-        )
+            await self._session.execute(
+                outbox.on_duplicate_key_update(
+                    assistant_message_id=outbox.inserted.assistant_message_id
+                )
+            )
         await self._session.execute(
             update(agent_conversation)
             .where(
                 agent_conversation.c.id == conversation_id,
                 agent_conversation.c.user_id == user_id,
                 agent_conversation.c.active_turn_uid == turn_uid,
+                agent_conversation.c.active_turn_claim_token == claim_token,
             )
-            .values(active_turn_uid=None, updated_at=func.now())
+            .values(
+                active_turn_uid=None,
+                active_turn_claim_token=None,
+                turn_abandoned_at=None,
+                updated_at=func.now(),
+            )
         )
         row = (
-            await self._session.execute(
-                select(agent_message).where(agent_message.c.id == assistant_id)
+            (
+                await self._session.execute(
+                    select(agent_message).where(agent_message.c.id == assistant_id)
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         return _message(row)
+
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> None:
+        """把仍由失败请求持有的轮次原子标记为可重新认领。"""
+        await self._session.execute(
+            update(agent_conversation)
+            .where(
+                agent_conversation.c.uid == conversation_uid,
+                agent_conversation.c.user_id == user_id,
+                agent_conversation.c.active_turn_uid == turn_uid,
+                agent_conversation.c.active_turn_claim_token == claim_token,
+            )
+            .values(
+                active_turn_uid=turn_uid,
+                active_turn_claim_token=None,
+                turn_abandoned_at=func.now(),
+                updated_at=_ABANDONED_TURN_TIMESTAMP,
+            )
+        )
+
+    async def renew_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> bool:
+        """只刷新仍由指定轮次持有的租约，完成或替代后返回假。"""
+        result = await self._session.execute(
+            update(agent_conversation)
+            .where(
+                agent_conversation.c.uid == conversation_uid,
+                agent_conversation.c.user_id == user_id,
+                agent_conversation.c.active_turn_uid == turn_uid,
+                agent_conversation.c.active_turn_claim_token == claim_token,
+            )
+            .values(updated_at=func.now())
+        )
+        return bool(getattr(result, "rowcount", 0))
 
     async def assistant_message(
         self,
@@ -486,15 +612,19 @@ class ConversationRepository:
             return None
         # 步骤二：完整作用域下只读取助手角色，供上层避免重复模型调用。
         row = (
-            await self._session.execute(
-                select(agent_message).where(
-                    agent_message.c.user_id == user_id,
-                    agent_message.c.conversation_id == int(conversation["id"]),
-                    agent_message.c.turn_uid == turn_uid,
-                    agent_message.c.role == MessageRole.ASSISTANT.value,
+            (
+                await self._session.execute(
+                    select(agent_message).where(
+                        agent_message.c.user_id == user_id,
+                        agent_message.c.conversation_id == int(conversation["id"]),
+                        agent_message.c.turn_uid == turn_uid,
+                        agent_message.c.role == MessageRole.ASSISTANT.value,
+                    )
                 )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         return _message(row) if row is not None else None
 
     async def context_messages(
@@ -530,6 +660,97 @@ class ConversationRepository:
         )
         return [_message(row) for row in reversed(rows)]
 
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        """从 MySQL 权威消息中证明当前未结束 Query 澄清链。"""
+        conversation = await self.get(user_id, conversation_uid)
+        if conversation is None:
+            raise DataAgentError(
+                "conversation_not_found",
+                "query_clarification_chain",
+                "会话不存在",
+                http_status=404,
+            )
+
+        # 步骤一：从当前用户消息向前按固定小页扫描，避免在发现字符预算前
+        # 一次读取完整消息上限；主键游标保证每页都来自同一权威时间线。
+        chain: list[MessageRecord] = []
+        chars = 0
+        before_id: int | None = None
+        boundary_proven = False
+        newer_role: MessageRole | None = None
+        while not boundary_proven:
+            remaining = message_limit - len(chain)
+            page_limit = min(
+                _QUERY_CLARIFICATION_SCAN_PAGE_SIZE,
+                remaining + 1,
+            )
+            filters = [
+                agent_message.c.user_id == user_id,
+                agent_message.c.conversation_id == int(conversation["id"]),
+                agent_message.c.id <= through_id,
+            ]
+            if before_id is not None:
+                filters.append(agent_message.c.id < before_id)
+            rows = list(
+                (
+                    await self._session.execute(
+                        select(agent_message)
+                        .where(*filters)
+                        .order_by(agent_message.c.id.desc())
+                        .limit(page_limit)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if not rows:
+                boundary_proven = True
+                break
+
+            # 步骤二：普通 Query 终态是链边界；澄清助手消息只提供角色上下文，
+            # 用户原文仍由调用方单独筛选为逐字证据。
+            for row in rows:
+                role = MessageRole(str(row["role"]))
+                if (
+                    role == MessageRole.ASSISTANT
+                    and str(row.get("semantic_fingerprint") or "")
+                    != "query:clarification"
+                ):
+                    boundary_proven = True
+                    break
+                if role == MessageRole.USER and newer_role == MessageRole.USER:
+                    boundary_proven = True
+                    break
+                if (
+                    len(chain) >= message_limit
+                    or chars + len(str(row["content"])) > max_chars
+                ):
+                    raise DataAgentError(
+                        "query_clarification_chain_too_large",
+                        "query_clarification_chain",
+                        "查询澄清证据链超过安全预算",
+                        http_status=422,
+                    )
+                chain.append(_message(row))
+                chars += len(str(row["content"]))
+                newer_role = role
+            if boundary_proven:
+                break
+            if len(rows) < page_limit:
+                boundary_proven = True
+                break
+            before_id = int(rows[-1]["id"])
+
+        return list(reversed(chain))
+
     async def claim_extractions(
         self,
         *,
@@ -555,13 +776,11 @@ class ConversationRepository:
                 await self._session.execute(
                     select(conversation_memory_outbox)
                     .where(
-                        conversation_memory_outbox.c.id
-                        == earliest_in_conversation,
+                        conversation_memory_outbox.c.id == earliest_in_conversation,
                         conversation_memory_outbox.c.available_at <= func.now(),
                         or_(
                             conversation_memory_outbox.c.lease_token.is_(None),
-                            conversation_memory_outbox.c.lease_expires_at
-                            <= func.now(),
+                            conversation_memory_outbox.c.lease_expires_at <= func.now(),
                         ),
                     )
                     .order_by(conversation_memory_outbox.c.id)
@@ -592,13 +811,17 @@ class ConversationRepository:
             # 步骤三：消息窗口严格位于摘要游标之后、截至当前助手消息，并继续
             # 携带该行的 user_id 边界，保证一次 claim 对应可验证的有界证据集。
             conversation = (
-                await self._session.execute(
-                    select(agent_conversation).where(
-                        agent_conversation.c.id == int(row["conversation_id"]),
-                        agent_conversation.c.user_id == str(row["user_id"]),
+                (
+                    await self._session.execute(
+                        select(agent_conversation).where(
+                            agent_conversation.c.id == int(row["conversation_id"]),
+                            agent_conversation.c.user_id == str(row["user_id"]),
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             messages = await self.context_messages(
                 str(row["user_id"]),
                 int(row["conversation_id"]),
@@ -659,6 +882,9 @@ class ConversationRepository:
             .values(
                 summary=summary,
                 summary_through_message_id=through,
+                # updated_at 同时是轮次租约坐标；摘要更新不得覆盖
+                # abandon_turn 写入的可重新认领哨兵值。
+                updated_at=agent_conversation.c.updated_at,
             )
         )
         await self._session.execute(

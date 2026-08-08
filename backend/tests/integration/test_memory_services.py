@@ -10,6 +10,7 @@ from ddl_metadata.adapters.mysql.accepted_snapshot import (
 )
 from ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from ddl_metadata.parsing import parse_ddl
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import MySQLDatabase
 from memory.indexing.rebuilder import MemoryIndexRebuilder
 from memory.mysql.tables import memory_index_outbox
@@ -18,7 +19,9 @@ from tests.helpers.factories import cleanup_schema, ensure_schema, semantic_for
 
 
 @pytest.mark.integration
-async def test_memory_rebuild_enqueue() -> None:
+async def test_memory_rebuild_enqueue(
+    generation_lock_manager: GenerationLockManager,
+) -> None:
     """验证全量重建仅从活动 MySQL 权威记忆生成 outbox。"""
     await ensure_schema()
     schema = await parse_ddl(
@@ -26,7 +29,9 @@ async def test_memory_rebuild_enqueue() -> None:
         "CREATE TABLE dim_region (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
     try:
-        await MySQLAcceptedSnapshotPublisher({schema.source: "source_demo"}).publish(
+        await MySQLAcceptedSnapshotPublisher(
+            generation_lock_manager, {schema.source: "source_demo"}
+        ).publish(
             AcceptedSnapshot(
                 schema=schema,
                 metadata=semantic_for(schema, fact=False),

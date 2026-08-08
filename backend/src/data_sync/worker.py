@@ -15,6 +15,7 @@ from data_sync.binlog import MySQLSourceClient, close_sources
 from ddl_metadata.meta_projection.adapters.mysql_value_input import (
     MySQLValueProjectionParticipant,
 )
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import MySQLDatabase
 from settings import app_config
 
@@ -23,6 +24,18 @@ async def run_worker() -> None:
     """初始化资源并持续执行有界数据同步步骤。"""
     setup_logging()
     MySQLDatabase.initialize()
+    generation_locks = GenerationLockManager(
+        app_config.mysql.url,
+        pool_size=app_config.mysql.generation_lock_pool_size,
+        pool_timeout_seconds=app_config.mysql.generation_lock_pool_timeout_seconds,
+        io_timeout_seconds=app_config.mysql.generation_lock_io_timeout_seconds,
+    )
+    await generation_locks.initialize()
+    try:
+        await generation_locks.check_capability()
+    except BaseException:
+        await generation_locks.close()
+        raise
     sources = {
         name: MySQLSourceClient(
             name,
@@ -36,6 +49,7 @@ async def run_worker() -> None:
         sources,
         app_config.data_sync,
         projection_factory=MySQLValueProjectionParticipant,
+        generation_locks=generation_locks,
     )
     try:
         # 步骤一：启动前验证全部源满足 ROW/FULL Binlog 契约。
@@ -73,6 +87,7 @@ async def run_worker() -> None:
         try:
             await close_sources(sources.values())
         finally:
+            await generation_locks.close()
             await MySQLDatabase.close()
             logger.info("数据同步进程已停止并释放全部数据库连接")
             await logger.complete()

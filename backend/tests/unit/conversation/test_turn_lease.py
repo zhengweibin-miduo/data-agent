@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import cast
 
+import pytest
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
 
 from conversation.models import MessageRole
 from conversation.repository import ConversationRepository
+from errors import DataAgentError
 from settings import app_config
 from tests.helpers.checks import check_condition, check_equal
 
@@ -49,6 +51,60 @@ class _RecordingSession:
         return _FakeResult(self._row)
 
 
+class _RowsResult:
+    """返回预置多行映射结果的替身。"""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        """绑定预置行。"""
+        self._rows = rows
+
+    def mappings(self) -> _RowsResult:
+        """沿用同一替身暴露行映射视图。"""
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        """返回全部预置行。"""
+        return self._rows
+
+
+class _PendingChainSession:
+    """依次返回会话归属与倒序权威消息。"""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        """绑定仓储查询应读取的倒序消息。"""
+        self._rows = rows
+        self._calls = 0
+        self._cursor = 0
+
+    async def execute(self, _statement: ClauseElement) -> object:
+        """第一次返回会话，第二次返回倒序消息。"""
+        self._calls += 1
+        if self._calls == 1:
+            return _FakeResult({"id": 7})
+        page = self._rows[self._cursor : self._cursor + 20]
+        self._cursor += len(page)
+        return _RowsResult(page)
+
+
+def _pending_message(
+    identifier: int,
+    role: MessageRole,
+    content: str,
+    *,
+    semantic_fingerprint: str | None = None,
+) -> dict[str, object]:
+    """构造权威澄清链消息行。"""
+    return {
+        "id": identifier,
+        "uid": f"message-{identifier}",
+        "turn_uid": f"turn-{identifier}",
+        "role": role.value,
+        "content": content,
+        "semantic_fingerprint": semantic_fingerprint,
+        "created_at": datetime.now(UTC),
+    }
+
+
 def _rendered(statement: ClauseElement) -> str:
     """渲染语句文本与参数，供断言检查关键子句和取值。"""
     compiled = statement.compile(dialect=mysql.dialect())
@@ -80,10 +136,107 @@ async def test_turn_gate_uses_database_side_lease_deadline() -> None:
         "同时覆盖空闲、同轮次重入与超租约三种可占用情形",
         "active_turn_uid IS NULL" in rendered
         and "active_turn_uid = %s" in rendered
-        and "updated_at <= timestampadd" in rendered,
+        and "coalesce(" in rendered
+        and "turn_abandoned_at" in rendered,
         actual=rendered,
         expected="判定以 OR 覆盖空闲、同轮次与超租约三种情形",
     )
+    check_condition(
+        "放弃轮次使用独立有限租约",
+        "coalesce(" in rendered.casefold() and "turn_abandoned_at" in rendered,
+        actual=rendered,
+        expected="失败时间参与有限租约判定",
+    )
+
+
+async def test_pending_query_chain_ignores_ordinary_context_budgets() -> None:
+    """权威澄清链可超过普通 20 条与 32768 字符窗口。"""
+    terminal = _pending_message(
+        1,
+        MessageRole.ASSISTANT,
+        "旧查询已完成",
+        semantic_fingerprint="query:complete",
+    )
+    chain = [
+        _pending_message(
+            identifier,
+            MessageRole.USER if identifier % 2 == 0 else MessageRole.ASSISTANT,
+            f"证据-{identifier}-" + "甲" * 1600,
+            semantic_fingerprint=(
+                None if identifier % 2 == 0 else "query:clarification"
+            ),
+        )
+        for identifier in range(2, 24)
+    ]
+    session = _PendingChainSession(list(reversed([terminal, *chain])))
+    repository = ConversationRepository(cast(AsyncSession, session))
+
+    result = await repository.pending_query_chain(
+        "user-1",
+        "conversation-1",
+        through_id=23,
+        message_limit=100,
+        max_chars=262_144,
+    )
+
+    assert [message.id for message in result] == list(range(2, 24))
+    assert sum(len(message.content) for message in result) > 32_768
+
+
+async def test_pending_query_chain_stops_at_an_unanswered_older_user_turn() -> None:
+    """当前消息前不是 Query 澄清时不得继承废弃用户问题。"""
+    rows = [
+        _pending_message(3, MessageRole.USER, "列出订单编号"),
+        _pending_message(2, MessageRole.USER, "按月查看销售额趋势"),
+        _pending_message(
+            1,
+            MessageRole.ASSISTANT,
+            "更早查询已完成",
+            semantic_fingerprint="query:complete",
+        ),
+    ]
+    repository = ConversationRepository(
+        cast(AsyncSession, _PendingChainSession(rows))
+    )
+
+    result = await repository.pending_query_chain(
+        "user-1",
+        "conversation-1",
+        through_id=3,
+        message_limit=100,
+        max_chars=262_144,
+    )
+
+    assert [message.id for message in result] == [3]
+
+
+async def test_pending_query_chain_fails_closed_at_its_own_message_budget() -> None:
+    """无法在独立消息预算内证明链边界时稳定拒绝。"""
+    rows = [
+        _pending_message(
+            identifier,
+            MessageRole.USER if identifier % 2 else MessageRole.ASSISTANT,
+            f"证据-{identifier}",
+            semantic_fingerprint=(
+                None if identifier % 2 else "query:clarification"
+            ),
+        )
+        for identifier in range(101, 0, -1)
+    ]
+    repository = ConversationRepository(
+        cast(AsyncSession, _PendingChainSession(rows))
+    )
+
+    with pytest.raises(DataAgentError) as captured:
+        await repository.pending_query_chain(
+            "user-1",
+            "conversation-1",
+            through_id=101,
+            message_limit=100,
+            max_chars=262_144,
+        )
+
+    assert captured.value.code == "query_clarification_chain_too_large"
 
 
 async def test_turn_gate_rejects_live_turn_and_allows_expired_turn() -> None:
@@ -117,10 +270,11 @@ class _ReplaySession(_RecordingSession):
         self,
         conversation: dict[str, object],
         message: dict[str, object],
+        assistant: object | None = None,
     ):
         """绑定预置的会话行与既有用户消息。"""
         super().__init__(claimable=True)
-        self._rows = [conversation, message]
+        self._rows = [conversation, message, assistant]
         self._index = 0
 
     async def execute(self, statement: ClauseElement) -> object:
@@ -129,13 +283,16 @@ class _ReplaySession(_RecordingSession):
         rendered = str(statement).casefold()
         if rendered.startswith("update"):
             return _FakeResult(None)
+        if "timestampadd" in rendered:
+            # 初始门禁查询包含 OR；独立的自然过期判定默认模拟仍在租约内。
+            return _FakeResult((1,) if " or " in rendered else None)
         row = self._rows[min(self._index, len(self._rows) - 1)]
         self._index += 1
         return _FakeResult(row)
 
 
-async def test_idempotent_replay_renews_turn_lease() -> None:
-    """同一 turn_uid 的幂等回放必须续租门禁，否则回放后仍可被立即抢占。"""
+async def test_idempotent_replay_does_not_renew_turn_lease() -> None:
+    """非所有者轮询不得延长崩溃进程遗留的租约。"""
     moment = datetime.now(UTC)
     conversation = {"id": 1, "active_turn_uid": "turn-1", "updated_at": moment}
     message = {
@@ -146,24 +303,47 @@ async def test_idempotent_replay_renews_turn_lease() -> None:
         "content": "订单口径是什么",
         "created_at": moment,
     }
-    session = _ReplaySession(conversation, message)
+    session = _ReplaySession(conversation, message, {"id": 8})
     repository = ConversationRepository(cast(AsyncSession, session))
 
-    record, _ = await repository.start_turn(
+    record, _, execution_owner, claim_token = await repository.start_turn(
         "user-1", "conv-1", "turn-1", "订单口径是什么"
     )
 
     check_equal("幂等回放返回既有消息", record.uid, "message-7")
+    check_equal("在途幂等回放不取得执行权", execution_owner, False)
+    assert claim_token is None
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
-    check_equal("幂等回放执行一次门禁续租", len(updates), 1)
-    rendered = _rendered(updates[0])
-    check_condition(
-        "续租同时写回本轮次与当前时间",
-        "active_turn_uid=%s" in rendered.replace(" ", "")
-        and "updated_at=now()" in rendered.replace(" ", ""),
-        actual=rendered,
-        expected="UPDATE 同时设置 active_turn_uid 与 updated_at=now()",
+    check_equal("非所有者幂等回放不续租", len(updates), 0)
+
+
+async def test_query_replay_rejects_changed_semantic_fingerprint() -> None:
+    """相同问题但不同 DDL 语义指纹不得回放旧查询结果。"""
+    moment = datetime.now(UTC)
+    conversation = {"id": 1, "active_turn_uid": None, "updated_at": moment}
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "查询销售额",
+        "semantic_fingerprint": "a" * 64,
+        "created_at": moment,
+    }
+    repository = ConversationRepository(
+        cast(AsyncSession, _ReplaySession(conversation, message))
     )
+
+    with pytest.raises(DataAgentError) as caught:
+        await repository.start_turn(
+            "user-1",
+            "conv-1",
+            "turn-1",
+            "查询销售额",
+            semantic_fingerprint="b" * 64,
+        )
+
+    assert caught.value.code == "idempotency_conflict"
 
 
 async def test_completed_turn_replay_does_not_revive_gate() -> None:
@@ -180,10 +360,10 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
         "content": "订单口径是什么",
         "created_at": moment,
     }
-    session = _ReplaySession(conversation, message)
+    session = _ReplaySession(conversation, message, {"id": 8})
     repository = ConversationRepository(cast(AsyncSession, session))
 
-    record, _ = await repository.start_turn(
+    record, _, execution_owner, claim_token = await repository.start_turn(
         "user-1",
         "conv-1",
         "turn-1",
@@ -191,8 +371,37 @@ async def test_completed_turn_replay_does_not_revive_gate() -> None:
     )
 
     check_equal("仍返回既有用户消息", record.uid, "message-7")
+    check_equal("已完成轮次不取得执行权", execution_owner, False)
+    assert claim_token is None
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("已完成轮次不重新占用门禁", updates, [])
+
+
+async def test_abandoned_turn_replay_reclaims_execution_owner() -> None:
+    """失败释放后的同一 turn_uid 能原子续租并重新取得执行权。"""
+    conversation = {
+        "id": 1,
+        "active_turn_uid": "turn-1",
+        "updated_at": datetime(1970, 1, 1, tzinfo=UTC),
+    }
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "订单口径是什么",
+        "created_at": datetime.now(UTC),
+    }
+    repository = ConversationRepository(
+        cast(AsyncSession, _ReplaySession(conversation, message))
+    )
+
+    _, _, execution_owner, claim_token = await repository.start_turn(
+        "user-1", "conv-1", "turn-1", "订单口径是什么"
+    )
+
+    check_equal("失败轮次重新取得执行权", execution_owner, True)
+    assert claim_token is not None and len(claim_token) == 32
 
 
 async def test_preempted_turn_replay_does_not_reclaim_gate() -> None:
@@ -217,3 +426,38 @@ async def test_preempted_turn_replay_does_not_reclaim_gate() -> None:
 
     updates = [s for s in session.statements if str(s).casefold().startswith("update")]
     check_equal("陈旧轮次不重新占用门禁", updates, [])
+
+
+class _ExpiredReplaySession(_ReplaySession):
+    """让独立租约查询返回已过期。"""
+
+    async def execute(self, statement: ClauseElement) -> object:
+        rendered = str(statement).casefold()
+        if "timestampadd" in rendered and " or " not in rendered:
+            self.statements.append(statement)
+            return _FakeResult((1,))
+        return await super().execute(statement)
+
+
+async def test_expired_same_turn_reclaims_execution_owner() -> None:
+    """进程崩溃遗留的自然过期同轮次租约可由重试原子重新认领。"""
+    moment = datetime.now(UTC)
+    conversation = {"id": 1, "active_turn_uid": "turn-1", "updated_at": moment}
+    message = {
+        "id": 7,
+        "uid": "message-7",
+        "turn_uid": "turn-1",
+        "role": MessageRole.USER.value,
+        "content": "订单口径是什么",
+        "created_at": moment,
+    }
+    repository = ConversationRepository(
+        cast(AsyncSession, _ExpiredReplaySession(conversation, message))
+    )
+
+    _, _, execution_owner, claim_token = await repository.start_turn(
+        "user-1", "conv-1", "turn-1", "订单口径是什么"
+    )
+
+    assert execution_owner is True
+    assert claim_token is not None and len(claim_token) == 32

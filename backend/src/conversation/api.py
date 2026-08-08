@@ -124,6 +124,7 @@ async def complete_turn(
         body.user_id,
         conversation_uid,
         turn_uid,
+        body.claim_token,
         body.content,
     )
 
