@@ -507,13 +507,15 @@ class QueryIntent(ContractModel):
             or (not self.sorts and not has_sort_ambiguity)
         ):
             raise ValueError("用户明确表达的 Top-N 形态必须完整映射到查询意图")
-        explicit_time_range = re.search(
+        explicit_time_ranges = re.findall(
             r"(?:\d{4}\s*年(?:\d{1,2}\s*月(?:\d{1,2}\s*日)?)?|"
             r"\d{4}-\d{1,2}-\d{1,2}|今年|去年|本月|上月|"
             r"最近\s*\d+\s*(?:天|周|月|年))",
             user_text,
         )
-        if explicit_time_range and not (
+        if len(explicit_time_ranges) > 1:
+            raise ValueError("多个时间范围尚未建模，必须先澄清")
+        if explicit_time_ranges and not (
             self.time_quote and (self.time_column_quote or has_time_ambiguity)
         ):
             raise ValueError("用户明确表达的时间范围必须完整映射到查询意图")
@@ -578,9 +580,20 @@ class QueryIntent(ContractModel):
                 != len(explicit_filter_clauses)
             ):
                 raise ValueError("每项过滤条件必须与不同的用户原文子句一一对应")
-        aggregation_action = any(
-            marker in user_text for marker in ("总和", "合计", "平均", "均值")
-        )
+        explicit_aggregation_actions = {
+            operation
+            for operation, markers in {
+                "sum": ("总和", "合计"),
+                "avg": ("平均", "均值"),
+                "min": ("最小值", "最小", "最低"),
+                "max": ("最大值", "最大", "最高"),
+            }.items()
+            if any(marker in user_text for marker in markers)
+            and (self.query_type != QueryType.RANKING or operation in {"sum", "avg"})
+        }
+        if len(explicit_aggregation_actions) > 1:
+            raise ValueError("多个聚合动作尚未建模，必须先澄清")
+        aggregation_action = bool(explicit_aggregation_actions)
         aggregation_action = aggregation_action or any(
             marker in user_text
             and not any(marker in quote for quote in self.measure_quotes)
@@ -1603,6 +1616,19 @@ def _validate_query_sync(
             # silently shifting non-UTC users' requested range. Until the
             # trusted two-boundary contract represents explicit comparisons,
             # fail closed for every operator rather than only equality.
+            return _failed("filter_value_type_mismatch")
+        if (
+            re.match(r"^DATETIME\b", data_type)
+            and item.operator in {"eq", "ne"}
+            and all(
+                isinstance(value, str)
+                and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+                for value in values
+            )
+        ):
+            # A date-only equality against DATETIME only matches midnight.
+            # Until the trusted predicate contract can represent the natural
+            # day's half-open interval, equality and inequality fail closed.
             return _failed("filter_value_type_mismatch")
 
     def comparable_actual(
