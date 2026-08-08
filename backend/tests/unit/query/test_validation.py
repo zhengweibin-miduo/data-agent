@@ -3050,6 +3050,67 @@ def test_unmodeled_exclusion_cannot_be_omitted(question: str) -> None:
         ).validate_evidence([question])
 
 
+def test_query_action_requires_every_detail_result_field() -> None:
+    """“查询”列举的每个明细字段都必须进入可信结果槽位。"""
+    with pytest.raises(ValueError, match="每个明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            query_type_quote="查询",
+            measure_quotes=["订单编号"],
+        ).validate_evidence(["查询订单编号和客户名称"])
+
+
+def test_single_aggregation_action_cannot_omit_a_measure() -> None:
+    """同一聚合动作覆盖的多个度量不得只抽取其中一项。"""
+    with pytest.raises(ValueError, match="聚合度量"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="合计",
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+        ).validate_evidence(["销售额和成本合计"])
+
+
+def test_ranking_extreme_phrase_binds_the_sort_object() -> None:
+    """最高排名必须绑定被修饰的度量，不能改绑分组维度。"""
+    with pytest.raises(ValueError, match="每项排序"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="排名",
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            dimension_quotes=["地区"],
+            sorts=[SortIntent(quote="地区", direction="desc", direction_quote="最高")],
+            limit=10,
+            limit_quote="前10",
+        ).validate_evidence(["按地区排名，销售额合计最高的前10个地区"])
+
+
+@pytest.mark.parametrize("connector", ["同时", " AND "])
+def test_every_conjunctive_filter_must_be_extracted(connector: str) -> None:
+    """中文“同时”和英文 AND 连接的过滤条件都必须逐项抽取。"""
+    question = f"价格大于100{connector}状态等于完成的订单数量"
+    with pytest.raises(ValueError, match="每项过滤条件"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[
+                FilterIntent(
+                    column_quote="价格",
+                    operator="gt",
+                    operator_quote="大于",
+                    value_quotes=["100"],
+                    clause_quote=question,
+                )
+            ],
+        ).validate_evidence([question])
+
+
 @pytest.mark.parametrize("connector", ["与", "及"])
 def test_all_conjunctive_filter_connectors_require_every_clause(
     connector: str,

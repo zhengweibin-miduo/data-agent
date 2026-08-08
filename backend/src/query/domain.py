@@ -404,7 +404,7 @@ class QueryIntent(ContractModel):
         if self.grain and grain_matches != {self.grain}:
             raise ValueError("时间粒度必须携带与枚举一致的用户原文证据")
         shape_markers = {
-            QueryType.DETAIL: ("列出", "每笔", "明细", "记录"),
+            QueryType.DETAIL: ("查询", "列出", "每笔", "明细", "记录"),
             QueryType.AGGREGATE: ("总和", "合计", "平均", "数量", "最大值", "最小值"),
             QueryType.RANKING: ("前", "top", "最高", "最低", "排名"),
             QueryType.TREND: ("趋势", "按日", "按周", "按月", "季度", "按年"),
@@ -551,7 +551,8 @@ class QueryIntent(ContractModel):
         )
         filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
         connector_pattern = re.compile(
-            rf"(?:以及|和|与|及)(?=[^且与及，。,.；;]+{filter_operator_pattern.pattern})",
+            rf"(?:以及|同时|和|与|及|\bAND\b)"
+            rf"(?=[^且与及，。,.；;]+{filter_operator_pattern.pattern})",
             re.IGNORECASE,
         )
         filter_evidence_text = connector_pattern.sub("且", filter_evidence_text)
@@ -593,6 +594,25 @@ class QueryIntent(ContractModel):
         }
         if len(explicit_aggregation_actions) > 1:
             raise ValueError("多个聚合动作尚未建模，必须先澄清")
+        explicit_aggregate_measures: list[str] = []
+        for measure_text in re.findall(
+            r"(?:统计|查询|查看|展示)?([^，。,.；;]+?)"
+            r"(?:总和|合计|平均|均值|最小值|最大值)",
+            user_text,
+        ):
+            measure_text = re.split(r"(?:统计|查询|查看|展示)", measure_text)[-1]
+            explicit_aggregate_measures.extend(
+                item.strip(" 的")
+                for item in re.split(r"(?:和|与|及|、|，|,)", measure_text)
+                if item.strip(" 的")
+            )
+        if len(explicit_aggregate_measures) > 1 and any(
+            not any(
+                measure in quote or quote in measure for quote in self.measure_quotes
+            )
+            for measure in explicit_aggregate_measures
+        ):
+            raise ValueError("用户明确表达的每个聚合度量必须进入查询意图")
         aggregation_action = bool(explicit_aggregation_actions)
         aggregation_action = aggregation_action or any(
             marker in user_text
@@ -620,6 +640,13 @@ class QueryIntent(ContractModel):
             r"([^，。,.；;、]+?)(升序|降序|从低到高|从高到低|\basc\b|\bdesc\b)",
             user_text,
             re.IGNORECASE,
+        )
+        explicit_sorts.extend(
+            (sort_object, direction)
+            for sort_object, direction in re.findall(
+                r"([^，。,.；;、]+?)(最高|最低)(?=的?前\s*\d+)",
+                user_text,
+            )
         )
         if len(explicit_sorts) > len(self.sorts):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
@@ -653,12 +680,12 @@ class QueryIntent(ContractModel):
                         item.clause_quote, ""
                     )
             detail_evidence_text = re.sub(
-                r"((?:列出|展示|查看))(?:且|和|以及|，|,|的)*",
+                r"((?:查询|列出|展示|查看))(?:且|和|以及|，|,|的)*",
                 r"\1",
                 detail_evidence_text,
             )
             detail_match = re.search(
-                r"(?:列出|展示|查看)(.+?)(?=(?:大于|小于|等于|属于|包含|"
+                r"(?:查询|列出|展示|查看)(.+?)(?=(?:大于|小于|等于|属于|包含|"
                 r"升序|降序|前\s*\d+|top\s*\d+|的记录|的订单|$))",
                 detail_evidence_text.rstrip(" ，,。"),
             )
