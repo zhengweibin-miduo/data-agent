@@ -116,13 +116,26 @@ class MySQLQueryExecutor:
             columns = list(result.keys())
             pending: list[list[object]] = []
             pending_bytes = 0
-            # 驱动层无法在 fetchmany 物化后才补做字节限制；未知行宽时必须
-            # 单行读取，让每行先通过字节门禁，再进入进程内的事件批次。
+            # 首行单独读取以建立保守行宽上界；通过字节门禁后，再按该上界
+            # 与配置行数选择驱动批次，避免永久退化为逐行游标 await。
             driver_fetch_rows = 1
-            partitions = result.partitions(driver_fetch_rows).__aiter__()
+            fetchmany = getattr(result, "fetchmany", None)
+            partitions = (
+                None
+                if callable(fetchmany)
+                else result.partitions(driver_fetch_rows).__aiter__()
+            )
             while True:
                 try:
-                    partition = await _within_budget(anext(partitions), remaining)
+                    if callable(fetchmany):
+                        partition = await _within_budget(
+                            fetchmany(driver_fetch_rows), remaining
+                        )
+                        if not partition:
+                            break
+                    else:
+                        assert partitions is not None
+                        partition = await _within_budget(anext(partitions), remaining)
                 except StopAsyncIteration:
                     break
                 for row in partition:
@@ -151,6 +164,10 @@ class MySQLQueryExecutor:
                         pending_bytes = 0
                     pending.append(values)
                     pending_bytes += row_bytes
+                    driver_fetch_rows = min(
+                        self._fetch_batch_rows,
+                        max(1, self._max_batch_bytes // (row_bytes + 1024)),
+                    )
             # 空结果仍需要把数据库返回的字段名交给 metadata 事件。
             yield QueryBatch(columns=columns, rows=pending)
         except TimeoutError as error:

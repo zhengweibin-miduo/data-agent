@@ -402,7 +402,10 @@ class QueryIntent(ContractModel):
             raise ValueError("查询形态必须与用户原文动作证据一致")
         result_object_quotes = [*self.measure_quotes, *self.dimension_quotes]
         shape_question_text = re.sub(
-            r"(?:是(?:多少|什么)|[?？])+$", "", user_text
+            r"(?:是(?:多少|什么)|[?？。.!！])+$", "", user_text
+        ).strip()
+        shape_question_text = re.sub(
+            r"^(?:请问|请帮我|麻烦查询)", "", shape_question_text
         ).strip()
         if self.query_type_quote is None and shape_question_text in {
             quote.casefold() for quote in result_object_quotes
@@ -494,8 +497,6 @@ class QueryIntent(ContractModel):
             or explicit_operator_pattern.search(user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
-        filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
-        filter_evidence_text = re.sub(r"(?:以及|和|与|及)", "且", filter_evidence_text)
         filter_operator_pattern = re.compile(
             r"(?:大于或等于|小于或等于|大于等于|小于等于|"
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
@@ -503,6 +504,12 @@ class QueryIntent(ContractModel):
             r"\b(?:in|like)\b)",
             re.IGNORECASE,
         )
+        filter_evidence_text = re.sub(r"(?:是|为)(?:多少|什么)|是否", "", user_text)
+        connector_pattern = re.compile(
+            rf"(?:以及|和|与|及)(?=[^且与及，。,.；;]+{filter_operator_pattern.pattern})",
+            re.IGNORECASE,
+        )
+        filter_evidence_text = connector_pattern.sub("且", filter_evidence_text)
         explicit_filter_clauses = [
             clause.strip()
             for clause in re.split(r"[且，。,.；;]", filter_evidence_text)

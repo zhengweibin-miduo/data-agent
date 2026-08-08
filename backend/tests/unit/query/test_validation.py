@@ -2322,7 +2322,45 @@ def test_all_conjunctive_filter_connectors_require_every_clause(
         ).validate_evidence([question])
 
 
-@pytest.mark.parametrize("question", ["销售额是多少", "销售额？"])
+@pytest.mark.parametrize(
+    ("question", "clause_quote", "value_quote"),
+    [
+        ("考试结果=及格且地区=华东的学生数量", "考试结果=及格", "及格"),
+        ("客户名称=与辉同行且状态=完成的订单数量", "客户名称=与辉同行", "与辉同行"),
+    ],
+)
+def test_conjunctive_markers_inside_values_are_not_clause_boundaries(
+    question: str, clause_quote: str, value_quote: str
+) -> None:
+    """过滤值内部的“与/及”不能被当作条件连接词。"""
+    QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="数量",
+        aggregation="count",
+        aggregation_quote="数量",
+        measure_quotes=["订单" if "订单" in question else "学生"],
+        filters=[
+            FilterIntent(
+                column_quote="客户名称" if "客户" in question else "考试结果",
+                operator="eq",
+                operator_quote="=",
+                value_quotes=[value_quote],
+                clause_quote=clause_quote,
+            ),
+            FilterIntent(
+                column_quote="状态" if "客户" in question else "地区",
+                operator="eq",
+                operator_quote="=",
+                value_quotes=["完成" if "客户" in question else "华东"],
+                clause_quote=("状态=完成" if "客户" in question else "地区=华东"),
+            ),
+        ],
+    ).validate_evidence([question])
+
+
+@pytest.mark.parametrize(
+    "question", ["销售额是多少", "销售额？", "销售额是多少。", "请问销售额是多少"]
+)
 def test_result_shape_requires_explicit_user_action(question: str) -> None:
     """问句后缀不能让裸业务对象默认成为全量明细。"""
     with pytest.raises(ValueError, match="查询形态"):

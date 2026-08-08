@@ -27,6 +27,19 @@ class _Result:
         return None
 
 
+class _AdaptiveResult(_Result):
+    def __init__(self, rows: list[tuple[str]]) -> None:
+        super().__init__()
+        self.rows = rows
+        self.offset = 0
+
+    async def fetchmany(self, size: int) -> list[tuple[str]]:
+        self.partition_sizes.append(size)
+        batch = self.rows[self.offset : self.offset + size]
+        self.offset += len(batch)
+        return batch
+
+
 class _Connection:
     def __init__(self, result: _Result) -> None:
         self.result = result
@@ -66,6 +79,24 @@ async def test_query_executor_fetches_one_row_before_byte_validation() -> None:
 
     assert result.partition_sizes == [1]
     assert batches[0].rows == [["x"]]
+
+
+async def test_query_executor_expands_driver_reads_after_row_width_is_known() -> None:
+    """首行通过字节门禁后，大结果应恢复配置的批量游标读取。"""
+    executor = MySQLQueryExecutor(
+        "mysql+asyncmy://query:secret@localhost/dw",
+        timeout_seconds=10,
+        fetch_batch_rows=4,
+        max_batch_bytes=1024 * 1024,
+    )
+    result = _AdaptiveResult([("x",)] * 9)
+    executor._engine = Mock(connect=Mock(return_value=_Connection(result)))
+
+    query = Mock(sql="SELECT payload FROM dw.items", params={})
+    batches = [batch async for batch in executor.execute(query)]
+
+    assert result.partition_sizes == [1, 4, 4, 4]
+    assert sum(len(batch.rows) for batch in batches) == 9
 
 
 def test_query_engine_initializes_utc_session(
