@@ -87,7 +87,16 @@ class _Conversations:
 class _Intent:
     """Return one exact-evidence aggregate intent."""
 
-    async def parse(self, *_args: object) -> QueryIntent:
+    async def parse(
+        self,
+        question: str,
+        context_messages: list[str],
+        evidence_messages: list[str],
+        *,
+        now_utc: datetime | None = None,
+        user_timezone: str = "UTC",
+    ) -> QueryIntent:
+        del question, context_messages, evidence_messages, now_utc, user_timezone
         return QueryIntent(
             query_type=QueryType.AGGREGATE,
             aggregation="sum",
