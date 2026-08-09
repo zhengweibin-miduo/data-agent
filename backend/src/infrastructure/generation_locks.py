@@ -146,7 +146,6 @@ class GenerationLockManager:
                     "init_command": "SET time_zone = '+00:00'",
                     "connect_timeout": self._io_timeout_seconds,
                     "read_timeout": self._io_timeout_seconds,
-                    "write_timeout": self._io_timeout_seconds,
                 },
             )
 
