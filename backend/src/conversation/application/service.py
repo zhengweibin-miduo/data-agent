@@ -225,6 +225,18 @@ class ConversationService:
         heartbeat_task.add_done_callback(fence_owner)
         try:
             context = await self.load_turn_context(user_id, started, content)
+        except BaseException:
+            try:
+                await self.abandon_turn(
+                    user_id,
+                    conversation_uid,
+                    turn_uid,
+                    claim_token,
+                )
+            except Exception:
+                # 清理失败不得覆盖上下文、记忆召回或取消的原始异常。
+                pass
+            raise
         finally:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):

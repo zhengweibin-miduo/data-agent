@@ -200,6 +200,54 @@ class _ContextAndCleanupFailingStore(_ConversationStore):
         raise RuntimeError("cleanup failed")
 
 
+class _PublicContextFailingStore(_ConversationStore):
+    """Record claim cleanup when the public context load fails."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.abandoned: tuple[str, str, str, str] | None = None
+
+    async def start_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        content: str,
+        *,
+        semantic_fingerprint: str | None = None,
+    ) -> StartedConversationTurn:
+        started = await super().start_turn(
+            user_id,
+            conversation_uid,
+            turn_uid,
+            content,
+            semantic_fingerprint=semantic_fingerprint,
+        )
+        return StartedConversationTurn(
+            message=started.message,
+            conversation_id=started.conversation_id,
+            summary=started.summary,
+            summary_through_message_id=started.summary_through_message_id,
+            claim_token="c" * 32,
+        )
+
+    async def context_messages(
+        self,
+        user_id: str,
+        conversation_id: int,
+        *,
+        after_id: int | None,
+        limit: int,
+    ) -> list[MessageRecord]:
+        del user_id, conversation_id, after_id, limit
+        raise LookupError("public context failed")
+
+    async def abandon_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str, claim_token: str
+    ) -> None:
+        self.abandoned = (user_id, conversation_uid, turn_uid, claim_token)
+
+
 class _UserDataEraser:
     def __init__(self) -> None:
         self.users: list[str] = []
@@ -318,6 +366,33 @@ async def test_context_failure_is_not_replaced_by_claim_cleanup_failure() -> Non
         await service.start_turn(
             "user-a", "conversation-a", "turn-a", "请使用公制"
         )
+
+
+@pytest.mark.asyncio
+async def test_public_context_failure_releases_claim_for_immediate_retry() -> None:
+    """公开上下文读取失败后释放已提交的 claim。"""
+    store = _PublicContextFailingStore()
+    service = ConversationService(
+        store,
+        _MemoryReader(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    with pytest.raises(LookupError, match="public context failed"):
+        await service.start_public_turn(
+            "user-a", "conversation-a", "turn-a", "请使用公制"
+        )
+
+    assert store.abandoned == (
+        "user-a",
+        "conversation-a",
+        "turn-a",
+        "c" * 32,
+    )
 
 
 @pytest.mark.asyncio

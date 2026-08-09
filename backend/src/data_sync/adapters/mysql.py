@@ -50,6 +50,11 @@ ValueProjectionFactory = Callable[
 ]
 
 
+def _generation_owner_lost(error: asyncio.CancelledError) -> bool:
+    """仅识别 generation lock keepalive 发出的内部 fencing 取消。"""
+    return error.args == ("generation_lock_owner_lost",)
+
+
 class MySQLSyncTaskAdapter:
     """以短事务实现 durable task 和 event-buffer port。"""
 
@@ -226,6 +231,12 @@ class MySQLMaterializationAdapter:
                     # 才释放 generation lock。
                     if not await repository.settle_phase(task, SyncPhase.BUFFERING):
                         raise LeaseLostError("完成 DW 结构同步后任务租约已失效")
+        except asyncio.CancelledError as error:
+            if not _generation_owner_lost(error):
+                raise
+            raise SyncResourceBusyError(
+                "DW generation lock 执行权已失效"
+            ) from error
         except (AdvisoryLockUnavailableError, SchemaLockUnavailableError) as error:
             raise SyncResourceBusyError("DW generation 或 schema 资源被占用") from error
 
@@ -247,6 +258,12 @@ class MySQLMaterializationAdapter:
             )
             async with lock_context:
                 await self._reset_generation(task, coordinate, limit=limit)
+        except asyncio.CancelledError as error:
+            if not _generation_owner_lost(error):
+                raise
+            raise SyncResourceBusyError(
+                "DW generation lock 执行权已失效"
+            ) from error
         except AdvisoryLockUnavailableError as error:
             raise SyncResourceBusyError("DW generation 资源被占用") from error
 

@@ -12,7 +12,7 @@ import pytest
 from tests.helpers.data_sync import sync_task
 
 from data_sync.adapters import mysql as mysql_adapters
-from data_sync.application.contracts import CapturedEvents
+from data_sync.application.contracts import CapturedEvents, SyncResourceBusyError
 from data_sync.locks import generation_lock_name
 from data_sync.models import (
     BinlogCoordinate,
@@ -188,6 +188,57 @@ async def test_generation_reset_holds_write_lock_through_commit(
     repository.record_snapshot.assert_awaited_once_with(task, coordinate)
     repository.advance_captured_coordinate.assert_awaited_once_with(task, coordinate)
     repository.settle_phase.assert_awaited_once_with(task, SyncPhase.BACKFILLING)
+
+
+@pytest.mark.parametrize("operation", ["synchronize_schema", "reset_generation"])
+async def test_generation_owner_loss_becomes_retryable_resource_busy(
+    operation: str,
+) -> None:
+    """内部 generation fencing 进入可结算重试路径而非终止 worker。"""
+    task = sync_task(SyncPhase.PENDING_SCHEMA)
+
+    @asynccontextmanager
+    async def lost_owner() -> AsyncIterator[None]:
+        raise asyncio.CancelledError("generation_lock_owner_lost")
+        yield
+
+    lock_manager = Mock()
+    lock_manager.write.return_value = lost_owner()
+    adapter = mysql_adapters.MySQLMaterializationAdapter(
+        app_config.data_sync,
+        lambda session, desired: AsyncMock(),
+        cast(GenerationLockManager, lock_manager),
+    )
+
+    with pytest.raises(SyncResourceBusyError, match="generation lock 执行权已失效"):
+        if operation == "synchronize_schema":
+            await adapter.synchronize_schema(task)
+        else:
+            coordinate = BinlogCoordinate(
+                file="mysql-bin.000001", position=4, row_index=0
+            )
+            await adapter.reset_generation(task, coordinate, limit=100)
+
+
+async def test_external_materialization_cancellation_is_preserved() -> None:
+    """外部 shutdown cancellation 不得被转换为任务重试。"""
+    task = sync_task(SyncPhase.PENDING_SCHEMA)
+
+    @asynccontextmanager
+    async def cancelled() -> AsyncIterator[None]:
+        raise asyncio.CancelledError
+        yield
+
+    lock_manager = Mock()
+    lock_manager.write.return_value = cancelled()
+    adapter = mysql_adapters.MySQLMaterializationAdapter(
+        app_config.data_sync,
+        lambda session, desired: AsyncMock(),
+        cast(GenerationLockManager, lock_manager),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.synchronize_schema(task)
 
 
 async def test_task_adapter_records_capture_and_coordinate_in_one_session(
