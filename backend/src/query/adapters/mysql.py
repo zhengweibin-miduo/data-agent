@@ -5,7 +5,7 @@ import base64
 import json
 from collections.abc import AsyncGenerator, Awaitable, Sequence
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import TypeVar, cast
 
 from sqlalchemy import text
@@ -81,9 +81,7 @@ class MySQLQueryExecutor:
     async def hold_generation(self, names: tuple[str, ...], timeout_seconds: int):
         """在同一只读连接上持锁和执行，owner 断线会原子终止查询。"""
         connection = self._engine.connect()
-        await connection.start()
-        await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        token = self._generation_connection.set(connection)
+        token: Token[AsyncConnection | None] | None = None
         arguments = ", ".join(f":name_{index}" for index in range(len(names)))
         params: dict[str, object] = {
             "namespace": _GENERATION_LOCK_NAMESPACE,
@@ -92,6 +90,10 @@ class MySQLQueryExecutor:
         }
         acquired = False
         try:
+            async with asyncio.timeout(self._timeout_seconds):
+                await connection.start()
+                await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+            token = self._generation_connection.set(connection)
             async with asyncio.timeout(timeout_seconds + self._timeout_seconds):
                 acquired = bool(
                     await connection.scalar(
@@ -113,7 +115,8 @@ class MySQLQueryExecutor:
                 "MySQL generation lock 网络 I/O 超时"
             ) from error
         finally:
-            self._generation_connection.reset(token)
+            if token is not None:
+                self._generation_connection.reset(token)
             if acquired:
                 try:
                     async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
@@ -123,7 +126,15 @@ class MySQLQueryExecutor:
                         )
                 except BaseException:
                     await connection.invalidate()
-            await connection.close()
+            try:
+                async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
+                    await connection.close()
+            except BaseException:
+                try:
+                    async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
+                        await connection.invalidate()
+                except BaseException:
+                    pass
 
     async def explain(self, query: ValidatedQuery) -> None:
         """在只读事务中预检 SQL；语法对象错误转为稳定修复问题。"""

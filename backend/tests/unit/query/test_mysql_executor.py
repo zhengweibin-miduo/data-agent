@@ -1,5 +1,6 @@
 """只读 MySQL 执行器的连接契约测试。"""
 
+import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -114,6 +115,38 @@ async def test_generation_lock_and_query_share_one_owner_connection() -> None:
         _ = [batch async for batch in executor.execute(query)]
 
     connect.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure_point", ["start", "initialize"])
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("database failed"), asyncio.CancelledError("client cancelled")],
+)
+async def test_generation_connection_closes_when_initialization_fails(
+    failure_point: str, failure: BaseException
+) -> None:
+    """Generation 连接初始化失败或取消后必须立即归还连接池。"""
+    executor = MySQLQueryExecutor(
+        "mysql+asyncmy://query:secret@localhost/dw",
+        timeout_seconds=10,
+        fetch_batch_rows=500,
+        max_batch_bytes=2048,
+    )
+    connection = _Connection(_Result())
+    connection.start = AsyncMock()  # type: ignore[method-assign]
+    connection.exec_driver_sql = AsyncMock()  # type: ignore[method-assign]
+    connection.close = AsyncMock()  # type: ignore[method-assign]
+    if failure_point == "start":
+        connection.start.side_effect = failure
+    else:
+        connection.exec_driver_sql.side_effect = failure
+    executor._engine = Mock(connect=Mock(return_value=connection))
+
+    with pytest.raises(type(failure), match=str(failure)):
+        async with executor.hold_generation(("generation:items",), 1):
+            pass
+
+    connection.close.assert_awaited_once_with()
 
 
 async def test_query_executor_expands_driver_reads_after_row_width_is_known() -> None:
