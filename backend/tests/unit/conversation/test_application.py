@@ -20,6 +20,7 @@ from conversation.models import (
     MessageRecord,
     MessageRole,
 )
+from errors import DataAgentError
 from models.memory import MemoryCandidate, MemoryDetail, UserMemoryCategory
 
 
@@ -393,6 +394,54 @@ async def test_public_context_failure_releases_claim_for_immediate_retry() -> No
         "turn-a",
         "c" * 32,
     )
+
+
+@pytest.mark.asyncio
+async def test_public_lease_loss_during_context_load_is_retryable_conflict() -> None:
+    """公开上下文续租丢失必须投影为稳定的可重试冲突。"""
+
+    class LostLeaseStore(_PublicContextFailingStore):
+        async def context_messages(
+            self,
+            user_id: str,
+            conversation_id: int,
+            *,
+            after_id: int | None,
+            limit: int,
+        ) -> list[MessageRecord]:
+            del user_id, conversation_id, after_id, limit
+            await asyncio.sleep(1)
+            return []
+
+        async def renew_turn(
+            self,
+            user_id: str,
+            conversation_uid: str,
+            turn_uid: str,
+            claim_token: str,
+        ) -> bool:
+            del user_id, conversation_uid, turn_uid, claim_token
+            return False
+
+    store = LostLeaseStore()
+    service = ConversationService(
+        store,
+        _MemoryReader(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    with pytest.raises(DataAgentError) as caught:
+        await service.start_public_turn(
+            "user-a", "conversation-a", "turn-a", "请使用公制"
+        )
+
+    assert caught.value.code == "conversation_lease_lost"
+    assert caught.value.http_status == 409
+    assert caught.value.retryable is True
 
 
 @pytest.mark.asyncio

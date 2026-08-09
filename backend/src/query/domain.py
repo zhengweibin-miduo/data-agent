@@ -308,8 +308,14 @@ class QueryIntent(ContractModel):
             unclaimed_different_text = unclaimed_different_text.replace(
                 f"不同{quote}", ""
             )
+        for quote in sorted(business_quotes, key=len, reverse=True):
+            if quote.strip():
+                unclaimed_different_text = unclaimed_different_text.replace(
+                    quote.casefold(), " "
+                )
         if "不同" in unclaimed_different_text or any(
-            marker in user_text for marker in ("去重", "唯一", "distinct")
+            marker in unclaimed_different_text
+            for marker in ("去重", "唯一", "distinct")
         ):
             raise ValueError("去重语义尚未建模，必须先澄清")
         boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", user_text)
@@ -723,7 +729,7 @@ class QueryIntent(ContractModel):
         aggregation_action = aggregation_action or (
             self.query_type != QueryType.RANKING
             and any(
-                marker in user_text
+                marker in aggregation_evidence_text
                 for marker in ("最大值", "最大", "最高", "最小值", "最小", "最低")
             )
         )
@@ -758,8 +764,7 @@ class QueryIntent(ContractModel):
             )
         if len(explicit_sorts) > len(self.sorts):
             raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
-        matched_sort_indexes: set[int] = set()
-        for explicit_object, explicit_direction in explicit_sorts:
+        for index, (explicit_object, explicit_direction) in enumerate(explicit_sorts):
             explicit_object = re.sub(
                 r"^.*(?:统计|比较|对比)", "", explicit_object
             ).strip()
@@ -773,16 +778,12 @@ class QueryIntent(ContractModel):
                 ),
                 None,
             )
-            matches = [
-                index
-                for index, item in enumerate(self.sorts)
-                if index not in matched_sort_indexes
-                and item.direction == normalized_direction
-                and item.quote in explicit_object
-            ]
-            if len(matches) != 1:
+            item = self.sorts[index]
+            if (
+                item.direction != normalized_direction
+                or item.quote not in explicit_object
+            ):
                 raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
-            matched_sort_indexes.add(matches[0])
         if self.query_type == QueryType.DETAIL or (
             self.query_type == QueryType.RANKING
             and self.aggregation is None

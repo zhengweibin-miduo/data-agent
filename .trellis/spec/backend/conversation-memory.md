@@ -159,6 +159,7 @@ the purge worker physically remove memory, links, and events.
 | A different turn is already active in the conversation | `409 conversation_busy` |
 | Reused `turn_uid` has different content | `409 idempotency_conflict` |
 | Assistant completion does not match the active turn | `409 stale_turn` |
+| Public context loading loses its turn claim | `409 conversation_lease_lost`, retryable; external cancellation remains cancellation |
 | Chat DDL exceeds `api.max_ddl_bytes` | `422 ddl_too_large` before a turn is claimed |
 | Chat DDL is invalid or exceeds parser table/column limits | Existing deterministic DDL validation error before a turn is claimed |
 | Chat model connection, timeout, rate limit, or server call fails | `502 chat_model_failed`; `retryable` reflects the upstream error class |

@@ -225,7 +225,7 @@ class ConversationService:
         heartbeat_task.add_done_callback(fence_owner)
         try:
             context = await self.load_turn_context(user_id, started, content)
-        except BaseException:
+        except BaseException as error:
             try:
                 await self.abandon_turn(
                     user_id,
@@ -236,6 +236,16 @@ class ConversationService:
             except Exception:
                 # 清理失败不得覆盖上下文、记忆召回或取消的原始异常。
                 pass
+            if isinstance(error, asyncio.CancelledError) and error.args == (
+                "conversation_lease_lost",
+            ):
+                raise DataAgentError(
+                    "conversation_lease_lost",
+                    "conversation_turn",
+                    "轮次执行权已失效，请使用原 turn_uid 重试",
+                    http_status=409,
+                    retryable=True,
+                ) from error
             raise
         finally:
             heartbeat_task.cancel()

@@ -252,6 +252,9 @@ async for batch in readonly_executor.execute(validated):
   uses the injected clock and trusted user timezone before deduplication.
 - Aggregate action detection excludes trusted measure names, and Top-N extreme
   phrases bind only the measure expression after any grouping prefix.
+- Distinct action detection likewise excludes complete trusted business-object
+  names, while explicit de-duplication language still fails closed. Multiple
+  sort intents preserve the user's declared primary-to-secondary order.
 - Until a trusted outer-join contract exists, a nullable foreign key cannot
   authorize an inner child-to-parent join that would discard driving rows.
 - Query claim heartbeats distinguish a failed compare-and-swap renewal from a

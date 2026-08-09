@@ -2688,6 +2688,27 @@ def test_sort_and_field_words_do_not_invent_aggregation() -> None:
     ).validate_evidence(["列出订单编号和订单数量"])
 
 
+@pytest.mark.parametrize("field", ["最高学历", "最低库存量"])
+def test_extreme_words_inside_detail_field_names_are_not_aggregation_actions(
+    field: str,
+) -> None:
+    """最高和最低属于完整字段名时不得制造聚合动作。"""
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        query_type_quote="列出",
+        measure_quotes=["员工姓名", field],
+    ).validate_evidence([f"列出员工姓名和{field}"])
+
+
+def test_unique_word_inside_detail_field_name_is_not_distinct_intent() -> None:
+    """唯一属于完整字段名时不得制造 DISTINCT 意图。"""
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        query_type_quote="查询",
+        measure_quotes=["唯一标识"],
+    ).validate_evidence(["查询唯一标识"])
+
+
 def test_different_dimension_is_not_distinct_intent() -> None:
     """“不同地区”表示分组维度，而不是未建模 DISTINCT。"""
     QueryIntent(
@@ -3044,6 +3065,24 @@ def test_each_explicit_sort_requires_a_distinct_sort_intent() -> None:
             limit=10,
             limit_quote="前10条",
         ).validate_evidence(["销售额降序、订单编号升序的前10条订单编号"])
+
+
+def test_explicit_sort_intents_must_preserve_user_priority() -> None:
+    """模型不得交换用户声明的主排序与次排序。"""
+    with pytest.raises(ValueError, match="每项排序"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="前10条",
+            measure_quotes=["订单编号"],
+            sorts=[
+                SortIntent(
+                    quote="订单编号", direction="asc", direction_quote="升序"
+                ),
+                SortIntent(quote="金额", direction="desc", direction_quote="降序"),
+            ],
+            limit=10,
+            limit_quote="前10条",
+        ).validate_evidence(["按金额降序、订单编号升序列出前10条订单编号"])
 
 
 @pytest.mark.parametrize(
