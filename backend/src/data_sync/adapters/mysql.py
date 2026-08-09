@@ -36,7 +36,10 @@ from data_sync.schema_sync import (
 from ddl_metadata.meta_projection.application.value_input import (
     ValueProjectionParticipant,
 )
-from infrastructure.generation_locks import GenerationLockManager
+from infrastructure.generation_locks import (
+    GenerationLockManager,
+    is_generation_lock_owner_lost,
+)
 from infrastructure.mysql import (
     AdvisoryLockUnavailableError,
     MySQLDatabase,
@@ -48,11 +51,6 @@ ValueProjectionFactory = Callable[
     [AsyncSession, DesiredSyncTable],
     ValueProjectionParticipant,
 ]
-
-
-def _generation_owner_lost(error: asyncio.CancelledError) -> bool:
-    """仅识别 generation lock keepalive 发出的内部 fencing 取消。"""
-    return error.args == ("generation_lock_owner_lost",)
 
 
 class MySQLSyncTaskAdapter:
@@ -232,7 +230,7 @@ class MySQLMaterializationAdapter:
                     if not await repository.settle_phase(task, SyncPhase.BUFFERING):
                         raise LeaseLostError("完成 DW 结构同步后任务租约已失效")
         except asyncio.CancelledError as error:
-            if not _generation_owner_lost(error):
+            if not is_generation_lock_owner_lost(error):
                 raise
             raise SyncResourceBusyError(
                 "DW generation lock 执行权已失效"
@@ -259,7 +257,7 @@ class MySQLMaterializationAdapter:
             async with lock_context:
                 await self._reset_generation(task, coordinate, limit=limit)
         except asyncio.CancelledError as error:
-            if not _generation_owner_lost(error):
+            if not is_generation_lock_owner_lost(error):
                 raise
             raise SyncResourceBusyError(
                 "DW generation lock 执行权已失效"

@@ -28,6 +28,11 @@ _PROBE_NAMESPACE = "data-agent-capability-v1"
 _CONTENTION_ERRORS = frozenset({3132, 3133})
 
 
+def is_generation_lock_owner_lost(error: asyncio.CancelledError) -> bool:
+    """仅识别 generation owner keepalive 发出的内部 fencing 取消。"""
+    return error.args == ("generation_lock_owner_lost",)
+
+
 class ExpandableWriteOwner:
     """在同一 owner connection 上逐步扩展 WRITE 锁集合。"""
 
@@ -140,6 +145,8 @@ class GenerationLockManager:
                 connect_args={
                     "init_command": "SET time_zone = '+00:00'",
                     "connect_timeout": self._io_timeout_seconds,
+                    "read_timeout": self._io_timeout_seconds,
+                    "write_timeout": self._io_timeout_seconds,
                 },
             )
 

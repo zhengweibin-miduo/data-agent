@@ -105,6 +105,8 @@ async def test_manager_uses_a_bounded_dedicated_pool_and_closes_it(
     assert captured["connect_args"] == {
         "init_command": "SET time_zone = '+00:00'",
         "connect_timeout": 5,
+        "read_timeout": 5,
+        "write_timeout": 5,
     }
     assert engine.closed is True
 

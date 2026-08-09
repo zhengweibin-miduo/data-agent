@@ -1,5 +1,6 @@
 """Accepted snapshot generation WRITE lock 边界检查。"""
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import SimpleNamespace
@@ -539,3 +540,71 @@ async def test_snapshot_lock_contention_is_retryable_and_starts_no_transaction(
     check_equal("锁竞争允许上层安全重试", captured.value.retryable, True)
     check_equal("锁竞争 HTTP 状态", captured.value.http_status, 503)
     check_equal("source 锁竞争前不扫描 authority", session_entries, [])
+
+
+async def test_snapshot_generation_owner_loss_is_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """发布期间 owner 丢失必须转换为 runner 可立即结算的可重试错误。"""
+
+    @asynccontextmanager
+    async def owner_lost_lock(
+        names: Iterable[str],
+        *,
+        timeout_seconds: int,
+    ) -> AsyncIterator[None]:
+        del names, timeout_seconds
+        raise asyncio.CancelledError("generation_lock_owner_lost")
+        yield
+
+    monkeypatch.setattr(
+        snapshots,
+        "build_accepted_memories",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        snapshots,
+        "build_desired_tables",
+        lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
+    )
+
+    with pytest.raises(DataAgentError) as captured:
+        await MySQLAcceptedSnapshotPublisher(
+            _lock_manager(owner_lost_lock), {"local": "source_demo"}
+        ).publish(_accepted_snapshot())
+
+    check_equal("owner 丢失错误码", captured.value.code, "generation_lock_owner_lost")
+    check_equal("owner 丢失允许 runner 立即重试", captured.value.retryable, True)
+    check_equal("owner 丢失映射为服务暂不可用", captured.value.http_status, 503)
+
+
+async def test_snapshot_external_cancellation_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外部 shutdown cancellation 不得被误投影为 generation owner 丢失。"""
+
+    @asynccontextmanager
+    async def cancelled_lock(
+        names: Iterable[str],
+        *,
+        timeout_seconds: int,
+    ) -> AsyncIterator[None]:
+        del names, timeout_seconds
+        raise asyncio.CancelledError("shutdown")
+        yield
+
+    monkeypatch.setattr(
+        snapshots,
+        "build_accepted_memories",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        snapshots,
+        "build_desired_tables",
+        lambda *args, **kwargs: [SimpleNamespace(target_table="fact_order")],
+    )
+
+    with pytest.raises(asyncio.CancelledError, match="shutdown"):
+        await MySQLAcceptedSnapshotPublisher(
+            _lock_manager(cancelled_lock), {"local": "source_demo"}
+        ).publish(_accepted_snapshot())

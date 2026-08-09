@@ -1,5 +1,6 @@
 """权威元数据与记忆快照的原子提交。"""
 
+import asyncio
 from collections.abc import Mapping
 
 from loguru import logger
@@ -26,7 +27,10 @@ from ddl_metadata.meta_projection.repository import (
 from ddl_metadata.persistence.metadata_repository import MetadataRepository
 from errors import DataAgentError
 from identifiers import scope_fingerprint
-from infrastructure.generation_locks import GenerationLockManager
+from infrastructure.generation_locks import (
+    GenerationLockManager,
+    is_generation_lock_owner_lost,
+)
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
@@ -208,6 +212,16 @@ class MySQLAcceptedSnapshotPublisher:
                     )
                     # 步骤十一：最后写入权威记忆、审计事件、关系和双索引 outbox。
                     await memory_repository.upsert_candidates(accepted)
+        except asyncio.CancelledError as error:
+            if not is_generation_lock_owner_lost(error):
+                raise
+            raise DataAgentError(
+                "generation_lock_owner_lost",
+                "persist_snapshot",
+                "DW generation lock 执行权已失效，accepted snapshot 稍后可安全重试",
+                retryable=True,
+                http_status=503,
+            ) from error
         except AdvisoryLockUnavailableError as error:
             raise DataAgentError(
                 "generation_lock_unavailable",
