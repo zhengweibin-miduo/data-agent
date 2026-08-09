@@ -86,6 +86,8 @@ the current summary, recent messages after its cursor, and relevant active
 `user.*` rows for the same `user_id`. Completing a turn atomically inserts
 the assistant message, inserts one extraction outbox row, releases the active
 turn by matching both ownership coordinates, and only then reports success.
+Claim acquisition, renewal, and expiry comparison all use MySQL `NOW(6)` so a
+one-second lease retains its full duration across second boundaries.
 Replaying the same `turn_uid` and content returns the existing result read-only.
 The public two-step endpoint renews its claim while bounded context is loaded;
 after `start_turn` returns, its owner must call the token-CAS renew endpoint

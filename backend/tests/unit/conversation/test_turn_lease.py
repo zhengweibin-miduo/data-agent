@@ -151,6 +151,30 @@ async def test_turn_gate_uses_database_side_lease_deadline() -> None:
     )
 
 
+async def test_turn_claim_and_expiry_use_microsecond_database_time() -> None:
+    """领取租约与到期判定必须使用相同的数据库微秒精度。"""
+    session = _RecordingSession(claimable=True)
+    repository = ConversationRepository(cast(AsyncSession, session))
+
+    await repository._claim_turn_gate(1, "user-1", "turn-1")
+    await repository._turn_lease_expired(1, "user-1")
+
+    claim_sql = _rendered(session.statements[0])
+    expiry_sql = _rendered(session.statements[1])
+    check_condition(
+        "领取租约写入微秒数据库时间",
+        "now" in claim_sql.casefold() and "now_1': 6" in claim_sql,
+        actual=claim_sql,
+        expected="updated_at 使用 now(6)",
+    )
+    check_condition(
+        "租约到期判定使用微秒数据库时间",
+        "now" in expiry_sql.casefold() and "now_1': 6" in expiry_sql,
+        actual=expiry_sql,
+        expected="timestampadd 使用 now(6)",
+    )
+
+
 async def test_pending_query_chain_ignores_ordinary_context_budgets() -> None:
     """权威澄清链可超过普通 20 条与 32768 字符窗口。"""
     terminal = _pending_message(

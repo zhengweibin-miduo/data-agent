@@ -286,7 +286,7 @@ class ConversationRepository:
                 active_turn_uid=turn_uid,
                 active_turn_claim_token=claim_token,
                 turn_abandoned_at=None,
-                updated_at=func.now(),
+                updated_at=func.now(6),
             )
         )
         return claim_token
@@ -302,7 +302,7 @@ class ConversationRepository:
                     <= func.timestampadd(
                         text("SECOND"),
                         -app_config.conversation.turn_lease_seconds,
-                        func.now(),
+                        func.now(6),
                     ),
                 )
             )
