@@ -14,6 +14,7 @@ from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
 )
+from query.application.contracts import QueryExecutorPort
 
 
 class QueryReadinessAdapter:
@@ -23,6 +24,7 @@ class QueryReadinessAdapter:
         self,
         tool: BaseTool,
         generation_locks: GenerationLockManager,
+        executor: QueryExecutorPort,
         *,
         dw_database: str,
         lock_timeout: int,
@@ -30,6 +32,7 @@ class QueryReadinessAdapter:
         """绑定现有只读数据就绪工具。"""
         self._tool = tool
         self._generation_locks = generation_locks
+        self._executor = executor
         self._dw_database = dw_database
         self._lock_timeout = lock_timeout
 
@@ -55,9 +58,12 @@ class QueryReadinessAdapter:
         completed = False
         try:
             async with self._generation_locks.read(names, self._lock_timeout):
-                entered = True
-                yield
-                completed = True
+                async with self._executor.hold_generation(
+                    tuple(names), self._lock_timeout
+                ):
+                    entered = True
+                    yield
+                    completed = True
         except AdvisoryLockUnavailableError as error:
             if entered:
                 raise

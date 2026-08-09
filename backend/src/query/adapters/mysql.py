@@ -4,13 +4,16 @@ import asyncio
 import base64
 import json
 from collections.abc import AsyncGenerator, Awaitable, Sequence
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import TypeVar, cast
 
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from errors import DataAgentError
+from infrastructure.mysql import AdvisoryLockUnavailableError
 from query.application.contracts import (
     QueryBatch,
     QueryExplainRejected,
@@ -19,6 +22,7 @@ from query.domain import SQLValidationIssue, ValidatedQuery
 
 _Result = TypeVar("_Result")
 _CLEANUP_TIMEOUT_SECONDS = 2.0
+_GENERATION_LOCK_NAMESPACE = "data-agent-generation-v1"
 
 
 async def _within_budget(
@@ -69,13 +73,69 @@ class MySQLQueryExecutor:
         self._timeout_seconds = timeout_seconds
         self._fetch_batch_rows = fetch_batch_rows
         self._max_batch_bytes = max_batch_bytes
+        self._generation_connection: ContextVar[AsyncConnection | None] = ContextVar(
+            "query_generation_connection", default=None
+        )
+
+    @asynccontextmanager
+    async def hold_generation(self, names: tuple[str, ...], timeout_seconds: int):
+        """在同一只读连接上持锁和执行，owner 断线会原子终止查询。"""
+        connection = self._engine.connect()
+        await connection.start()
+        await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        token = self._generation_connection.set(connection)
+        arguments = ", ".join(f":name_{index}" for index in range(len(names)))
+        params: dict[str, object] = {
+            "namespace": _GENERATION_LOCK_NAMESPACE,
+            "timeout": timeout_seconds,
+            **{f"name_{index}": name for index, name in enumerate(names)},
+        }
+        acquired = False
+        try:
+            async with asyncio.timeout(timeout_seconds + self._timeout_seconds):
+                acquired = bool(
+                    await connection.scalar(
+                        text(
+                            "SELECT service_get_read_locks(:namespace, "
+                            f"{arguments}, :timeout)"
+                        ),
+                        params,
+                    )
+                )
+            if not acquired:
+                raise AdvisoryLockUnavailableError(
+                    "MySQL generation lock 未在等待预算内取得"
+                )
+            yield
+        except TimeoutError as error:
+            await connection.invalidate()
+            raise AdvisoryLockUnavailableError(
+                "MySQL generation lock 网络 I/O 超时"
+            ) from error
+        finally:
+            self._generation_connection.reset(token)
+            if acquired:
+                try:
+                    async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
+                        await connection.scalar(
+                            text("SELECT service_release_locks(:namespace)"),
+                            {"namespace": _GENERATION_LOCK_NAMESPACE},
+                        )
+                except BaseException:
+                    await connection.invalidate()
+            await connection.close()
 
     async def explain(self, query: ValidatedQuery) -> None:
         """在只读事务中预检 SQL；语法对象错误转为稳定修复问题。"""
         try:
             async with asyncio.timeout(self._timeout_seconds):
-                async with self._engine.connect() as connection:
-                    await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+                bound = self._generation_connection.get()
+                connection_context = (
+                    self._engine.connect() if bound is None else _borrowed(bound)
+                )
+                async with connection_context as connection:
+                    if bound is None:
+                        await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
                     await connection.execute(text(f"EXPLAIN {query.sql}"), query.params)
                     await connection.rollback()
         except ProgrammingError as error:
@@ -136,15 +196,19 @@ class MySQLQueryExecutor:
     async def execute(self, query: ValidatedQuery) -> AsyncGenerator[QueryBatch, None]:
         """在一个只读事务中按行数与字节双预算读取完整结果。"""
         remaining = [self._timeout_seconds]
-        connection = self._engine.connect()
-        connected = False
+        bound = self._generation_connection.get()
+        connection = self._engine.connect() if bound is None else bound
+        connected = bound is not None
+        owned = bound is None
         result = None
         try:
-            await _within_budget(connection.start(), remaining)
-            connected = True
-            await _within_budget(
-                connection.exec_driver_sql("SET TRANSACTION READ ONLY"), remaining
-            )
+            if owned:
+                await _within_budget(connection.start(), remaining)
+                connected = True
+            if owned:
+                await _within_budget(
+                    connection.exec_driver_sql("SET TRANSACTION READ ONLY"), remaining
+                )
             result = await _within_budget(
                 connection.stream(text(query.sql), query.params), remaining
             )
@@ -252,7 +316,7 @@ class MySQLQueryExecutor:
                     except (Exception, asyncio.CancelledError):
                         await connection.invalidate()
             finally:
-                if connected:
+                if connected and owned:
                     try:
                         async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
                             await connection.close()
@@ -262,3 +326,9 @@ class MySQLQueryExecutor:
     async def close(self) -> None:
         """关闭专用查询连接池。"""
         await self._engine.dispose()
+
+
+@asynccontextmanager
+async def _borrowed(connection: AsyncConnection):
+    """把已由 generation guard 管理的连接适配成上下文。"""
+    yield connection

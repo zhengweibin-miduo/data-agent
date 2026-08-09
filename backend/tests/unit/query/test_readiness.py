@@ -30,11 +30,23 @@ async def test_query_hold_uses_shared_generation_locks() -> None:
         observed.append((tuple(names), timeout_seconds))
         yield
 
+    executor_holds: list[tuple[tuple[str, ...], int]] = []
+
+    @asynccontextmanager
+    async def execution_locks(
+        names: tuple[str, ...], timeout_seconds: int
+    ) -> AsyncIterator[None]:
+        executor_holds.append((names, timeout_seconds))
+        yield
+
     manager = Mock(spec=GenerationLockManager)
     manager.read = shared_locks
+    executor = Mock()
+    executor.hold_generation = execution_locks
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
         cast(GenerationLockManager, manager),
+        executor,
         dw_database="dw",
         lock_timeout=2,
     )
@@ -51,6 +63,7 @@ async def test_query_hold_uses_shared_generation_locks() -> None:
             2,
         )
     ]
+    assert executor_holds == observed
 
 
 async def test_query_hold_maps_lock_contention_to_retryable_conflict() -> None:
@@ -67,9 +80,12 @@ async def test_query_hold_maps_lock_contention_to_retryable_conflict() -> None:
 
     manager = Mock(spec=GenerationLockManager)
     manager.read = unavailable
+    executor = Mock()
+    executor.hold_generation = unavailable
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
         cast(GenerationLockManager, manager),
+        executor,
         dw_database="dw",
         lock_timeout=1,
     )
@@ -101,10 +117,21 @@ async def test_query_hold_logs_release_failure_after_success(
     warning = Mock()
     manager = Mock(spec=GenerationLockManager)
     manager.read = release_fails
+
+    @asynccontextmanager
+    async def execution_locks(
+        names: tuple[str, ...], timeout_seconds: int
+    ) -> AsyncIterator[None]:
+        del names, timeout_seconds
+        yield
+
+    executor = Mock()
+    executor.hold_generation = execution_locks
     monkeypatch.setattr(readiness_module.logger, "warning", warning)
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
         cast(GenerationLockManager, manager),
+        executor,
         dw_database="dw",
         lock_timeout=1,
     )

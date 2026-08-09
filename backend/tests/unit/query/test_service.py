@@ -68,6 +68,7 @@ class _Conversations:
         self.completed: list[str] = []
         self.abandoned = 0
         self.semantic_fingerprints: list[str | None] = []
+        self.completion_fingerprints: list[str | None] = []
         self.chain = [_message(MessageRole.USER, "查询销售额总和")]
 
     async def start_turn(
@@ -102,7 +103,7 @@ class _Conversations:
     ) -> CompleteTurnResponse:
         """记录澄清文本并完成轮次。"""
         content = str(_args[-1])
-        del semantic_fingerprint
+        self.completion_fingerprints.append(semantic_fingerprint)
         self.completed.append(content)
         return CompleteTurnResponse(message=_message(MessageRole.ASSISTANT, content))
 
@@ -1151,6 +1152,7 @@ async def test_stream_explains_checks_readiness_and_keeps_all_batches() -> None:
     assert executor.explained == 2
     assert executor.executed == 1
     assert planner.repairs == 0
+    assert conversations.completion_fingerprints == ["query:complete"]
 
 
 async def test_guard_entry_failure_preserves_error_and_abandons_turn() -> None:

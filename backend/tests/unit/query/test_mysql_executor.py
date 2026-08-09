@@ -53,6 +53,9 @@ class _Connection:
     async def stream(self, _statement: object, _params: object) -> _Result:
         return self.result
 
+    async def execute(self, _statement: object, _params: object) -> None:
+        return None
+
     async def rollback(self) -> None:
         return None
 
@@ -64,6 +67,9 @@ class _Connection:
 
     async def scalar(self, _statement: object, _params: object) -> int:
         return 1
+
+    async def invalidate(self) -> None:
+        return None
 
     async def __aenter__(self):  # type: ignore[no-untyped-def]
         return self
@@ -88,6 +94,26 @@ async def test_query_executor_fetches_one_row_before_byte_validation() -> None:
 
     assert result.partition_sizes == [1]
     assert batches[0].rows == [["x"]]
+
+
+async def test_generation_lock_and_query_share_one_owner_connection() -> None:
+    """锁 owner 断线必须与最终 EXPLAIN、SELECT 使用同一故障域。"""
+    executor = MySQLQueryExecutor(
+        "mysql+asyncmy://query:secret@localhost/dw",
+        timeout_seconds=10,
+        fetch_batch_rows=500,
+        max_batch_bytes=2048,
+    )
+    connection = _Connection(_Result())
+    connect = Mock(return_value=connection)
+    executor._engine = Mock(connect=connect)
+    query = Mock(sql="SELECT payload FROM dw.items", params={})
+
+    async with executor.hold_generation(("generation:items",), 1):
+        await executor.explain(query)
+        _ = [batch async for batch in executor.execute(query)]
+
+    connect.assert_called_once_with()
 
 
 async def test_query_executor_expands_driver_reads_after_row_width_is_known() -> None:

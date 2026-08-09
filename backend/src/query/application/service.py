@@ -242,7 +242,12 @@ class QueryApplication:
             validated = await self._plan(request, context, intent, trusted_time_range)
             if validated is None:
                 completion_started.set()
-                await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
+                await self._complete(
+                    request,
+                    claim_token,
+                    DATA_PREPARING_MESSAGE,
+                    semantic_fingerprint="query:complete",
+                )
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                 return
             # 最终复核与完整结果读取共享同步 generation lock，避免 readiness
@@ -274,7 +279,12 @@ class QueryApplication:
                     self._readiness.ready(validated.target_tables)
                 ):
                     completion_started.set()
-                    await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
+                    await self._complete(
+                        request,
+                        claim_token,
+                        DATA_PREPARING_MESSAGE,
+                        semantic_fingerprint="query:complete",
+                    )
                     yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                     return
                 started_at = perf_counter()
@@ -343,7 +353,12 @@ class QueryApplication:
                     duration_ms=elapsed_ms,
                 )
                 completion_started.set()
-                await self._complete(request, claim_token, summary)
+                await self._complete(
+                    request,
+                    claim_token,
+                    summary,
+                    semantic_fingerprint="query:complete",
+                )
                 yield QueryEvent(
                     kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
                 )

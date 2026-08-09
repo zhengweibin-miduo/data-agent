@@ -278,6 +278,12 @@ class QueryExecutorPort(Protocol):
         """证明执行实例能够解析本次 IANA 时区。"""
         ...
 
+    def hold_generation(
+        self, names: tuple[str, ...], timeout_seconds: int
+    ) -> AbstractAsyncContextManager[None]:
+        """在实际查询连接上持有 generation READ locks。"""
+        ...
+
     def execute(self, query: ValidatedQuery) -> AsyncGenerator[QueryBatch, None]:
         """按固定单批预算流式读取完整业务结果。"""
         ...

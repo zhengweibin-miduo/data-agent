@@ -264,9 +264,10 @@ async for batch in readonly_executor.execute(validated):
   transient renewal transport error. A confirmed claim loss fences execution
   and projects the same stable retryable error before or after the first event;
   every supported lease value renews strictly before its expiry boundary.
-- Generation lock owners stay active throughout long streaming critical
-  sections. A bounded keepalive detects owner-session loss and fences the
-  active operation before it can continue outside the protected generation.
+- Query acquires an additional generation READ lock on the same SELECT-only
+  connection that performs final EXPLAIN and streaming. Owner-session loss
+  therefore terminates database work atomically instead of relying on a later
+  keepalive probe to fence an independent executor connection.
 - Chat claim heartbeats follow the same rule and stop before the terminal
   completion transaction, so a transient renewal failure does not fence a live
   owner and a successful completion cannot cancel itself after clearing the claim.
