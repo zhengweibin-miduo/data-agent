@@ -129,6 +129,9 @@ class ConversationService:
                 context=ConversationContext(summary=None, messages=[], memories=[]),
                 execution_owner=started.execution_owner,
                 claim_token=started.claim_token,
+                conversation_id=started.conversation_id,
+                summary=started.summary,
+                summary_through_message_id=started.summary_through_message_id,
             )
         # 已完成轮次的幂等回放不依赖长期记忆或远程检索。
         if not started.execution_owner:
@@ -166,6 +169,23 @@ class ConversationService:
             context=context,
             execution_owner=started.execution_owner,
             claim_token=started.claim_token,
+            conversation_id=started.conversation_id,
+            summary=started.summary,
+            summary_through_message_id=started.summary_through_message_id,
+        )
+
+    async def load_turn_context(
+        self, user_id: str, started: StartTurnResponse, query: str
+    ) -> ConversationContext:
+        """在 claim 已返回给调用方后加载上下文，使调用方可先启动续租。"""
+        if started.conversation_id is None:
+            raise ValueError("轮次响应缺少会话上下文坐标")
+        return await self._context(
+            user_id,
+            started.conversation_id,
+            started.summary,
+            started.summary_through_message_id,
+            query,
         )
 
     async def complete_turn(

@@ -104,6 +104,7 @@ class ChatService:
                     separators=(",", ":"),
                 ).encode()
             ).hexdigest(),
+            include_context=False,
         )
 
         # 步骤三：完成轮次的幂等回放直接返回现有助手消息，不重复调用门禁或模型。
@@ -171,10 +172,13 @@ class ChatService:
             name=f"chat-turn-heartbeat:{request.turn_uid}",
         )
         try:
+            context = await self._conversations.load_turn_context(
+                request.user_id, started, request.content
+            )
             gate = await self._readiness.evaluate(request.content, catalog)
             if gate.decision == AnswerGateDecision.PROCEED:
                 assistant_content = await self._generate(
-                    started.context,
+                    context,
                     schema.source,
                     schema.canonical_ddl,
                 )

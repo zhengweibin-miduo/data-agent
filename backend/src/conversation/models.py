@@ -107,6 +107,15 @@ class StartTurnResponse(ContractModel):
         max_length=32,
         description="当前执行代次的不透明 fencing 坐标。",
     )
+    conversation_id: int | None = Field(
+        default=None, exclude=True, description="内部会话记录标识。"
+    )
+    summary: str | None = Field(
+        default=None, exclude=True, description="上下文加载使用的内部摘要。"
+    )
+    summary_through_message_id: int | None = Field(
+        default=None, exclude=True, description="内部摘要覆盖到的消息标识。"
+    )
 
 
 class CompleteTurnRequest(ContractModel):

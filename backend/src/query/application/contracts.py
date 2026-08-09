@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Literal, Protocol
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from pydantic import Field, field_validator
 
@@ -35,6 +35,12 @@ class SupplementalQueryContext(ContractModel):
     @classmethod
     def validate_user_timezone(cls, value: str) -> str:
         """拒绝主机不可用的 IANA 时区键。"""
+        if value not in available_timezones() or value in {
+            "Factory",
+            "localtime",
+            "posixrules",
+        }:
+            raise ValueError("用户时区必须是稳定的 IANA tzdb 地区键")
         try:
             ZoneInfo(value)
         except (ValueError, ZoneInfoNotFoundError) as error:

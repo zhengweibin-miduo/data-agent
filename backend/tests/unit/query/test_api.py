@@ -4,12 +4,13 @@ import asyncio
 import json
 
 import httpx
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from errors import DataAgentError
 from query.adapters.http import router
-from query.application.contracts import QueryEvent
+from query.application.contracts import QueryEvent, SupplementalQueryContext
 
 
 class _Query:
@@ -19,6 +20,19 @@ class _Query:
         """产生 metadata 和 complete 事件。"""
         yield QueryEvent(kind="metadata", sql="SELECT 1", columns=["value"])
         yield QueryEvent(kind="complete", row_count=0, elapsed_ms=1)
+
+
+@pytest.mark.parametrize("zone", ["localtime", "posixrules", "Factory"])
+def test_query_context_rejects_host_dependent_timezone_keys(zone: str) -> None:
+    """用户时区必须是稳定 tzdb 地区键而非主机伪键。"""
+    with pytest.raises(ValueError):
+        SupplementalQueryContext(user_timezone=zone)
+
+
+def test_query_context_accepts_stable_iana_timezone() -> None:
+    """标准地区时区仍可进入 Query 契约。"""
+    context = SupplementalQueryContext(user_timezone="Asia/Shanghai")
+    assert context.user_timezone == "Asia/Shanghai"
 
 
 class _FailingQuery:

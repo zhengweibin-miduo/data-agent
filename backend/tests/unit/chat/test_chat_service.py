@@ -90,6 +90,20 @@ def _service(
                 memories=[],
             ),
             claim_token="c" * 32,
+            conversation_id=1,
+            summary="用户正在定义订单口径。",
+        )
+    )
+    conversations.load_turn_context = AsyncMock(
+        return_value=ConversationContext(
+            summary="用户正在定义订单口径。",
+            messages=[
+                ContextMessage(
+                    role=MessageRole.USER,
+                    content="订单金额应该怎样定义？",
+                )
+            ],
+            memories=[],
         )
     )
     conversations.assistant_message = AsyncMock(return_value=existing)
@@ -134,6 +148,26 @@ async def test_chat_turn_renews_claim_during_slow_model_call() -> None:
     service, conversations, _, model = _service()
     model.ainvoke = AsyncMock(side_effect=slow_model)
 
+    task = asyncio.create_task(service.run_turn("conversation-1", _request()))
+    for _ in range(20):
+        if conversations.renew_turn.await_count:
+            break
+        await asyncio.sleep(0.01)
+    assert conversations.renew_turn.await_count >= 1
+    release.set()
+    await task
+
+
+async def test_chat_turn_renews_claim_while_context_is_loading() -> None:
+    """Chat 在 claim 后的上下文召回期间立即续租。"""
+    release = asyncio.Event()
+    service, conversations, _, _ = _service()
+
+    async def slow_context(*_args: object, **_kwargs: object) -> ConversationContext:
+        await release.wait()
+        return ConversationContext(summary=None, messages=[], memories=[])
+
+    conversations.load_turn_context = AsyncMock(side_effect=slow_context)
     task = asyncio.create_task(service.run_turn("conversation-1", _request()))
     for _ in range(20):
         if conversations.renew_turn.await_count:
