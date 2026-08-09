@@ -128,7 +128,9 @@ assistant quote and a later user message that repeats that conclusion.
 Summary cursors only advance. Because `available_at` is written by a MySQL
 default, claim eligibility and lease expiry also use MySQL `NOW()`; mixing the
 application clock with the database clock can hide newly created work during
-clock drift.
+clock drift. A `query:complete` extraction claim loads at least the configured
+Query clarification-chain message limit plus its terminal assistant message,
+so advancing the summary cursor cannot strand early evidence.
 
 Required YAML keys are:
 

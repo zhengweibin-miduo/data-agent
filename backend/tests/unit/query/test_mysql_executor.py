@@ -149,6 +149,26 @@ async def test_generation_connection_closes_when_initialization_fails(
     connection.close.assert_awaited_once_with()
 
 
+async def test_generation_connection_is_invalidated_when_release_returns_false(
+) -> None:
+    """Locking Service 无法证明释放成功时不得把 owner session 归还池。"""
+    executor = MySQLQueryExecutor(
+        "mysql+asyncmy://query:secret@localhost/dw",
+        timeout_seconds=10,
+        fetch_batch_rows=500,
+        max_batch_bytes=2048,
+    )
+    connection = _Connection(_Result())
+    connection.scalar = AsyncMock(side_effect=[1, 0])  # type: ignore[method-assign]
+    connection.invalidate = AsyncMock()  # type: ignore[method-assign]
+    executor._engine = Mock(connect=Mock(return_value=connection))
+
+    async with executor.hold_generation(("generation:items",), 1):
+        pass
+
+    connection.invalidate.assert_awaited_once_with()
+
+
 async def test_query_executor_expands_driver_reads_after_row_width_is_known() -> None:
     """首行通过字节门禁后，大结果应恢复配置的批量游标读取。"""
     executor = MySQLQueryExecutor(

@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
 
 from conversation.models import MessageRole
-from conversation.repository import ConversationRepository
+from conversation.repository import (
+    ConversationRepository,
+    _extraction_message_limit,
+)
 from errors import DataAgentError
 from settings import app_config
 from tests.helpers.checks import check_condition, check_equal
@@ -207,6 +210,15 @@ async def test_pending_query_chain_ignores_ordinary_context_budgets() -> None:
 
     assert [message.id for message in result] == list(range(2, 24))
     assert sum(len(message.content) for message in result) > 32_768
+
+
+async def test_query_extraction_window_uses_configured_clarification_budget() -> None:
+    """Query 完成提炼必须容纳配置的完整澄清链和最终助手消息。"""
+    assert _extraction_message_limit(
+        "query:complete",
+        message_limit=20,
+        query_message_limit=102,
+    ) == 102
 
 
 async def test_pending_query_chain_stops_at_an_unanswered_older_user_turn() -> None:

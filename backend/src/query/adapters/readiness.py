@@ -9,7 +9,6 @@ from loguru import logger
 from answer_readiness.models import DataReadinessToolResult
 from data_sync.locks import generation_lock_name
 from errors import DataAgentError
-from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
@@ -23,7 +22,6 @@ class QueryReadinessAdapter:
     def __init__(
         self,
         tool: BaseTool,
-        generation_locks: GenerationLockManager,
         executor: QueryExecutorPort,
         *,
         dw_database: str,
@@ -31,7 +29,6 @@ class QueryReadinessAdapter:
     ) -> None:
         """绑定现有只读数据就绪工具。"""
         self._tool = tool
-        self._generation_locks = generation_locks
         self._executor = executor
         self._dw_database = dw_database
         self._lock_timeout = lock_timeout
@@ -57,13 +54,10 @@ class QueryReadinessAdapter:
         entered = False
         completed = False
         try:
-            async with self._generation_locks.read(names, self._lock_timeout):
-                async with self._executor.hold_generation(
-                    tuple(names), self._lock_timeout
-                ):
-                    entered = True
-                    yield
-                    completed = True
+            async with self._executor.hold_generation(tuple(names), self._lock_timeout):
+                entered = True
+                yield
+                completed = True
         except AdvisoryLockUnavailableError as error:
             if entered:
                 raise

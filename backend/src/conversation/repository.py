@@ -29,7 +29,19 @@ from settings import app_config
 _ABANDONED_TURN_TIMESTAMP = "1970-01-01 00:00:00"
 _ABANDONED_TURN_YEAR = 1970
 _QUERY_CLARIFICATION_SCAN_PAGE_SIZE = 20
-_QUERY_EXTRACTION_MESSAGE_LIMIT = 100
+_DEFAULT_QUERY_EXTRACTION_MESSAGE_LIMIT = 101
+
+
+def _extraction_message_limit(
+    assistant_fingerprint: str | None,
+    *,
+    message_limit: int,
+    query_message_limit: int,
+) -> int:
+    """让 Query 终态窗口覆盖可配置澄清链及其最终助手消息。"""
+    if assistant_fingerprint == "query:complete":
+        return max(message_limit, query_message_limit)
+    return message_limit
 
 
 def _message(row: RowMapping) -> MessageRecord:
@@ -758,6 +770,7 @@ class ConversationRepository:
         limit: int,
         lease_seconds: int,
         message_limit: int,
+        query_message_limit: int = _DEFAULT_QUERY_EXTRACTION_MESSAGE_LIMIT,
     ) -> list[ClaimedExtraction]:
         """短事务领取到期任务并加载同租户有界消息。"""
         # 步骤一：每个会话只锁定最早轮次中当前可领取的任务，以顺序推进摘要；
@@ -831,10 +844,10 @@ class ConversationRepository:
                     )
                 )
             ).scalar_one_or_none()
-            extraction_limit = (
-                max(message_limit, _QUERY_EXTRACTION_MESSAGE_LIMIT)
-                if assistant_fingerprint == "query:complete"
-                else message_limit
+            extraction_limit = _extraction_message_limit(
+                assistant_fingerprint,
+                message_limit=message_limit,
+                query_message_limit=query_message_limit,
             )
             messages = await self.context_messages(
                 str(row["user_id"]),

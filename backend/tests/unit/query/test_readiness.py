@@ -9,7 +9,6 @@ import pytest
 from langchain_core.tools import BaseTool
 
 from errors import DataAgentError
-from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import (
     AdvisoryLockReleaseError,
     AdvisoryLockUnavailableError,
@@ -18,18 +17,8 @@ from query.adapters import readiness as readiness_module
 from query.adapters.readiness import QueryReadinessAdapter
 
 
-async def test_query_hold_uses_shared_generation_locks() -> None:
-    """Query 必须一次共享持有全部排序后的 generation target。"""
-    observed: list[tuple[tuple[str, ...], int]] = []
-
-    @asynccontextmanager
-    async def shared_locks(
-        names: tuple[str, ...] | list[str],
-        timeout_seconds: int,
-    ) -> AsyncIterator[None]:
-        observed.append((tuple(names), timeout_seconds))
-        yield
-
+async def test_query_hold_uses_executor_as_the_only_generation_owner() -> None:
+    """Query 必须只在执行连接上一次持有全部 generation target。"""
     executor_holds: list[tuple[tuple[str, ...], int]] = []
 
     @asynccontextmanager
@@ -39,13 +28,10 @@ async def test_query_hold_uses_shared_generation_locks() -> None:
         executor_holds.append((names, timeout_seconds))
         yield
 
-    manager = Mock(spec=GenerationLockManager)
-    manager.read = shared_locks
     executor = Mock()
     executor.hold_generation = execution_locks
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
-        cast(GenerationLockManager, manager),
         executor,
         dw_database="dw",
         lock_timeout=2,
@@ -54,7 +40,7 @@ async def test_query_hold_uses_shared_generation_locks() -> None:
     async with adapter.hold(("z_table", "a_table")):
         pass
 
-    assert observed == [
+    assert executor_holds == [
         (
             (
                 "dsg:z_table:BlojryERPAgRWSVK_OKCvpGlg7eXeRFHmmJjHUs83rQ",
@@ -63,7 +49,6 @@ async def test_query_hold_uses_shared_generation_locks() -> None:
             2,
         )
     ]
-    assert executor_holds == observed
 
 
 async def test_query_hold_maps_lock_contention_to_retryable_conflict() -> None:
@@ -78,13 +63,10 @@ async def test_query_hold_maps_lock_contention_to_retryable_conflict() -> None:
         raise AdvisoryLockUnavailableError("busy")
         yield
 
-    manager = Mock(spec=GenerationLockManager)
-    manager.read = unavailable
     executor = Mock()
     executor.hold_generation = unavailable
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
-        cast(GenerationLockManager, manager),
         executor,
         dw_database="dw",
         lock_timeout=1,
@@ -115,22 +97,11 @@ async def test_query_hold_logs_release_failure_after_success(
         raise AdvisoryLockReleaseError("owner connection invalidated")
 
     warning = Mock()
-    manager = Mock(spec=GenerationLockManager)
-    manager.read = release_fails
-
-    @asynccontextmanager
-    async def execution_locks(
-        names: tuple[str, ...], timeout_seconds: int
-    ) -> AsyncIterator[None]:
-        del names, timeout_seconds
-        yield
-
     executor = Mock()
-    executor.hold_generation = execution_locks
+    executor.hold_generation = release_fails
     monkeypatch.setattr(readiness_module.logger, "warning", warning)
     adapter = QueryReadinessAdapter(
         cast(BaseTool, object()),
-        cast(GenerationLockManager, manager),
         executor,
         dw_database="dw",
         lock_timeout=1,

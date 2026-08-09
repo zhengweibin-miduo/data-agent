@@ -120,10 +120,14 @@ class MySQLQueryExecutor:
             if acquired:
                 try:
                     async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
-                        await connection.scalar(
-                            text("SELECT service_release_locks(:namespace)"),
-                            {"namespace": _GENERATION_LOCK_NAMESPACE},
+                        released = bool(
+                            await connection.scalar(
+                                text("SELECT service_release_locks(:namespace)"),
+                                {"namespace": _GENERATION_LOCK_NAMESPACE},
+                            )
                         )
+                        if not released:
+                            raise RuntimeError("generation READ locks 释放结果为 false")
                 except BaseException:
                     await connection.invalidate()
             try:

@@ -165,7 +165,10 @@ async def startup(ctx: dict[Any, Any]) -> None:
             method=app_config.llm.structured_output_method,
         ),
         MySQLExtractionClaimStore(
-            max_backoff_seconds=app_config.memory.outbox_max_backoff_seconds
+            max_backoff_seconds=app_config.memory.outbox_max_backoff_seconds,
+            query_message_limit=(
+                app_config.query.clarification_chain_message_limit + 1
+            ),
         ),
         MySQLExtractionCommitter(),
         batch_size=app_config.conversation.extraction_batch_size,

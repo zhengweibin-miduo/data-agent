@@ -140,7 +140,6 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
         planner=query_model,
         readiness=QueryReadinessAdapter(
             create_data_readiness_tool(),
-            generation_locks,
             query_executor,
             dw_database=app_config.data_sync.dw_database,
             lock_timeout=app_config.data_sync.generation_lock_timeout_seconds,
