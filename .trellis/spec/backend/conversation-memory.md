@@ -23,6 +23,7 @@ GET    /api/v1/conversations/{conversation_uid}/messages?user_id=<id>&before=<ro
 DELETE /api/v1/conversations/{conversation_uid}?user_id=<id>
 
 POST   /api/v1/conversations/{conversation_uid}/turns
+POST   /api/v1/conversations/{conversation_uid}/turns/{turn_uid}/renew
 POST   /api/v1/conversations/{conversation_uid}/turns/{turn_uid}/assistant
 POST   /api/v1/conversations/{conversation_uid}/chat-turns
 
@@ -86,6 +87,9 @@ the current summary, recent messages after its cursor, and relevant active
 the assistant message, inserts one extraction outbox row, releases the active
 turn by matching both ownership coordinates, and only then reports success.
 Replaying the same `turn_uid` and content returns the existing result read-only.
+The public two-step endpoint renews its claim while bounded context is loaded;
+after `start_turn` returns, its owner must call the token-CAS renew endpoint
+throughout client-side processing until assistant completion releases the claim.
 
 Chat orchestration validates and parses the bounded DDL before claiming a turn,
 then runs `start_turn -> readiness -> model -> complete_turn`. The prompt contains

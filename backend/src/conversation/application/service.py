@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 from conversation.application.contracts import (
     ConversationStore,
     LongTermMemoryReader,
@@ -173,6 +176,60 @@ class ConversationService:
             summary=started.summary,
             summary_through_message_id=started.summary_through_message_id,
         )
+
+    async def start_public_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        content: str,
+    ) -> StartTurnResponse:
+        """认领公开两步轮次，并在上下文召回期间保持租约。"""
+        started = await self.start_turn(
+            user_id,
+            conversation_uid,
+            turn_uid,
+            content,
+            include_context=False,
+        )
+        if not started.execution_owner or started.claim_token is None:
+            return started
+        claim_token = started.claim_token
+
+        async def heartbeat() -> None:
+            while True:
+                await asyncio.sleep(0.25)
+                try:
+                    renewed = await self.renew_turn(
+                        user_id, conversation_uid, turn_uid, claim_token
+                    )
+                except Exception:
+                    # 瞬时传输失败不足以证明 claim 已丢失；下一周期重试。
+                    continue
+                if not renewed:
+                    raise DataAgentError(
+                        "conversation_lease_lost",
+                        "conversation_turn_renew",
+                        "轮次执行权已失效，请使用原 turn_uid 重试",
+                        http_status=409,
+                        retryable=True,
+                    )
+
+        owner_task = asyncio.current_task()
+        heartbeat_task = asyncio.create_task(heartbeat())
+
+        def fence_owner(task: asyncio.Task[None]) -> None:
+            if owner_task is not None and not task.cancelled() and task.exception():
+                owner_task.cancel("conversation_lease_lost")
+
+        heartbeat_task.add_done_callback(fence_owner)
+        try:
+            context = await self.load_turn_context(user_id, started, content)
+        finally:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+        return started.model_copy(update={"context": context})
 
     async def load_turn_context(
         self, user_id: str, started: StartTurnResponse, query: str

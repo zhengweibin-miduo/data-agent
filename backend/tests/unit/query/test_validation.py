@@ -3469,3 +3469,116 @@ async def test_boolean_filter_rejects_string_parameter() -> None:
     )
     assert result.validated is None
     assert result.issues[0].code == "predicate_mismatch"
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["查询价格大于100小于200的订单数量", "查询价格>100<200的订单数量"],
+)
+def test_intent_rejects_omitted_second_filter_boundary(question: str) -> None:
+    """同一子句的每个过滤边界都必须进入意图。"""
+    with pytest.raises(ValueError, match="每项过滤"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[
+                FilterIntent(
+                    column_quote="价格",
+                    operator="gt",
+                    operator_quote="大于" if "大于" in question else ">",
+                    value_quotes=["100"],
+                    clause_quote=question,
+                )
+            ],
+        ).validate_evidence([question])
+
+
+def test_ranking_requires_every_explicit_detail_projection() -> None:
+    """无聚合排名与明细查询共享结果字段完整性门禁。"""
+    with pytest.raises(ValueError, match="每个明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.RANKING,
+            query_type_quote="前10条",
+            measure_quotes=["订单编号"],
+            sorts=[
+                SortIntent(quote="金额", direction="desc", direction_quote="降序")
+            ],
+            limit=10,
+            limit_quote="前10条",
+        ).validate_evidence(
+            ["列出订单编号和客户名称，金额降序的前10条"]
+        )
+
+
+def test_filter_clause_cannot_hide_an_explicit_detail_projection() -> None:
+    """过宽的过滤证据不能遮蔽其他结果字段。"""
+    question = "查询订单编号和客户名称，价格大于100"
+    with pytest.raises(ValueError, match="每个明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["订单编号"],
+            filters=[
+                FilterIntent(
+                    column_quote="价格",
+                    operator="gt",
+                    operator_quote="大于",
+                    value_quotes=["100"],
+                    clause_quote=question,
+                )
+            ],
+        ).validate_evidence([question])
+
+
+@pytest.mark.parametrize(
+    "question", ["按月和地区展示销售额合计趋势", "按季度及产品展示销售额合计趋势"]
+)
+def test_trend_requires_dimension_after_time_grain(question: str) -> None:
+    """时间粒度之后并列的业务维度不得被省略。"""
+    with pytest.raises(ValueError, match="分组维度"):
+        QueryIntent(
+            query_type=QueryType.TREND,
+            query_type_quote="趋势",
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=["销售额"],
+            time_column_quote="订单时间",
+            grain="month" if "月" in question else "quarter",
+            grain_quote="月" if "月" in question else "季度",
+        ).validate_evidence([question, "使用订单时间"])
+
+
+async def test_text_filter_rejects_integer_parameter() -> None:
+    """VARCHAR 证据不得与整数参数混为一谈。"""
+    context = _context()
+    result = await validate_query(
+        QueryDraft(
+            sql="SELECT o.amount FROM dw.orders AS o WHERE o.code = :code",
+            params={"code": 1},
+            table_ids=["table-orders"],
+            column_ids=["column-amount", "column-code"],
+        ),
+        context.model_copy(
+            update={
+                "bindings": {"金额": "column-amount", "编码": "column-code"},
+            }
+        ),
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+            filters=[
+                FilterIntent(
+                    column_quote="编码",
+                    operator="eq",
+                    operator_quote="等于",
+                    value_quotes=["1"],
+                    clause_quote="编码等于1",
+                )
+            ],
+        ),
+        dw_database="dw",
+    )
+    assert result.validated is None
+    assert result.issues[0].code == "predicate_mismatch"

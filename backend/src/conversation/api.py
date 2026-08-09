@@ -12,9 +12,11 @@ from conversation.models import (
     DeleteConversationDataResponse,
     DeleteConversationResponse,
     MessagePage,
+    RenewTurnRequest,
     StartTurnRequest,
     StartTurnResponse,
 )
+from errors import DataAgentError
 from memory.application.service import MemoryService
 from models.memory import (
     MemoryDeleteResponse,
@@ -101,12 +103,37 @@ async def start_turn(
     request: Request,
 ) -> StartTurnResponse:
     """持久化用户消息并返回有界上下文。"""
-    return await _conversations(request).start_turn(
+    return await _conversations(request).start_public_turn(
         body.user_id,
         conversation_uid,
         body.turn_uid,
         body.content,
     )
+
+
+@router.post(
+    "/api/v1/conversations/{conversation_uid}/turns/{turn_uid}/renew",
+    response_model=None,
+    status_code=204,
+)
+async def renew_turn(
+    conversation_uid: str,
+    turn_uid: str,
+    body: RenewTurnRequest,
+    request: Request,
+) -> None:
+    """续租公开两步轮次，使客户端处理期间仍保持执行权。"""
+    renewed = await _conversations(request).renew_turn(
+        body.user_id, conversation_uid, turn_uid, body.claim_token
+    )
+    if not renewed:
+        raise DataAgentError(
+            "conversation_lease_lost",
+            "conversation_turn_renew",
+            "轮次执行权已失效，请使用原 turn_uid 重试",
+            http_status=409,
+            retryable=True,
+        )
 
 
 @router.post(

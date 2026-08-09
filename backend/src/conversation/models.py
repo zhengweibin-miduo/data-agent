@@ -132,6 +132,15 @@ class CompleteTurnRequest(ContractModel):
     )
 
 
+class RenewTurnRequest(ContractModel):
+    """续租公开两步轮次的执行权。"""
+
+    user_id: str = Field(min_length=1, max_length=128, description="用户标识。")
+    claim_token: str = Field(
+        min_length=32, max_length=32, description="start_turn 返回的执行代次坐标。"
+    )
+
+
 class CompleteTurnResponse(ContractModel):
     """已经原子提交消息与提炼任务的完成轮次。"""
 

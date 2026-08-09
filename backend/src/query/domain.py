@@ -537,6 +537,17 @@ class QueryIntent(ContractModel):
             for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
             if dimension.strip(" 的")
         )
+        grain_dimension_matches = re.findall(
+            r"按(?:日|周|月|季|季度|年)(?:度)?(?:和|与|及|、|，|,)"
+            r"(.+?)(?=统计|查询|查看|展示|比较|对比|趋势|。|；|;|$)",
+            user_text,
+        )
+        explicit_dimensions.extend(
+            dimension.strip(" 的")
+            for match in grain_dimension_matches
+            for dimension in re.split(r"(?:和|与|及|、|，|,)", match)
+            if dimension.strip(" 的")
+        )
         if explicit_dimensions and any(
             not any(
                 dimension in quote or quote in dimension
@@ -616,6 +627,7 @@ class QueryIntent(ContractModel):
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
             r"少于|不高于|"
             r"等于|属于|包含|是|为|!=|<>|>=|<=|(?<![<>!])=(?!=)|"
+            r"(?<![<>!])>(?!=)|(?<![<>!])<(?!=)|"
             r"\b(?:in|like)\b)",
             re.IGNORECASE,
         )
@@ -631,7 +643,11 @@ class QueryIntent(ContractModel):
             for clause in re.split(r"[且，。,.；;]", filter_evidence_text)
             if filter_operator_pattern.search(clause)
         ]
-        if len(explicit_filter_clauses) > len(all_filters):
+        explicit_filter_count = sum(
+            len(filter_operator_pattern.findall(clause))
+            for clause in explicit_filter_clauses
+        )
+        if explicit_filter_count > len(all_filters):
             raise ValueError("用户明确表达的每项过滤条件必须完整映射到查询意图")
         if len(all_filters) > 1:
             clause_quotes = [item.clause_quote for item in all_filters]
@@ -760,13 +776,22 @@ class QueryIntent(ContractModel):
             if len(matches) != 1:
                 raise ValueError("用户明确表达的每项排序必须完整映射到查询意图")
             matched_sort_indexes.add(matches[0])
-        if self.query_type == QueryType.DETAIL:
+        if self.query_type == QueryType.DETAIL or (
+            self.query_type == QueryType.RANKING
+            and self.aggregation is None
+            and self.grain is None
+        ):
             detail_evidence_text = user_text
             for item in all_filters:
-                if item.clause_quote:
-                    detail_evidence_text = detail_evidence_text.replace(
-                        item.clause_quote, ""
-                    )
+                if not item.operator_quote:
+                    continue
+                value_text = "".join(item.value_quotes)
+                minimal_predicate = (
+                    f"{item.column_quote}{item.operator_quote}{value_text}"
+                )
+                detail_evidence_text = detail_evidence_text.replace(
+                    minimal_predicate, ""
+                )
             detail_evidence_text = re.sub(
                 r"((?:查询|列出|展示|查看))(?:且|和|以及|，|,|的)*",
                 r"\1",
@@ -1068,9 +1093,18 @@ def _predicate_contract(
 
 
 def _values_match(
-    operator: str, values: list[QueryParameter], quotes: list[QueryParameter]
+    operator: str,
+    values: list[QueryParameter],
+    quotes: list[QueryParameter],
+    *,
+    data_type: str = "",
 ) -> bool:
     """按用户证据精确比较谓词绑定值。"""
+    if re.match(
+        r"^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET)\b",
+        data_type.upper(),
+    ) and not all(isinstance(value, str) for value in values):
+        return False
     if quotes and all(isinstance(quote, bool) for quote in quotes):
         return all(isinstance(value, bool) for value in values) and values == quotes
     normalized = [str(value) for value in values]
@@ -1793,7 +1827,12 @@ def _validate_query_sync(
         or len(actual_multiset) != len(expected_multiset)
         or any(
             actual[:2] != expected[:2]
-            or not _values_match(actual[1], list(actual[2]), list(expected[2]))
+            or not _values_match(
+                actual[1],
+                list(actual[2]),
+                list(expected[2]),
+                data_type=column_types.get(actual[0], ""),
+            )
             for actual, expected in zip(actual_multiset, expected_multiset, strict=True)
         )
     ):

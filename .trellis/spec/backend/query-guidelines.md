@@ -137,6 +137,12 @@
   clarification messages do not advance the memory-summary cursor.
 - Explicit filters and non-temporal grouping dimensions must be covered item by
   item by the trusted intent; a non-empty partial slot list is not sufficient.
+- Predicate coverage counts every operator/value atom even when two boundaries
+  share one natural-language clause. Filter evidence masking removes only the
+  proven minimal predicate, never unrelated result-field text.
+- Ungrouped, non-aggregate rankings preserve the same complete result projection
+  as detail queries. A time grain followed by business dimensions preserves both
+  the temporal bucket and every explicitly coordinated dimension.
 - Accepted physical-schema authority is scoped by the submitted table set, so
   independently accepted table snapshots for one source coexist; detail result
   fields remain item-complete even when the same request also has filters.
@@ -234,6 +240,8 @@ async for batch in readonly_executor.execute(validated):
   another accepted snapshot publication.
 - BOOLEAN filter evidence is normalized to typed parameters and rejected when
   it is outside the closed true/false vocabulary.
+- Textual filter evidence remains a string through validation and execution;
+  numeric-looking `CHAR`/`VARCHAR` identifiers reject numeric draft parameters.
 - TIMESTAMP trend buckets convert the UTC session value to the trusted user
   timezone before applying day, week, month, quarter, or year grouping.
 - Reverse intent coverage treats `各<维度>`、`每个<维度>` and `分<维度>` as explicit

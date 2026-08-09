@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -229,6 +230,74 @@ async def test_start_turn_recalls_only_after_authoritative_commit() -> None:
     assert reader.called
     assert response.context.summary == "旧摘要"
     assert [item.content for item in response.context.messages] == ["请使用公制"]
+
+
+@pytest.mark.asyncio
+async def test_public_start_renews_claim_while_loading_context() -> None:
+    """公开两步轮次在长期记忆召回期间也保持 claim。"""
+
+    class LeasingStore(_ConversationStore):
+        renewals = 0
+
+        async def start_turn(
+            self,
+            user_id: str,
+            conversation_uid: str,
+            turn_uid: str,
+            content: str,
+            *,
+            semantic_fingerprint: str | None = None,
+        ) -> StartedConversationTurn:
+            started = await super().start_turn(
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
+            )
+            return StartedConversationTurn(
+                message=started.message,
+                conversation_id=started.conversation_id,
+                summary=started.summary,
+                summary_through_message_id=started.summary_through_message_id,
+                claim_token="c" * 32,
+            )
+
+        async def renew_turn(
+            self,
+            user_id: str,
+            conversation_uid: str,
+            turn_uid: str,
+            claim_token: str,
+        ) -> bool:
+            del user_id, conversation_uid, turn_uid, claim_token
+            self.renewals += 1
+            return True
+
+    class SlowMemory(_MemoryReader):
+        async def recall(
+            self, query: str, user_id: str, *, limit: int
+        ) -> list[MemoryDetail]:
+            await asyncio.sleep(0.3)
+            return await super().recall(query, user_id, limit=limit)
+
+    store = LeasingStore()
+    service = ConversationService(
+        store,
+        SlowMemory(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    response = await service.start_public_turn(
+        "user-a", "conversation-a", "turn-a", "请使用公制"
+    )
+
+    assert response.claim_token == "c" * 32
+    assert store.renewals >= 1
 
 
 @pytest.mark.asyncio
