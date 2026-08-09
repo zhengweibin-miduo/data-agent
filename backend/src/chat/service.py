@@ -160,6 +160,7 @@ class ChatService:
             ]
         )
         completed_turn = False
+        completion_started = asyncio.Event()
         owner_task = asyncio.current_task()
         heartbeat = asyncio.create_task(
             self._heartbeat_turn(
@@ -168,6 +169,7 @@ class ChatService:
                 request.turn_uid,
                 claim_token,
                 owner_task,
+                completion_started,
             ),
             name=f"chat-turn-heartbeat:{request.turn_uid}",
         )
@@ -185,10 +187,10 @@ class ChatService:
             else:
                 assistant_content = gate.user_message or "无法继续回答"
             # 步骤六：复用完成轮次事务，原子写入助手消息、提炼 outbox 并释放门禁。
-            # 完成事务会清空 claim token；必须先停止续租，避免 heartbeat 在
-            # 提交后把正常的 CAS false 误判成外部接管并取消当前 owner。
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
+            # 续租必须覆盖完成事务取得行锁并提交的整个窗口。完成提交会清空
+            # claim token，因此 heartbeat 在此阶段遇到 CAS false 只需退出，
+            # 最终完成事务仍会用 claim token 判断是否真的失去所有权。
+            completion_started.set()
             completed = await self._conversations.complete_turn(
                 request.user_id,
                 conversation_uid,
@@ -239,6 +241,7 @@ class ChatService:
         turn_uid: str,
         claim_token: str,
         owner_task: asyncio.Task[object] | None,
+        completion_started: asyncio.Event,
     ) -> None:
         """在 Chat 外部工作期间续租 claim，并 fence 已失效的旧执行者。"""
         interval = max(0.01, self._turn_lease_seconds / 3)
@@ -253,6 +256,8 @@ class ChatService:
                 # 下一心跳周期继续续租；只有正常 CAS 返回 False 才执行 fencing。
                 continue
             if not renewed:
+                if completion_started.is_set():
+                    return
                 if owner_task is not None:
                     owner_task.cancel("chat_lease_lost")
                 return

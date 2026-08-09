@@ -149,8 +149,11 @@ class QueryApplication:
                 http_status=409,
             )
         owner_task = asyncio.current_task()
+        completion_started = asyncio.Event()
         heartbeat = asyncio.create_task(
-            self._heartbeat_turn(request, claim_token, owner_task),
+            self._heartbeat_turn(
+                request, claim_token, owner_task, completion_started
+            ),
             name=f"query-turn-heartbeat:{request.turn_uid}",
         )
         try:
@@ -215,8 +218,7 @@ class QueryApplication:
             )
             # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
             if isinstance(context_or_clarification, QueryClarification):
-                heartbeat.cancel()
-                await asyncio.gather(heartbeat, return_exceptions=True)
+                completion_started.set()
                 await self._complete(
                     request,
                     claim_token,
@@ -239,8 +241,7 @@ class QueryApplication:
             # 步骤五：一次生成和至多一次修复都必须重新经过 AST 与 EXPLAIN。
             validated = await self._plan(request, context, intent, trusted_time_range)
             if validated is None:
-                heartbeat.cancel()
-                await asyncio.gather(heartbeat, return_exceptions=True)
+                completion_started.set()
                 await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
                 yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                 return
@@ -272,8 +273,7 @@ class QueryApplication:
                 if not await self._control_read(
                     self._readiness.ready(validated.target_tables)
                 ):
-                    heartbeat.cancel()
-                    await asyncio.gather(heartbeat, return_exceptions=True)
+                    completion_started.set()
                     await self._complete(request, claim_token, DATA_PREPARING_MESSAGE)
                     yield QueryEvent(kind="complete", message=DATA_PREPARING_MESSAGE)
                     return
@@ -342,8 +342,7 @@ class QueryApplication:
                     row_count=row_count,
                     duration_ms=elapsed_ms,
                 )
-                heartbeat.cancel()
-                await asyncio.gather(heartbeat, return_exceptions=True)
+                completion_started.set()
                 await self._complete(request, claim_token, summary)
                 yield QueryEvent(
                     kind="complete", row_count=row_count, elapsed_ms=elapsed_ms
@@ -373,6 +372,7 @@ class QueryApplication:
         request: QueryRequest,
         claim_token: str,
         owner_task: asyncio.Task[object] | None,
+        completion_started: asyncio.Event,
     ) -> None:
         """独立续租健康长流；续租失败时 fence 掉旧执行者。"""
         interval = max(0.01, self._turn_lease_seconds / 3)
@@ -396,6 +396,8 @@ class QueryApplication:
                 )
                 continue
             if not renewed:
+                if completion_started.is_set():
+                    return
                 if owner_task is not None:
                     owner_task.cancel("query_lease_lost")
                 return

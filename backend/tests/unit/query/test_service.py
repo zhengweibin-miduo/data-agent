@@ -1493,7 +1493,9 @@ async def test_one_second_turn_lease_renews_before_expiry() -> None:
     owner = asyncio.current_task()
     assert owner is not None
     heartbeat = asyncio.create_task(
-        application._heartbeat_turn(request, "claim", owner)  # pyright: ignore[reportPrivateUsage]
+        application._heartbeat_turn(  # pyright: ignore[reportPrivateUsage]
+            request, "claim", owner, asyncio.Event()
+        )
     )
     try:
         await asyncio.sleep(0.5)
@@ -1502,3 +1504,42 @@ async def test_one_second_turn_lease_renews_before_expiry() -> None:
         await asyncio.gather(heartbeat, return_exceptions=True)
 
     assert conversations.renewals >= 1
+
+
+async def test_query_completion_cas_miss_does_not_fence_owner() -> None:
+    """完成提交清空 claim 后的续租 CAS false 不得反向取消 owner。"""
+
+    class Conversations(_Conversations):
+        async def renew_turn(self, *_args: object) -> bool:
+            return False
+
+    application = QueryApplication(
+        conversations=cast(ConversationPort, Conversations()),
+        intents=cast(QueryIntentPort, _IntentParser()),
+        metadata=cast(QueryMetadataPort, _GroundedMetadata()),
+        planner=cast(QueryPlannerPort, _Planner()),
+        readiness=cast(QueryReadinessPort, _Ready()),
+        executor=cast(QueryExecutorPort, _Executor()),
+        dw_database="dw",
+        turn_lease_seconds=1,
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="查询销售额",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+    owner = Mock(spec=asyncio.Task)
+    completion_started = asyncio.Event()
+    completion_started.set()
+
+    await application._heartbeat_turn(  # pyright: ignore[reportPrivateUsage]
+        request, "claim", owner, completion_started
+    )
+
+    owner.cancel.assert_not_called()

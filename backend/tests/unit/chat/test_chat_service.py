@@ -214,22 +214,32 @@ async def test_chat_turn_ignores_transient_claim_renewal_error() -> None:
     assert conversations.renew_turn.await_count >= 2
 
 
-async def test_chat_turn_stops_heartbeat_before_completion() -> None:
-    """完成事务开始前必须停止 heartbeat，避免成功提交后自我 fence。"""
+async def test_chat_turn_keeps_heartbeat_until_completion_commits() -> None:
+    """完成事务等待行锁期间仍须续租，提交后再停止 heartbeat。"""
     service, conversations, _, _ = _service()
+    completion_started = asyncio.Event()
+    release_completion = asyncio.Event()
 
     async def complete(*_args: object) -> CompleteTurnResponse:
-        await asyncio.sleep(0.04)
+        completion_started.set()
+        await release_completion.wait()
         return CompleteTurnResponse(
             message=_message(MessageRole.ASSISTANT, "按支付成功金额定义。")
         )
 
     conversations.complete_turn = AsyncMock(side_effect=complete)
+    task = asyncio.create_task(service.run_turn("conversation-1", _request()))
+    await completion_started.wait()
+    await asyncio.sleep(0.04)
 
-    result = await service.run_turn("conversation-1", _request())
+    assert conversations.renew_turn.await_count >= 1
+    release_completion.set()
+    result = await task
+    renewals_after_completion = conversations.renew_turn.await_count
+    await asyncio.sleep(0.04)
 
     assert result.message.content == "按支付成功金额定义。"
-    assert conversations.renew_turn.await_count == 0
+    assert conversations.renew_turn.await_count == renewals_after_completion
 
 
 async def test_chat_turn_reuses_context_readiness_and_shared_model() -> None:
