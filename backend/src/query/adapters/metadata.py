@@ -293,7 +293,7 @@ class QueryMetadataAdapter:
             return False
         return any(
             normalized == text.casefold().strip()
-            for text in (candidate.name, candidate.matched_text)
+            for text in (candidate.name, *candidate.aliases)
             if text.strip()
         )
 
@@ -305,6 +305,7 @@ class QueryMetadataAdapter:
             object_id=candidate.object_id,
             table_id=candidate.table_id,
             name=candidate.name,
+            aliases=candidate.aliases,
             description=candidate.description,
             related_column_ids=candidate.related_column_ids,
             matched_text=candidate.matched_text,

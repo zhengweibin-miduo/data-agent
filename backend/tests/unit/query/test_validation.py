@@ -532,6 +532,15 @@ def test_detail_result_fields_split_on_commas(question: str) -> None:
         ).validate_evidence([question])
 
 
+def test_detail_result_field_cannot_be_covered_by_a_shorter_quote() -> None:
+    """完整业务字段不得被模型缩短为其子串。"""
+    with pytest.raises(ValueError, match="每个明细结果字段"):
+        QueryIntent(
+            query_type=QueryType.DETAIL,
+            measure_quotes=["金额"],
+        ).validate_evidence(["查询退款金额"])
+
+
 @pytest.mark.parametrize("direction", ["asc", "desc"])
 def test_english_sort_direction_cannot_be_omitted(direction: str) -> None:
     """英文排序方向必须反向覆盖到排序槽位。"""
@@ -3493,6 +3502,22 @@ def test_intent_rejects_omitted_second_filter_boundary(question: str) -> None:
                     clause_quote=question,
                 )
             ],
+        ).validate_evidence([question])
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["查询价格在100到200之间的订单数量", "查询价格介于100和200之间的订单数量"],
+)
+def test_intent_rejects_unsupported_between_range(question: str) -> None:
+    """尚未建模的 BETWEEN 风格区间不得缩水为无过滤意图。"""
+    with pytest.raises(ValueError, match="区间过滤"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
         ).validate_evidence([question])
 
 

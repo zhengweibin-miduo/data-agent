@@ -46,6 +46,7 @@ class QueryMetadataCandidate(ContractModel):
     object_id: str = Field(description="权威对象标识。")
     table_id: str | None = Field(default=None, description="所属表标识。")
     name: str = Field(description="权威对象名称。")
+    aliases: list[str] = Field(default_factory=list, description="权威对象别名。")
     description: str = Field(description="权威对象描述。")
     related_column_ids: list[str] = Field(
         default_factory=list, description="指标关联字段标识。"
@@ -622,6 +623,11 @@ class QueryIntent(ContractModel):
             or explicit_operator_pattern.search(user_text)
         ) and not all_filters:
             raise ValueError("用户明确表达的过滤条件必须完整映射到查询意图")
+        if re.search(
+            r"(?:在\s*\S+\s*到\s*\S+\s*之间|介于\s*\S+\s*(?:和|与|及|到)\s*\S+\s*之间)",
+            user_text,
+        ):
+            raise ValueError("区间过滤尚未建模，必须先澄清")
         filter_operator_pattern = re.compile(
             r"(?:大于或等于|小于或等于|大于等于|小于等于|"
             r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
@@ -808,9 +814,16 @@ class QueryIntent(ContractModel):
                     for item in re.split(r"(?:和|与|及|、|，|,)", detail_match.group(1))
                     if item.strip(" 的")
                 ]
+                if self.limit_quote:
+                    explicit_results = [
+                        item.replace(self.limit_quote.casefold(), "").strip(" 的")
+                        for item in explicit_results
+                    ]
                 result_quotes = [*self.measure_quotes, *self.dimension_quotes]
                 if any(
-                    not any(item in quote or quote in item for quote in result_quotes)
+                    not any(
+                        item.casefold() == quote.casefold() for quote in result_quotes
+                    )
                     for item in explicit_results
                 ):
                     raise ValueError("用户明确表达的每个明细结果字段必须进入查询意图")

@@ -603,6 +603,7 @@ class MetadataProjectionRepository:
                         else None
                     ),
                     name=str(row["name"]),
+                    aliases=cast(list[str], row.get("aliases", row.get("alias", []))),
                     description=str(row.get("description") or ""),
                     related_column_ids=cast(
                         list[str], row.get("related_column_ids", [])
@@ -665,7 +666,11 @@ class MetadataProjectionRepository:
                         columns_by_table.get(object_id, []),
                     ),
                 )
-                content[key] = {"name": row["name"], "description": row["description"]}
+                content[key] = {
+                    "name": row["name"],
+                    "aliases": row["alias"],
+                    "description": row["description"],
+                }
 
         column_ids = ids_by_kind[MetadataObjectKind.COLUMN]
         if column_ids:
@@ -695,6 +700,7 @@ class MetadataProjectionRepository:
                 content[key] = {
                     "table_id": table_id,
                     "name": row["name"],
+                    "aliases": row["alias"],
                     "description": row["description"],
                 }
 
@@ -743,6 +749,7 @@ class MetadataProjectionRepository:
                 content[key] = {
                     "table_id": str(row["fact_table_id"]),
                     "name": row["name"],
+                    "aliases": row["alias"],
                     "description": row["description"],
                     "related_column_ids": sorted(related_ids.get(object_id, [])),
                 }

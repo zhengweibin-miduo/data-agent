@@ -123,6 +123,7 @@ class MetadataCandidate(ContractModel):
     object_id: str = Field(description="Meta 对象标识。")
     table_id: str | None = Field(default=None, description="所属表标识。")
     name: str = Field(description="权威对象名称。")
+    aliases: list[str] = Field(default_factory=list, description="权威对象别名。")
     description: str = Field(description="权威对象描述。")
     related_column_ids: list[str] = Field(
         default_factory=list,

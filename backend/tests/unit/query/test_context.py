@@ -112,6 +112,8 @@ def _candidate(
     name: str,
     *,
     related: list[str] | None = None,
+    aliases: list[str] | None = None,
+    matched_text: str | None = None,
 ) -> MetadataCandidate:
     """构造一个已经由 Meta 回读确认的候选。"""
     return MetadataCandidate(
@@ -120,9 +122,10 @@ def _candidate(
         table_id="table-orders",
         name=name,
         description=name,
+        aliases=aliases or [],
         related_column_ids=related or [],
         score=1,
-        matched_text=name,
+        matched_text=matched_text or name,
     )
 
 
@@ -132,6 +135,21 @@ def test_candidate_name_does_not_match_a_longer_unknown_field_name() -> None:
 
     assert QueryMetadataAdapter._matches("id", candidate)
     assert not QueryMetadataAdapter._matches("order_id", candidate)
+
+
+def test_candidate_matches_each_authoritative_alias_not_fused_search_text() -> None:
+    """权威别名应独立精确匹配，融合检索文本不能冒充别名。"""
+    candidate = _candidate(
+        MetadataObjectKind.COLUMN,
+        "column-amount",
+        "amount",
+        aliases=["销售额", "成交金额"],
+        matched_text="amount\n销售额\n成交金额\n订单金额字段",
+    )
+
+    assert QueryMetadataAdapter._matches("销售额", candidate)
+    assert QueryMetadataAdapter._matches("成交金额", candidate)
+    assert not QueryMetadataAdapter._matches("订单金额字段", candidate)
 
 
 async def test_context_does_not_execute_natural_language_metric_definition() -> None:
