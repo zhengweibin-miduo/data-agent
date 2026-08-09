@@ -105,7 +105,6 @@ async def test_manager_uses_a_bounded_dedicated_pool_and_closes_it(
     assert captured["connect_args"] == {
         "init_command": "SET time_zone = '+00:00'",
         "connect_timeout": 5,
-        "read_timeout": 5,
     }
     assert engine.closed is True
 
@@ -137,6 +136,64 @@ async def test_read_acquires_sorted_targets_atomically_and_releases(
     assert parameters["lock_0"] == "table:a"
     assert parameters["lock_1"] == "table:b"
     assert "service_release_locks" in connection.calls[1][0]
+
+
+async def test_lock_acquisition_client_budget_covers_server_wait(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """锁获取 I/O 预算必须覆盖服务端等待预算并保留网络余量。"""
+    observed_timeouts: list[float | None] = []
+    real_timeout = asyncio.timeout
+
+    def timeout(delay: float | None):
+        observed_timeouts.append(delay)
+        return real_timeout(delay)
+
+    monkeypatch.setattr(module.asyncio, "timeout", timeout)
+    connection = _Connection([1, 1])
+    manager = GenerationLockManager(
+        "mysql+asyncmy://user:pass@localhost/meta", io_timeout_seconds=5
+    )
+    monkeypatch.setattr(
+        module,
+        "create_async_engine",
+        lambda *_args, **_kwargs: cast(AsyncEngine, _Engine(connection)),
+    )
+    await manager.initialize()
+
+    async with manager.read(["table:a"], 10):
+        pass
+
+    assert observed_timeouts == [15, 5]
+
+
+async def test_expandable_lock_acquisition_budget_covers_server_wait(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """发布锁的初始获取与扩展都必须覆盖各自的服务端等待预算。"""
+    observed_timeouts: list[float | None] = []
+    real_timeout = asyncio.timeout
+
+    def timeout(delay: float | None):
+        observed_timeouts.append(delay)
+        return real_timeout(delay)
+
+    monkeypatch.setattr(module.asyncio, "timeout", timeout)
+    connection = _Connection([1, 1, 1])
+    manager = GenerationLockManager(
+        "mysql+asyncmy://user:pass@localhost/meta", io_timeout_seconds=5
+    )
+    monkeypatch.setattr(
+        module,
+        "create_async_engine",
+        lambda *_args, **_kwargs: cast(AsyncEngine, _Engine(connection)),
+    )
+    await manager.initialize()
+
+    async with manager.expandable_write(["publisher:source"], 10) as owner:
+        await owner.acquire(["table:a"], 7)
+
+    assert observed_timeouts == [15, 12, 5]
 
 
 async def test_expandable_write_reuses_one_owner_connection(
@@ -315,12 +372,21 @@ async def test_normal_exit_does_not_fence_owner_when_keepalive_probe_is_cancelle
     original_scalar = manager._scalar
 
     async def scalar(
-        current: object, statement: object, parameters: dict[str, object]
+        current: Any,
+        statement: Any,
+        parameters: dict[str, object],
+        *,
+        timeout_seconds: float | None = None,
     ) -> object:
         if "SELECT 1" in str(statement):
             probe_started.set()
             await release_probe.wait()
-        return await original_scalar(current, statement, parameters)  # type: ignore[arg-type]
+        return await original_scalar(
+            current,
+            statement,
+            parameters,
+            timeout_seconds=timeout_seconds,
+        )
 
     monkeypatch.setattr(manager, "_scalar", scalar)
 

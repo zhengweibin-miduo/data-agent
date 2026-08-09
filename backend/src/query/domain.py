@@ -91,6 +91,26 @@ class FilterIntent(ContractModel):
     )
 
 
+def _mask_filter_predicates(text: str, filters: list[FilterIntent]) -> str:
+    """只遮蔽已证明的最小过滤谓词，保留同一子句中的其他语义。"""
+    masked = text
+    for item in filters:
+        if not item.operator_quote:
+            continue
+        value_pattern = r"\s*(?:、|,|，|和|与|及)\s*".join(
+            re.escape(value.casefold()) for value in item.value_quotes
+        )
+        minimal_predicate = (
+            rf"{re.escape(item.column_quote.casefold())}\s*"
+            rf"{re.escape(item.operator_quote.casefold())}\s*"
+            rf"{value_pattern}"
+        )
+        if item.operator == "in":
+            minimal_predicate += r"(?:\s*之一)?"
+        masked = re.sub(minimal_predicate, "", masked, count=1)
+    return masked
+
+
 class SortIntent(ContractModel):
     """完全由用户原文表达的一项排序。"""
 
@@ -318,7 +338,11 @@ class QueryIntent(ContractModel):
             for marker in ("去重", "唯一", "distinct")
         ):
             raise ValueError("去重语义尚未建模，必须先澄清")
-        boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", user_text)
+        boolean_text = user_text
+        for quote in sorted(business_quotes, key=len, reverse=True):
+            if quote.strip():
+                boolean_text = boolean_text.replace(quote.casefold(), " ")
+        boolean_text = re.sub(r"(?:大于|小于)\s*或\s*等于", "", boolean_text)
         if any(marker in boolean_text for marker in ("或", "或者", " or ")):
             raise ValueError("过滤条件包含尚未建模的 OR 关系")
         if len(all_filters) > 1 and any(
@@ -564,9 +588,10 @@ class QueryIntent(ContractModel):
         ):
             raise ValueError("用户明确表达的分组维度必须完整映射到查询意图")
         has_sort_ambiguity = any(item.slot == "sort" for item in self.ambiguities)
+        top_n_evidence_text = _mask_filter_predicates(user_text, all_filters)
         if re.search(
             r"(?:前\s*\d+|top\s*\d+|\d+\s*(?:条|笔|个|名|行|项))",
-            user_text,
+            top_n_evidence_text,
         ) and (
             self.query_type != QueryType.RANKING
             or self.limit is None
@@ -789,23 +814,7 @@ class QueryIntent(ContractModel):
             and self.aggregation is None
             and self.grain is None
         ):
-            detail_evidence_text = user_text
-            for item in all_filters:
-                if not item.operator_quote:
-                    continue
-                value_pattern = r"\s*(?:、|,|，|和|与|及)\s*".join(
-                    re.escape(value.casefold()) for value in item.value_quotes
-                )
-                minimal_predicate = (
-                    rf"{re.escape(item.column_quote.casefold())}\s*"
-                    rf"{re.escape(item.operator_quote.casefold())}\s*"
-                    rf"{value_pattern}"
-                )
-                if item.operator == "in":
-                    minimal_predicate += r"(?:\s*之一)?"
-                detail_evidence_text = re.sub(
-                    minimal_predicate, "", detail_evidence_text, count=1
-                )
+            detail_evidence_text = _mask_filter_predicates(user_text, all_filters)
             detail_evidence_text = re.sub(
                 r"((?:查询|列出|展示|查看))(?:且|和|以及|，|,|的)*",
                 r"\1",

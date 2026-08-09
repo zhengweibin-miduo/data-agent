@@ -255,6 +255,9 @@ async for batch in readonly_executor.execute(validated):
 - Distinct action detection likewise excludes complete trusted business-object
   names, while explicit de-duplication language still fails closed. Multiple
   sort intents preserve the user's declared primary-to-secondary order.
+- Boolean-operator reverse detection excludes complete trusted business-object
+  names, and Top-N reverse detection masks only trusted minimal filter
+  predicates so quantity units inside filters are not mistaken for truncation.
 - Until a trusted outer-join contract exists, a nullable foreign key cannot
   authorize an inner child-to-parent join that would discard driving rows.
 - Query claim heartbeats distinguish a failed compare-and-swap renewal from a

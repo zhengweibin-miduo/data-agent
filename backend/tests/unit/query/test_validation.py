@@ -710,6 +710,15 @@ def test_or_is_rejected_even_when_model_extracts_only_one_branch() -> None:
         ).validate_evidence(["查询地区是华东或状态是完成的订单编号"])
 
 
+def test_or_inside_complete_business_field_name_is_not_a_boolean_relation() -> None:
+    """完整业务字段名中的“或”不得被误判为过滤 OR。"""
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        query_type_quote="查询",
+        measure_quotes=["或有负债"],
+    ).validate_evidence(["查询或有负债"])
+
+
 @pytest.mark.parametrize("unit", ["条", "笔", "个"])
 def test_result_count_unit_cannot_be_omitted_from_ranking(unit: str) -> None:
     """明确数量单位的截断请求必须形成可信排名与 LIMIT。"""
@@ -721,6 +730,24 @@ def test_result_count_unit_cannot_be_omitted_from_ranking(unit: str) -> None:
                 SortIntent(quote="销售额", direction="desc", direction_quote="降序")
             ],
         ).validate_evidence([f"销售额降序的10{unit}记录"])
+
+
+def test_filter_quantity_unit_is_not_treated_as_top_n() -> None:
+    """可信过滤谓词中的数量单位不得冒充结果截断。"""
+    QueryIntent(
+        query_type=QueryType.DETAIL,
+        query_type_quote="列出",
+        measure_quotes=["商品编号"],
+        filters=[
+            FilterIntent(
+                column_quote="库存",
+                operator="eq",
+                operator_quote="为",
+                value_quotes=["10个"],
+                clause_quote="库存为10个",
+            )
+        ],
+    ).validate_evidence(["列出库存为10个的商品编号"])
 
 
 @pytest.mark.parametrize("marker", ["个数", "最大", "最高", "最小", "最低"])

@@ -964,6 +964,9 @@ targets.
 - Generation READ/WRITE owners use a process-local dedicated async engine with
   bounded capacity, `max_overflow=0`, and a short checkout timeout. They never
   borrow the ordinary transaction pool.
+- A Locking Service acquisition call uses a client deadline equal to the
+  declared server wait plus the normal network-I/O budget. Keepalive,
+  capability probes, and release retain the independent short I/O deadline.
 - Create, capability-probe, inject and close this manager in every API, DDL and
   Data Sync process lifecycle. Acquire sorted target sets atomically and
   invalidate an owner connection whenever namespace release fails.

@@ -59,7 +59,9 @@ class ExpandableWriteOwner:
         )
         try:
             async with self._io_lock:
-                async with asyncio.timeout(self._io_timeout_seconds):
+                async with asyncio.timeout(
+                    timeout_seconds + self._io_timeout_seconds
+                ):
                     acquired = await self._connection.scalar(statement, parameters)
         except TimeoutError as error:
             await _invalidate_owner_connection(self._connection, error)
@@ -138,7 +140,6 @@ class GenerationLockManager:
                 connect_args={
                     "init_command": "SET time_zone = '+00:00'",
                     "connect_timeout": self._io_timeout_seconds,
-                    "read_timeout": self._io_timeout_seconds,
                 },
             )
 
@@ -147,10 +148,16 @@ class GenerationLockManager:
         connection: AsyncConnection,
         statement: TextClause,
         parameters: dict[str, object],
+        *,
+        timeout_seconds: float | None = None,
     ) -> object:
         """以独立网络预算执行 owner I/O，超时即失效连接。"""
         try:
-            async with asyncio.timeout(self._io_timeout_seconds):
+            async with asyncio.timeout(
+                self._io_timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ):
                 return await connection.scalar(statement, parameters)
         except TimeoutError as error:
             await _invalidate_owner_connection(connection, error)
@@ -251,7 +258,13 @@ class GenerationLockManager:
                 keepalive: asyncio.Task[None] | None = None
                 try:
                     try:
-                        acquired = await self._scalar(connection, statement, parameters)
+                        acquired = await self._scalar(
+                            connection,
+                            statement,
+                            parameters,
+                            timeout_seconds=timeout_seconds
+                            + self._io_timeout_seconds,
+                        )
                     except DBAPIError as error:
                         if _mysql_error_number(error) in _CONTENTION_ERRORS:
                             raise AdvisoryLockUnavailableError(
