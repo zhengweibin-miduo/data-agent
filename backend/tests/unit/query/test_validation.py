@@ -3372,7 +3372,7 @@ def test_trend_rejects_multiple_explicit_grains() -> None:
         ).validate_evidence(["以订单时间展示销售额合计的月度和年度趋势"])
 
 
-@pytest.mark.parametrize("phrase", ["少于", "不少于", "不高于"])
+@pytest.mark.parametrize("phrase", ["少于", "不少于", "不高于", "高于"])
 def test_supported_inequality_cannot_be_omitted(phrase: str) -> None:
     """受支持的不等式短语必须形成过滤意图。"""
     with pytest.raises(ValueError, match="过滤"):
@@ -3383,6 +3383,29 @@ def test_supported_inequality_cannot_be_omitted(phrase: str) -> None:
             aggregation_quote="数量",
             measure_quotes=["订单"],
         ).validate_evidence([f"价格{phrase}100的订单数量"])
+
+
+def test_high_than_phrase_maps_to_gt_filter() -> None:
+    """“高于”必须作为可信的 gt 操作符证据。"""
+    question = "价格高于100的订单数量"
+    intent = QueryIntent(
+        query_type=QueryType.AGGREGATE,
+        query_type_quote="数量",
+        aggregation="count",
+        aggregation_quote="数量",
+        measure_quotes=["订单"],
+        filters=[
+            FilterIntent(
+                column_quote="价格",
+                operator="gt",
+                operator_quote="高于",
+                value_quotes=["100"],
+                clause_quote="价格高于100",
+            )
+        ],
+    )
+
+    assert intent.validate_evidence([question]) is None
 
 
 @pytest.mark.parametrize("phrase", ["状态非完成", "状态没有完成", "状态无完成"])
@@ -3396,6 +3419,66 @@ def test_unmodeled_adjacent_negation_is_rejected(phrase: str) -> None:
             aggregation_quote="数量",
             measure_quotes=["订单"],
         ).validate_evidence([f"{phrase}的订单数量"])
+
+
+def test_filter_value_cannot_drop_unmodeled_not_prefix() -> None:
+    """“未完成”不能缩水为语义相反的“完成”过滤值。"""
+    question = "状态是未完成的订单数量"
+    with pytest.raises(ValueError, match="否定"):
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            query_type_quote="数量",
+            aggregation="count",
+            aggregation_quote="数量",
+            measure_quotes=["订单"],
+            filters=[
+                FilterIntent(
+                    column_quote="状态",
+                    operator="eq",
+                    operator_quote="是",
+                    value_quotes=["完成"],
+                    clause_quote=question,
+                )
+            ],
+        ).validate_evidence([question])
+
+
+@pytest.mark.parametrize(
+    ("question", "filter_intent"),
+    [
+        (
+            "查询订单编号和客户名称，价格 大于 100",
+            FilterIntent(
+                column_quote="价格",
+                operator="gt",
+                operator_quote="大于",
+                value_quotes=["100"],
+                clause_quote="价格 大于 100",
+            ),
+        ),
+        (
+            "查询订单编号和客户名称，状态 在 完成 之一",
+            FilterIntent(
+                column_quote="状态",
+                operator="in",
+                operator_quote="在",
+                value_quotes=["完成"],
+                clause_quote="状态 在 完成 之一",
+            ),
+        ),
+    ],
+)
+def test_detail_filter_mask_tolerates_whitespace(
+    question: str, filter_intent: FilterIntent
+) -> None:
+    """过滤边界间的自然空白不能被误判为额外结果字段。"""
+    intent = QueryIntent(
+        query_type=QueryType.DETAIL,
+        measure_quotes=["订单编号", "客户名称"],
+        filters=[filter_intent],
+    )
+
+    assert intent.validate_evidence([question]) is None
 
 
 async def test_time_bucket_alias_cannot_claim_business_identity() -> None:

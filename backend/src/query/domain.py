@@ -216,7 +216,7 @@ class QueryIntent(ContractModel):
         operator_markers = {
             "eq": ("等于", "为", "是", "="),
             "ne": ("不等于", "不是", "!=", "<>"),
-            "gt": ("大于", "超过", ">"),
+            "gt": ("大于", "高于", "超过", ">"),
             "gte": ("大于等于", "至少", "不小于", ">="),
             "lt": ("小于", "低于", "少于", "<"),
             "lte": ("小于等于", "至多", "不超过", "<="),
@@ -238,7 +238,7 @@ class QueryIntent(ContractModel):
                 negation_text = negation_text.replace(quote.casefold(), " ")
         if any(marker in user_text for marker in unsupported_negations) or re.search(
             r"(?:^|[\s，。,.；;]|[\w\u4e00-\u9fff])非\S+|除\S+以外|"
-            r"(?:没有|无)\S+", negation_text
+            r"(?:未|没有|无)\S+", negation_text
         ):
             raise ValueError("过滤操作包含尚未建模的否定语义")
         normalized_inequalities = {
@@ -602,6 +602,7 @@ class QueryIntent(ContractModel):
                 marker in user_text
                 for marker in (
                     "大于",
+                    "高于",
                     "小于",
                     "等于",
                     "超过",
@@ -630,7 +631,7 @@ class QueryIntent(ContractModel):
             raise ValueError("区间过滤尚未建模，必须先澄清")
         filter_operator_pattern = re.compile(
             r"(?:大于或等于|小于或等于|大于等于|小于等于|"
-            r"不低于|不少于|不大于|不超过|大于|小于|超过|低于|至少|至多|"
+            r"不低于|不少于|不大于|不超过|大于|高于|小于|超过|低于|至少|至多|"
             r"少于|不高于|"
             r"等于|属于|包含|是|为|!=|<>|>=|<=|(?<![<>!])=(?!=)|"
             r"(?<![<>!])>(?!=)|(?<![<>!])<(?!=)|"
@@ -791,12 +792,18 @@ class QueryIntent(ContractModel):
             for item in all_filters:
                 if not item.operator_quote:
                     continue
-                value_text = "".join(item.value_quotes)
-                minimal_predicate = (
-                    f"{item.column_quote}{item.operator_quote}{value_text}"
+                value_pattern = r"\s*(?:、|,|，|和|与|及)\s*".join(
+                    re.escape(value.casefold()) for value in item.value_quotes
                 )
-                detail_evidence_text = detail_evidence_text.replace(
-                    minimal_predicate, ""
+                minimal_predicate = (
+                    rf"{re.escape(item.column_quote.casefold())}\s*"
+                    rf"{re.escape(item.operator_quote.casefold())}\s*"
+                    rf"{value_pattern}"
+                )
+                if item.operator == "in":
+                    minimal_predicate += r"(?:\s*之一)?"
+                detail_evidence_text = re.sub(
+                    minimal_predicate, "", detail_evidence_text, count=1
                 )
             detail_evidence_text = re.sub(
                 r"((?:查询|列出|展示|查看))(?:且|和|以及|，|,|的)*",
