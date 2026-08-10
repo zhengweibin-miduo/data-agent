@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from loguru import logger
 
@@ -26,6 +27,8 @@ from memory.domain.policies import category_policy, user_memory_category
 from models.memory import (
     MemoryCandidate,
     MemoryTrust,
+    QueryBindingRuleContent,
+    UserMemoryCategory,
     UserMemoryContent,
 )
 
@@ -40,6 +43,32 @@ _AMBIGUOUS_CONFIRMATIONS = {
     "是",
     "对",
 }
+
+_QUERY_BINDING_RELATIONS = (
+    "指",
+    "指的是",
+    "是",
+    "就是",
+    "对应",
+    "表示",
+    "等于",
+    "意为",
+)
+
+
+def _proves_query_binding(quote: str, alias: str, target: str) -> bool:
+    """仅接受原文明确声明的肯定别名映射。"""
+    relation = "|".join(
+        sorted(map(re.escape, _QUERY_BINDING_RELATIONS), key=len, reverse=True)
+    )
+    return (
+        re.search(
+            rf"{re.escape(alias)}\s*(?:{relation})\s*{re.escape(target)}",
+            quote,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def validate_extraction_candidates(
@@ -102,12 +131,26 @@ def validate_extraction_candidates(
         elif candidate.assistant_quote is not None:
             continue
 
-        content = UserMemoryContent(
-            value=value,
-            supporting_user_quote=candidate.supporting_user_quote,
-            evidence_message_uids=candidate.evidence_message_uids,
-            confirmed_assistant_message_uid=assistant_uid,
-        )
+        if candidate.category == UserMemoryCategory.QUERY_BINDING_RULE:
+            alias = candidate.key.strip()
+            if not _proves_query_binding(
+                candidate.supporting_user_quote, alias, value
+            ):
+                continue
+            content = QueryBindingRuleContent(
+                alias=alias,
+                target=value,
+                supporting_user_quote=candidate.supporting_user_quote,
+                evidence_message_uids=candidate.evidence_message_uids,
+                confirmed_assistant_message_uid=assistant_uid,
+            )
+        else:
+            content = UserMemoryContent(
+                value=value,
+                supporting_user_quote=candidate.supporting_user_quote,
+                evidence_message_uids=candidate.evidence_message_uids,
+                confirmed_assistant_message_uid=assistant_uid,
+            )
         # 步骤五：同批结果按类别和规范化键占用一个逻辑作用域。
         category = user_memory_category(candidate.category)
         logical_key = f"{category}:{memory_key}"

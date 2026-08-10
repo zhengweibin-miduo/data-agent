@@ -1,0 +1,38 @@
+{
+  "id": "pr85-review-findings",
+  "name": "pr85-review-findings",
+  "title": "修复 PR #85 未解决的查询正确性与执行所有权问题",
+  "description": "修复 PR #85 剩余的自然时间范围、澄清链持久性、轮次领取隔离与 generation EXPLAIN 协调缺陷。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-08",
+  "completedAt": null,
+  "branch": "fix/pr85-review-findings-20260808",
+  "base_branch": "master",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-08-pr85-review-findings",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/src/query/domain.py",
+    "backend/src/query/application/service.py",
+    "backend/src/conversation/repository.py",
+    "backend/src/conversation/mysql_tables.py",
+    "backend/tests/unit/query",
+    "backend/tests/unit/conversation",
+    "backend/tests/integration/query",
+    "backend/tests/integration/persistence"
+  ],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

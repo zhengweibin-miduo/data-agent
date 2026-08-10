@@ -1,0 +1,29 @@
+{
+  "id": "query-authoritative-user-rules",
+  "name": "query-authoritative-user-rules",
+  "title": "设计 Query 权威用户规则消歧方案",
+  "description": "设计基于权威 Long-term Memory 的语义 Query Binding Rule，使已确认业务概念可复用于相近表达并安全消除 Meta 绑定歧义。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-10",
+  "completedAt": null,
+  "branch": "fix/query-authoritative-user-rules-20260810",
+  "base_branch": "master",
+  "worktree_path": "D:\\worktrees\\data-agent\\data-agent-repo\\.trellis\\worktrees\\08-10-query-authoritative-user-rules",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

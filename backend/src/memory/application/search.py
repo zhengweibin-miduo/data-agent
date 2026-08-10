@@ -60,6 +60,7 @@ class MemorySearchService:
         categories: set[str] | None = None,
         limit: int | None = None,
         exact_uids: Sequence[str] = (),
+        exact_queries: Sequence[str] = (),
         allowed_object_ids: set[str] | None = None,
     ) -> MemorySearchResponse:
         """执行稳定 RRF，并在各远程路径失败时独立降级。"""
@@ -73,7 +74,7 @@ class MemorySearchService:
             if exact_uids
             else await self._store.find_exact(
                 source,
-                query,
+                exact_queries or (query,),
                 categories,
                 user_id=user_id,
                 limit=bounded_limit,

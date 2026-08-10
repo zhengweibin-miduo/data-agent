@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Defines feature ownership, dependency direction, composition-root rules and test package layout for the new query bounded context."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Defines async MySQL lifecycle, dynamic DW identifier safety, transaction ownership, source/DW boundaries and live database test constraints."}
+{"file":".trellis/spec/backend/external-service-integrations.md","reason":"Defines explicit timeout, structured LLM output, Meta projection authority and Answer Readiness fail-closed contracts."}
+{"file":".trellis/spec/backend/conversation-memory.md","reason":"Defines chat-turn request context, tenant isolation, turn idempotency and permanent Conversation completion behavior reused by query turns."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines DataAgentError safety, HTTP projection, retryability and the exact data-preparing response contract."}

@@ -27,6 +27,7 @@ class BuiltinMemoryCategory(StrEnum):
     USER_PREFERENCE = "user.preference"
     USER_CONSTRAINT = "user.constraint"
     USER_BUSINESS_RULE = "user.business_rule"
+    USER_QUERY_BINDING_RULE = "user.query_binding_rule"
 
 
 class UserMemoryCategory(StrEnum):
@@ -36,6 +37,7 @@ class UserMemoryCategory(StrEnum):
     PREFERENCE = "PREFERENCE"
     CONSTRAINT = "CONSTRAINT"
     BUSINESS_RULE = "BUSINESS_RULE"
+    QUERY_BINDING_RULE = "QUERY_BINDING_RULE"
 
 
 class MemoryStatus(StrEnum):
@@ -170,6 +172,27 @@ class UserMemoryContent(ContractModel):
     )
 
 
+class QueryBindingRuleContent(ContractModel):
+    """由用户逐字确认、可用于 Query 消歧的结构化规则。"""
+
+    trust: Literal["user_confirmed"] = Field(
+        default="user_confirmed", description="内容可信来源。"
+    )
+    alias: str = Field(min_length=1, max_length=256, description="用户确认的概念别名。")
+    target: str = Field(
+        min_length=1, max_length=256, description="权威 Meta 目标文本。"
+    )
+    supporting_user_quote: str = Field(
+        min_length=1, max_length=4096, description="同时支持别名和目标的用户原文。"
+    )
+    evidence_message_uids: list[str] = Field(
+        min_length=1, max_length=20, description="证据消息标识列表。"
+    )
+    confirmed_assistant_message_uid: str | None = Field(
+        default=None, description="被用户明确复述的助手消息标识。"
+    )
+
+
 class GenericMemoryContent(ContractModel):
     """由类别策略验证的扩展记忆内容。"""
 
@@ -183,6 +206,7 @@ MemoryContent = (
     SemanticDecisionContent
     | MetricDefinitionContent
     | UserMemoryContent
+    | QueryBindingRuleContent
     | GenericMemoryContent
 )
 MEMORY_CONTENT_ADAPTER = TypeAdapter(MemoryContent)

@@ -23,6 +23,7 @@ GET    /api/v1/conversations/{conversation_uid}/messages?user_id=<id>&before=<ro
 DELETE /api/v1/conversations/{conversation_uid}?user_id=<id>
 
 POST   /api/v1/conversations/{conversation_uid}/turns
+POST   /api/v1/conversations/{conversation_uid}/turns/{turn_uid}/renew
 POST   /api/v1/conversations/{conversation_uid}/turns/{turn_uid}/assistant
 POST   /api/v1/conversations/{conversation_uid}/chat-turns
 
@@ -79,12 +80,18 @@ one shared `LLMClient`, injects it into the readiness classifier and chat servic
 and closes it before the other shared resources during lifespan shutdown.
 
 Starting a turn atomically inserts the user message and sets
-`active_turn_uid`. It returns the persisted message plus a bounded context:
+`active_turn_uid` plus a new opaque claim token. It returns the persisted
+message, the claim token only to the execution owner, and a bounded context:
 the current summary, recent messages after its cursor, and relevant active
 `user.*` rows for the same `user_id`. Completing a turn atomically inserts
 the assistant message, inserts one extraction outbox row, releases the active
-turn, and only then reports success. Replaying the same `turn_uid` and content
-returns the existing result.
+turn by matching both ownership coordinates, and only then reports success.
+Claim acquisition, renewal, and expiry comparison all use MySQL `NOW(6)` so a
+one-second lease retains its full duration across second boundaries.
+Replaying the same `turn_uid` and content returns the existing result read-only.
+The public two-step endpoint renews its claim while bounded context is loaded;
+after `start_turn` returns, its owner must call the token-CAS renew endpoint
+throughout client-side processing until assistant completion releases the claim.
 
 Chat orchestration validates and parses the bounded DDL before claiming a turn,
 then runs `start_turn -> readiness -> model -> complete_turn`. The prompt contains
@@ -92,8 +99,11 @@ only the fixed DDL-assistant policy, canonical current DDL, source, bounded
 conversation context, and authoritative user-memory hits. It may explain or
 draft a DDL clarification answer, but it cannot submit
 `/metadata/ddl-jobs/{job_id}/answers`; only an explicit user confirmation may use
-that job contract. A failed model or completion call leaves the active turn
-leased, so the client must retry the same `turn_uid`, content, source, and DDL.
+that job contract. A failed model or completion call abandons only its own claim
+generation, so the client can safely retry the same `turn_uid`, content, source,
+and DDL without allowing a stale owner to affect a later reclaim. Chat renews
+its claim while readiness and model work are in flight; a confirmed renewal
+loss fences the stale owner before it can persist a response.
 
 History uses the auto-increment row ID as an exclusive `before` keyset cursor.
 Rows are selected newest-first for paging and returned oldest-first for display.
@@ -115,10 +125,21 @@ commits a short lease before calling the LLM, and bounds each claim wave by LLM
 concurrency. A candidate is accepted only when its exact user quote occurs in
 an owned evidence message. An assistant conclusion additionally requires the
 assistant quote and a later user message that repeats that conclusion.
+The `user.query_binding_rule` category is permanent and user-scoped. Its model
+proposal uses `key=anchor alias` and `value=exact Meta target`; deterministic
+validation requires the same owned user quote to state the complete alias,
+an approved affirmative mapping relation, and the complete target in order;
+negation and mere substring co-occurrence fail closed. Accepted rules store typed
+`QueryBindingRuleContent`. Generic `user.business_rule` text is never Query
+execution authority. The existing active-key lifecycle keeps one ACTIVE version
+per normalized user/category/alias scope.
+
 Summary cursors only advance. Because `available_at` is written by a MySQL
 default, claim eligibility and lease expiry also use MySQL `NOW()`; mixing the
 application clock with the database clock can hide newly created work during
-clock drift.
+clock drift. A `query:complete` extraction claim loads at least the configured
+Query clarification-chain message limit plus its terminal assistant message,
+so advancing the summary cursor cannot strand early evidence.
 
 Required YAML keys are:
 
@@ -151,6 +172,7 @@ the purge worker physically remove memory, links, and events.
 | A different turn is already active in the conversation | `409 conversation_busy` |
 | Reused `turn_uid` has different content | `409 idempotency_conflict` |
 | Assistant completion does not match the active turn | `409 stale_turn` |
+| Public context loading loses its turn claim | `409 conversation_lease_lost`, retryable; external cancellation remains cancellation |
 | Chat DDL exceeds `api.max_ddl_bytes` | `422 ddl_too_large` before a turn is claimed |
 | Chat DDL is invalid or exceeds parser table/column limits | Existing deterministic DDL validation error before a turn is claimed |
 | Chat model connection, timeout, rate limit, or server call fails | `502 chat_model_failed`; `retryable` reflects the upstream error class |
@@ -268,3 +290,20 @@ await fetch(`/api/v1/conversations/${conversationUid}/chat-turns`, {
 
 The server owns model credentials, bounded context, readiness, idempotency, and
 assistant-message persistence. The browser owns only explicit user interaction.
+
+### Turn Claim and Query Clarification Contracts
+
+- Each first claim and expired reclaim creates a new opaque claim token. Renew,
+  complete and abandon compare both `turn_uid` and token; a suspended older
+  owner cannot mutate a reclaimed generation.
+- The token is an internal ownership credential. Do not log it, include it in
+  audit identity, or emit it in Query/Chat streaming events. The public
+  Conversation start/complete protocol may carry it only for the two-step owner.
+- Pending Query clarification uses authoritative persisted messages, stopping at
+  the preceding non-clarification assistant result. Its message and character
+  budgets are independent of summary/context limits; overflow fails closed with
+  `query_clarification_chain_too_large`.
+
+- Failed turns keep an independent `turn_abandoned_at` lease coordinate: the
+  same `turn_uid` may retry immediately, while a different turn may take over
+  only after the configured finite lease expires.

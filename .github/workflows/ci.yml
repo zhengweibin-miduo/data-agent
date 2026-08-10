@@ -127,6 +127,9 @@ jobs:
           timeout 90 bash -c \
             'until curl --fail --silent http://localhost:9200/_cluster/health?wait_for_status=yellow; do sleep 2; done'
 
+      - name: Install MySQL Locking Service functions
+        run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/locking_service.sql
+
       - name: Initialize metadata database
         run: mysql -h 127.0.0.1 -uroot -proot < ../docs/docker/mysql/meta.sql
 

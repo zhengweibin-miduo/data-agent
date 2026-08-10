@@ -33,6 +33,7 @@ from models.memory import (
     MemoryTrust,
     MemoryUpdateResponse,
     MetricDefinitionContent,
+    QueryBindingRuleContent,
     SemanticDecisionContent,
     UserMemoryContent,
 )
@@ -87,6 +88,7 @@ class MemoryService:
                 BuiltinMemoryCategory.USER_PREFERENCE.value,
                 BuiltinMemoryCategory.USER_CONSTRAINT.value,
                 BuiltinMemoryCategory.USER_BUSINESS_RULE.value,
+                BuiltinMemoryCategory.USER_QUERY_BINDING_RULE.value,
             },
             limit=limit,
         )
@@ -264,6 +266,30 @@ class MemoryService:
                 update={
                     "supporting_user_quote": (target.content.supporting_user_quote),
                     "evidence_message_uids": (target.content.evidence_message_uids),
+                    "confirmed_assistant_message_uid": (
+                        target.content.confirmed_assistant_message_uid
+                    ),
+                }
+            )
+        if isinstance(content, QueryBindingRuleContent):
+            if not isinstance(target.content, QueryBindingRuleContent):
+                raise DataAgentError(
+                    "memory_category_conflict",
+                    "memory_update",
+                    "目标记忆内容类型不一致",
+                    http_status=409,
+                )
+            if content.alias.strip().casefold() != target.memory_key:
+                raise DataAgentError(
+                    "memory_scope_conflict",
+                    "memory_update",
+                    "规则修正必须保留业务概念别名",
+                    http_status=409,
+                )
+            return content.model_copy(
+                update={
+                    "supporting_user_quote": target.content.supporting_user_quote,
+                    "evidence_message_uids": target.content.evidence_message_uids,
                     "confirmed_assistant_message_uid": (
                         target.content.confirmed_assistant_message_uid
                     ),

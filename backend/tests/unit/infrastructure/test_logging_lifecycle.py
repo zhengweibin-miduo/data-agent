@@ -24,9 +24,7 @@ class _RecordingLogger:
             "API 服务已启动，数据库、缓存与派生检索资源均已就绪": (
                 "application.lifecycle.started"
             ),
-            "API 服务已停止，进程内共享资源已经关闭": (
-                "application.lifecycle.stopped"
-            ),
+            "API 服务已停止，进程内共享资源已经关闭": ("application.lifecycle.stopped"),
             "DDL 元数据 worker 已停止，进程内共享资源已经关闭": (
                 "application.lifecycle.stopped"
             ),
@@ -67,6 +65,10 @@ def _patch_api_startup(monkeypatch: MonkeyPatch) -> None:
         application.LLMClient,
     ):
         monkeypatch.setattr(manager, "initialize", Mock(return_value=object()))
+    monkeypatch.setattr(application.GenerationLockManager, "initialize", AsyncMock())
+    monkeypatch.setattr(
+        application.GenerationLockManager, "check_capability", AsyncMock()
+    )
 
 
 def _patch_closes(
@@ -95,6 +97,7 @@ _API_CLOSES = (
     (application.TEIEmbeddingClient, "tei"),
     (application.QdrantClient, "qdrant"),
     (application.ElasticsearchClient, "elasticsearch"),
+    (application.GenerationLockManager, "generation_locks"),
     (application.MySQLDatabase, "mysql"),
     (application.RedisClient, "redis"),
 )
@@ -131,6 +134,7 @@ async def test_api_lifespan_drains_after_final_stopped_log(
             "tei",
             "qdrant",
             "elasticsearch",
+            "generation_locks",
             "mysql",
             "redis",
             "application.lifecycle.stopped",

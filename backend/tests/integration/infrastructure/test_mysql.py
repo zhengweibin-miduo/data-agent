@@ -380,6 +380,7 @@ async def _test_advisory_lock_survives_business_commit() -> None:
         await MySQLDatabase.close()
 
 
+
 @pytest.mark.integration
 async def test_mysql_database_configuration() -> None:
     """运行不依赖 MySQL 服务的数据库生命周期测试。"""

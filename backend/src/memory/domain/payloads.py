@@ -7,6 +7,7 @@ from models.memory import (
     MemoryContent,
     MemoryProjection,
     MetricDefinitionContent,
+    QueryBindingRuleContent,
     SemanticDecisionContent,
     UserMemoryContent,
 )
@@ -58,7 +59,7 @@ def content_object_ids(content: MemoryContent) -> list[str]:
             content.metric.fact_table_id,
             *content.metric.relevant_column_ids,
         ]
-    elif isinstance(content, UserMemoryContent):
+    elif isinstance(content, (UserMemoryContent, QueryBindingRuleContent)):
         return list(content.evidence_message_uids)
     return []
 
@@ -94,6 +95,11 @@ def build_memory_text(content: MemoryContent) -> str:
         )
     elif isinstance(content, UserMemoryContent):
         text = f"类型：user.fact；用户确认事实：{content.value}"
+    elif isinstance(content, QueryBindingRuleContent):
+        text = (
+            f"类型：query.binding.rule；业务概念：{content.alias}；"
+            f"权威目标：{content.target}"
+        )
     else:
         text = json.dumps(content.data, ensure_ascii=False, sort_keys=True)
     return text[:_MAX_MEMORY_TEXT_LENGTH]

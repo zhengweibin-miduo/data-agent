@@ -17,6 +17,7 @@ from ddl_metadata.parsing import parse_ddl
 from ddl_metadata.persistence.tables import (
     table_info,
 )
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import MySQLDatabase
 from memory.mysql.repository import MemoryRepository
 from memory.mysql.tables import (
@@ -91,7 +92,9 @@ async def _force_memory_failure(
 
 
 @pytest.mark.integration
-async def test_meta_memory_outbox_atomicity() -> None:
+async def test_meta_memory_outbox_atomicity(
+    generation_lock_manager: GenerationLockManager,
+) -> None:
     """验证新表归属、重复执行幂等和记忆侧失败回滚 Meta。"""
     await ensure_schema()
     check_equal(
@@ -128,6 +131,7 @@ async def test_meta_memory_outbox_atomicity() -> None:
         "CREATE TABLE dim_rollback (id BIGINT PRIMARY KEY)",
     )
     service = MySQLAcceptedSnapshotPublisher(
+        generation_lock_manager,
         {
             source: "source_demo",
             rollback_source: "source_demo",
@@ -230,7 +234,9 @@ async def test_meta_memory_outbox_atomicity() -> None:
 
 
 @pytest.mark.integration
-async def test_snapshot_commit_does_not_wait_for_dw_schema_lock() -> None:
+async def test_snapshot_commit_does_not_wait_for_dw_schema_lock(
+    generation_lock_manager: GenerationLockManager,
+) -> None:
     """DW worker 长时间持锁时 accepted snapshot 仍独立提交。"""
     await ensure_schema()
     source = f"lock_independent_{uuid4().hex}"
@@ -238,7 +244,9 @@ async def test_snapshot_commit_does_not_wait_for_dw_schema_lock() -> None:
         source,
         "CREATE TABLE dim_lock_independent (id BIGINT PRIMARY KEY)",
     )
-    service = MySQLAcceptedSnapshotPublisher({source: "source_demo"})
+    service = MySQLAcceptedSnapshotPublisher(
+        generation_lock_manager, {source: "source_demo"}
+    )
     lock_name = "data_sync_schema:dw:dim_lock_independent"
     try:
         async with MySQLDatabase.get_client().connect() as lock_connection:
@@ -262,7 +270,9 @@ async def test_snapshot_commit_does_not_wait_for_dw_schema_lock() -> None:
 
 
 @pytest.mark.integration
-async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> None:
+async def test_snapshot_failure_keeps_previous_fingerprint_memory_active(
+    generation_lock_manager: GenerationLockManager,
+) -> None:
     """验证快照事务失败不会提前撤销上一版指纹记忆。"""
     await ensure_schema()
     source = f"expire_rollback_{uuid4().hex}"
@@ -274,7 +284,9 @@ async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> No
         source,
         "CREATE TABLE dim_customer (id BIGINT PRIMARY KEY, full_name VARCHAR(128))",
     )
-    service = MySQLAcceptedSnapshotPublisher({source: "source_demo"})
+    service = MySQLAcceptedSnapshotPublisher(
+        generation_lock_manager, {source: "source_demo"}
+    )
     try:
         await service.publish(
             _accepted_snapshot(
@@ -330,7 +342,9 @@ async def test_snapshot_failure_keeps_previous_fingerprint_memory_active() -> No
 
 
 @pytest.mark.integration
-async def test_snapshot_expires_removed_column_and_metric_memories() -> None:
+async def test_snapshot_expires_removed_column_and_metric_memories(
+    generation_lock_manager: GenerationLockManager,
+) -> None:
     """验证提交范围内被删除列和孤儿指标的旧记忆会随指纹失效。"""
     await ensure_schema()
     source = f"expire_removed_{uuid4().hex}"
@@ -350,7 +364,9 @@ async def test_snapshot_expires_removed_column_and_metric_memories() -> None:
         if column.name == "amount"
     )
     metric_id = metrics[0].id
-    service = MySQLAcceptedSnapshotPublisher({source: "source_demo"})
+    service = MySQLAcceptedSnapshotPublisher(
+        generation_lock_manager, {source: "source_demo"}
+    )
     try:
         await service.publish(
             _accepted_snapshot(

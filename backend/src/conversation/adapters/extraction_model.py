@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from conversation.models import ClaimedExtraction, ExtractionResult
 
 _SYSTEM_PROMPT = """你只提炼用户明确表达的身份、偏好、约束和业务规则。
+当用户逐字确认业务概念映射时，可返回 QUERY_BINDING_RULE：
+key 是概念别名，value 是精确目标；两者必须出现在同一条用户原文中。
 不要记录助手建议、猜测、推断、模糊确认、Prompt、凭据或隐藏推理。
 每个候选必须给出用户消息中的精确原文 supporting_user_quote 和消息 UID。
 若事实来自助手结论，必须同时给出助手消息 UID、助手精确原文和后续用户明确确认原文。

@@ -115,13 +115,13 @@ class MemorySearchStore(Protocol):
     async def find_exact(
         self,
         source: str,
-        query: str,
+        queries: Sequence[str],
         categories: set[str] | None,
         *,
         user_id: str | None,
         limit: int,
     ) -> list[str]:
-        """返回 MySQL 精确基线候选。"""
+        """批量返回 MySQL 精确基线候选。"""
         ...
 
     async def load_authority(

@@ -2,6 +2,8 @@ SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS dw DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 GRANT ALL PRIVILEGES ON dw.* TO 'data_agent'@'%';
+CREATE USER IF NOT EXISTS 'data_agent_query'@'%' IDENTIFIED BY 'data_agent_query';
+GRANT SELECT ON dw.* TO 'data_agent_query'@'%';
 USE dw;
 
 

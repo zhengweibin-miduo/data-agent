@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import ClassVar
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
@@ -24,6 +25,10 @@ class AdvisoryLockUnavailableError(RuntimeError):
 
 class AdvisoryLockReleaseError(RuntimeError):
     """MySQL 命名锁未能由原连接可靠释放。"""
+
+
+class LockingServiceUnavailableError(RuntimeError):
+    """MySQL Locking Service SQL functions 不可用或返回形态错误。"""
 
 
 class MySQLDatabase:
@@ -129,10 +134,7 @@ class MySQLDatabase:
                 active_error = sys.exc_info()[1]
                 release_error = await _release_advisory_locks(connection, acquired)
                 if release_error is not None:
-                    try:
-                        await connection.invalidate(release_error)
-                    except BaseException:
-                        await connection.close()
+                    await _invalidate_owner_connection(connection, release_error)
                     if active_error is None:
                         raise AdvisoryLockReleaseError(
                             "MySQL advisory lock 释放失败，owner 连接已失效"
@@ -181,3 +183,22 @@ async def _release_advisory_locks(
         except BaseException as error:
             release_error = release_error or error
     return release_error
+
+
+async def _invalidate_owner_connection(
+    connection: AsyncConnection,
+    error: BaseException,
+) -> None:
+    """使锁清理失败的 owner 连接失效，必要时直接关闭。"""
+    try:
+        await connection.invalidate(error)
+    except BaseException:
+        await connection.close()
+
+
+def _mysql_error_number(error: DBAPIError) -> int | None:
+    """从 SQLAlchemy 包装异常提取 MySQL server error number。"""
+    arguments = getattr(error.orig, "args", ())
+    if arguments and isinstance(arguments[0], int):
+        return arguments[0]
+    return None

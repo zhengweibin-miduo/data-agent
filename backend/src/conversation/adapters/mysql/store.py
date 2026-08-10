@@ -57,11 +57,22 @@ class MySQLConversationStore:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartedConversationTurn:
         """原子写入用户消息并占用轮次门禁。"""
         async with MySQLDatabase.session() as session:
-            message, conversation = await ConversationRepository(session).start_turn(
-                user_id, conversation_uid, turn_uid, content
+            (
+                message,
+                conversation,
+                execution_owner,
+                claim_token,
+            ) = await ConversationRepository(session).start_turn(
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
             )
         return StartedConversationTurn(
             message=message,
@@ -76,6 +87,8 @@ class MySQLConversationStore:
                 if conversation["summary_through_message_id"] is not None
                 else None
             ),
+            execution_owner=execution_owner,
+            claim_token=claim_token,
         )
 
     async def complete_turn(
@@ -83,12 +96,46 @@ class MySQLConversationStore:
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
         """原子写入助手消息、outbox 并释放轮次门禁。"""
         async with MySQLDatabase.session() as session:
             return await ConversationRepository(session).complete_turn(
-                user_id, conversation_uid, turn_uid, content
+                user_id,
+                conversation_uid,
+                turn_uid,
+                claim_token,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
+            )
+
+    async def abandon_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> None:
+        """释放失败或取消后仍由当前轮次持有的门禁。"""
+        async with MySQLDatabase.session() as session:
+            await ConversationRepository(session).abandon_turn(
+                user_id, conversation_uid, turn_uid, claim_token
+            )
+
+    async def renew_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+    ) -> bool:
+        """以短事务续租仍由指定轮次持有的门禁。"""
+        async with MySQLDatabase.session() as session:
+            return await ConversationRepository(session).renew_turn(
+                user_id, conversation_uid, turn_uid, claim_token
             )
 
     async def assistant_message(
@@ -112,4 +159,23 @@ class MySQLConversationStore:
         async with MySQLDatabase.session() as session:
             return await ConversationRepository(session).context_messages(
                 user_id, conversation_id, after_id=after_id, limit=limit
+            )
+
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> builtins.list[MessageRecord]:
+        """从权威 MySQL 消息读取未结束 Query 澄清链。"""
+        async with MySQLDatabase.session() as session:
+            return await ConversationRepository(session).pending_query_chain(
+                user_id,
+                conversation_uid,
+                through_id=through_id,
+                message_limit=message_limit,
+                max_chars=max_chars,
             )

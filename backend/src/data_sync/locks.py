@@ -1,4 +1,4 @@
-"""数据同步 generation 串行锁身份。"""
+"""数据同步 generation 读写协调资源身份。"""
 
 from __future__ import annotations
 

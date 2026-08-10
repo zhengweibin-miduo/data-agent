@@ -3,6 +3,7 @@
 from models.memory import (
     MemoryContent,
     MemoryDecision,
+    QueryBindingRuleContent,
     UserMemoryContent,
 )
 
@@ -18,6 +19,13 @@ def semantically_equivalent(
         current_value = " ".join(current.value.split()).casefold()
         candidate_value = " ".join(candidate.value.split()).casefold()
         return current_value == candidate_value
+    if isinstance(current, QueryBindingRuleContent) and isinstance(
+        candidate, QueryBindingRuleContent
+    ):
+        return (
+            current.alias.strip().casefold(),
+            current.target.strip().casefold(),
+        ) == (candidate.alias.strip().casefold(), candidate.target.strip().casefold())
     return current == candidate
 
 

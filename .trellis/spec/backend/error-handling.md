@@ -115,6 +115,14 @@ unknown conversation/memory identifiers both return `404`;
 payloads remain FastAPI/Pydantic `422` errors. Extraction failures are worker
 retries and never hide or roll back already committed messages.
 
+Query generation-lock timeout or deadlock is
+`generation_lock_unavailable/query_readiness`, retryable, and HTTP `409` before
+the NDJSON response starts. Data Sync translates the same infrastructure error
+to `SyncResourceBusyError` and reschedules without consuming failure attempts;
+accepted snapshot publication retains its retryable `503` projection. Missing
+Locking Service SQL functions are startup capability failures, not per-request
+business errors.
+
 ## Worker Retry and Terminal Errors
 
 `DataAgentError.retryable` is the authoritative source of retryability. The
@@ -394,5 +402,13 @@ job = await job_store.submit_answers(job_id, request)
   `None`; preserve transaction rollback and worker classification.
 - Do not mark validation ambiguity retryable or translate it into `failed`;
   deterministic/model business rejection ends as `rejected`.
+- Reject invalid/unavailable IANA zones at request validation. Reject unsupported
+  or ambiguous natural calendar expressions before SQL planning.
+- Translate generation owner pool checkout exhaustion and Locking Service
+  contention to the stable retryable lock-unavailable error. Release failure
+  invalidates the connection and surfaces the stable release error unless a
+  business exception is already active.
+- A stale turn claim is an ownership conflict, never a successful completion or
+  best-effort abandonment.
 - Do not let API routes update Redis Hash fields directly; use `DDLJobStore` so
   transition, revision, lease, outbox, and retention rules remain atomic.

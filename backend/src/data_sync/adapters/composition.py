@@ -15,6 +15,7 @@ from data_sync.adapters.source import MySQLSourceAdapter
 from data_sync.application.contracts import SyncPolicy
 from data_sync.application.service import DataSyncService
 from data_sync.binlog import MySQLSourceClient
+from infrastructure.generation_locks import GenerationLockManager
 from settings import DataSyncSettings
 
 
@@ -31,10 +32,13 @@ def build_data_sync_runtime(
     settings: DataSyncSettings,
     *,
     projection_factory: ValueProjectionFactory,
+    generation_locks: GenerationLockManager,
 ) -> DataSyncRuntime:
     """选择 MySQL/source/projection adapters 并组合 application module。"""
     tasks = MySQLSyncTaskAdapter()
-    materialization = MySQLMaterializationAdapter(settings, projection_factory)
+    materialization = MySQLMaterializationAdapter(
+        settings, projection_factory, generation_locks
+    )
     leases = RenewingLeaseCoordinator(
         tasks,
         lease_seconds=settings.claim_lease_seconds,

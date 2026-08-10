@@ -99,6 +99,17 @@ backend/src/
 │   ├── schema_sync.py
 │   ├── tables.py
 │   └── worker.py
+├── query/
+│   ├── domain.py
+│   ├── application/
+│   │   ├── contracts.py
+│   │   └── service.py
+│   └── adapters/
+│       ├── http.py
+│       ├── llm.py
+│       ├── metadata.py
+│       ├── mysql.py
+│       └── readiness.py
 └── ddl_metadata/
     ├── application/
     │   └── accepted_snapshot.py
@@ -163,6 +174,11 @@ SQL bootstrap assets stay under the repository-owned `docs/docker/`.
 - `answer_readiness` owns typed question-dependency classification,
   the bounded readiness tool, and deterministic answer gating. It is reusable
   internal code and does not own an HTTP or Conversation entrypoint.
+- `query` owns exact-evidence Query Intent, Query-owned grounded metadata,
+  deterministic SELECT validation, bounded orchestration, and NDJSON query
+  events. Adapters convert Meta Projection DTOs and own LLM, readiness, HTTP,
+  and dedicated SELECT-only DW resources; application/domain code does not
+  import concrete Meta Projection models or global settings.
 - `data_sync` owns desired-state CDC tasks, DW schema/backfill/event
   application, source adapters, and its dedicated process.
   `data_sync.application.service.DataSyncService.dispatch_once()` is the deep
@@ -233,11 +249,19 @@ SQL bootstrap assets stay under the repository-owned `docs/docker/`.
 
 ```text
 main/application
-  -> conversation + ddl_metadata/api/router + memory/application
+  -> conversation + query + ddl_metadata/api/router + memory/application
   -> infrastructure lifecycle
 
-future answer caller
-  -> answer_readiness -> data_sync/repository + infrastructure/llm_client
+query/application
+  -> query/domain + application/contracts
+
+query/adapters
+  -> query/application + query/domain
+  -> conversation + answer_readiness + ddl_metadata/meta_projection
+  -> dedicated DW engine + shared LLM client
+
+answer_readiness
+  -> data_sync/repository + infrastructure/llm_client
 
 data_sync/worker
   -> data_sync/adapters/composition + source clients

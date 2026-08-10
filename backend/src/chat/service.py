@@ -1,5 +1,7 @@
 """当前 DDL 上下文的最小 AI 聊天应用编排。"""
 
+import asyncio
+import hashlib
 import json
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -50,11 +52,14 @@ class ChatService:
         conversations: ConversationService,
         readiness: AnswerReadinessService,
         model: BaseChatModel,
+        *,
+        turn_lease_seconds: float = 600,
     ) -> None:
         """绑定现有会话服务、就绪门禁和服务端模型。"""
         self._conversations = conversations
         self._readiness = readiness
         self._model = model
+        self._turn_lease_seconds = turn_lease_seconds
 
     async def run_turn(
         self,
@@ -86,18 +91,62 @@ class ChatService:
             conversation_uid,
             request.turn_uid,
             request.content,
+            semantic_fingerprint=hashlib.sha256(
+                json.dumps(
+                    {
+                        "entrypoint": "chat",
+                        "content": request.content,
+                        "source": request.ddl_context.source,
+                        "ddl_hash": schema.ddl_hash,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
+            include_context=False,
         )
 
         # 步骤三：完成轮次的幂等回放直接返回现有助手消息，不重复调用门禁或模型。
-        existing = await self._conversations.assistant_message(
-            request.user_id,
-            conversation_uid,
-            request.turn_uid,
-        )
+        try:
+            existing = await self._conversations.assistant_message(
+                request.user_id,
+                conversation_uid,
+                request.turn_uid,
+            )
+        except BaseException:
+            if started.execution_owner and started.claim_token is not None:
+                try:
+                    await self._conversations.abandon_turn(
+                        request.user_id,
+                        conversation_uid,
+                        request.turn_uid,
+                        started.claim_token,
+                    )
+                except Exception:
+                    pass
+            raise
         if existing is not None:
             return ChatTurnResponse(
                 message=existing,
                 readiness=self._existing_decision(existing.content),
+            )
+        if not started.execution_owner:
+            raise DataAgentError(
+                "chat_in_progress",
+                "chat_turn",
+                "相同轮次正在执行",
+                retryable=True,
+                http_status=409,
+            )
+        claim_token = started.claim_token
+        if claim_token is None:
+            raise DataAgentError(
+                "turn_claim_missing",
+                "conversation_turn",
+                "会话轮次未返回执行代次坐标",
+                retryable=True,
+                http_status=409,
             )
 
         # 步骤四：只把确定性解析得到的真实表名和当前来源交给就绪分类器。
@@ -110,16 +159,47 @@ class ChatService:
                 for table in schema.tables
             ]
         )
+        completed_turn = False
+        completion_started = asyncio.Event()
+        owner_task = asyncio.current_task()
+        heartbeat = asyncio.create_task(
+            self._heartbeat_turn(
+                request.user_id,
+                conversation_uid,
+                request.turn_uid,
+                claim_token,
+                owner_task,
+                completion_started,
+            ),
+            name=f"chat-turn-heartbeat:{request.turn_uid}",
+        )
         try:
+            context = await self._conversations.load_turn_context(
+                request.user_id, started, request.content
+            )
             gate = await self._readiness.evaluate(request.content, catalog)
             if gate.decision == AnswerGateDecision.PROCEED:
                 assistant_content = await self._generate(
-                    started.context,
+                    context,
                     schema.source,
                     schema.canonical_ddl,
                 )
             else:
                 assistant_content = gate.user_message or "无法继续回答"
+            # 步骤六：复用完成轮次事务，原子写入助手消息、提炼 outbox 并释放门禁。
+            # 续租必须覆盖完成事务取得行锁并提交的整个窗口。完成提交会清空
+            # claim token，因此 heartbeat 在此阶段遇到 CAS false 只需退出，
+            # 最终完成事务仍会用 claim token 判断是否真的失去所有权。
+            completion_started.set()
+            completed = await self._conversations.complete_turn(
+                request.user_id,
+                conversation_uid,
+                request.turn_uid,
+                claim_token,
+                assistant_content,
+            )
+            completed_turn = True
+            return ChatTurnResponse(message=completed.message, readiness=gate.decision)
         except OpenAIError as error:
             # 步骤五：模型边界只投影稳定错误字段；同一 turn 可在会话租约内安全重试。
             raise DataAgentError(
@@ -129,15 +209,58 @@ class ChatService:
                 retryable=isinstance(error, _RETRYABLE_MODEL_ERRORS),
                 http_status=502,
             ) from error
+        except asyncio.CancelledError as error:
+            if error.args != ("chat_lease_lost",):
+                raise
+            raise DataAgentError(
+                "chat_lease_lost",
+                "conversation_turn",
+                "聊天轮次执行权已失效",
+                retryable=True,
+                http_status=409,
+            ) from error
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+            if not completed_turn:
+                try:
+                    await self._conversations.abandon_turn(
+                        request.user_id,
+                        conversation_uid,
+                        request.turn_uid,
+                        claim_token,
+                    )
+                except Exception:
+                    # 清理失败不得覆盖 readiness、模型、取消或持久化的原始异常。
+                    pass
 
-        # 步骤六：复用完成轮次事务，原子写入助手消息、提炼 outbox 并释放门禁。
-        completed = await self._conversations.complete_turn(
-            request.user_id,
-            conversation_uid,
-            request.turn_uid,
-            assistant_content,
-        )
-        return ChatTurnResponse(message=completed.message, readiness=gate.decision)
+    async def _heartbeat_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        claim_token: str,
+        owner_task: asyncio.Task[object] | None,
+        completion_started: asyncio.Event,
+    ) -> None:
+        """在 Chat 外部工作期间续租 claim，并 fence 已失效的旧执行者。"""
+        interval = max(0.01, self._turn_lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self._conversations.renew_turn(
+                    user_id, conversation_uid, turn_uid, claim_token
+                )
+            except Exception:
+                # 传输或数据库异常不能证明 claim 已被替代。保留当前 owner，
+                # 下一心跳周期继续续租；只有正常 CAS 返回 False 才执行 fencing。
+                continue
+            if not renewed:
+                if completion_started.is_set():
+                    return
+                if owner_task is not None:
+                    owner_task.cancel("chat_lease_lost")
+                return
 
     @staticmethod
     def _existing_decision(content: str) -> AnswerGateDecision:

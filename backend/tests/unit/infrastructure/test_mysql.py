@@ -86,6 +86,27 @@ class _FakeEngine:
         return _FakeConnectionContext(self._connection)
 
 
+class _FakeServiceConnection(_FakeConnection):
+    """记录 Locking Service 单次多锁调用与 namespace 释放。"""
+
+    def __init__(self, results: list[object] | None = None) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self._results = iter(results or [1, 1])
+
+    async def scalar(
+        self,
+        statement: object,
+        parameters: dict[str, object],
+    ) -> object:
+        """记录完整 SQL 边界并按顺序返回结果或异常。"""
+        self.calls.append((str(statement), dict(parameters)))
+        result = next(self._results)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
 async def test_advisory_locks_order_deduplicate_and_release_on_error() -> None:
     """多锁必须去重排序，并在业务异常时逆序完整释放。"""
     connection = _FakeConnection()

@@ -14,6 +14,7 @@ from ddl_metadata.adapters.mysql.accepted_snapshot import (
 from ddl_metadata.application.accepted_snapshot import AcceptedSnapshot
 from ddl_metadata.jobs.store import DDLJobStore
 from ddl_metadata.parsing import parse_ddl
+from infrastructure.generation_locks import GenerationLockManager
 from infrastructure.mysql import MySQLDatabase
 from models.jobs import DDLJobRequest
 from models.memory import (
@@ -270,7 +271,7 @@ async def test_ddl_metadata_api() -> None:
 
 
 @pytest.mark.integration
-async def test_memory_api() -> None:
+async def test_memory_api(generation_lock_manager: GenerationLockManager) -> None:
     """验证受约束的记忆读取、修正、删除与 MySQL 降级检索。"""
     await ensure_schema()
     source = f"memory_api_{uuid4().hex}"
@@ -279,7 +280,9 @@ async def test_memory_api() -> None:
         "CREATE TABLE dim_api (id BIGINT PRIMARY KEY, name VARCHAR(64))",
     )
     metadata = semantic_for(schema, fact=False)
-    await MySQLAcceptedSnapshotPublisher({schema.source: "source_demo"}).publish(
+    await MySQLAcceptedSnapshotPublisher(
+        generation_lock_manager, {schema.source: "source_demo"}
+    ).publish(
         AcceptedSnapshot(
             schema=schema,
             metadata=metadata,

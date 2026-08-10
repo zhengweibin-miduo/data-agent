@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"完整质量门禁与审查标准"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"核对原子多锁和连接清理契约"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"核对 Query/Data Sync 稳定错误投影"}
+{"file":".trellis/spec/backend/query-guidelines.md","reason":"核对共享读仍覆盖最终复核与完整读取"}
+{"file":".trellis/tasks/08-07-query-generation-read-coordination/research/coordination-analysis.md","reason":"复核完整调用覆盖与真实 MySQL 测试矩阵"}

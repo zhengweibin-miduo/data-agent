@@ -10,9 +10,12 @@ from models.memory import MemoryCandidate
 class MySQLExtractionClaimStore:
     """用短事务实现提炼 claim 与 retry。"""
 
-    def __init__(self, *, max_backoff_seconds: int) -> None:
+    def __init__(
+        self, *, max_backoff_seconds: int, query_message_limit: int = 101
+    ) -> None:
         """绑定提炼失败的最大退避秒数。"""
         self._max_backoff_seconds = max_backoff_seconds
+        self._query_message_limit = query_message_limit
 
     async def claim(
         self, *, limit: int, lease_seconds: int, message_limit: int
@@ -23,6 +26,7 @@ class MySQLExtractionClaimStore:
                 limit=limit,
                 lease_seconds=lease_seconds,
                 message_limit=message_limit,
+                query_message_limit=self._query_message_limit,
             )
 
     async def retry(self, claim: ClaimedExtraction, error_type: str) -> None:

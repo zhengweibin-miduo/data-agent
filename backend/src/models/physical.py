@@ -42,6 +42,9 @@ class PhysicalRelationship(ContractModel):
     source_column_id: str = Field(description="引用方字段的唯一标识。")
     target_table: str = Field(description="被引用表的限定名称。")
     target_column: str = Field(description="被引用字段名称。")
+    constraint_id: str | None = Field(
+        default=None, description="同一复合外键各字段共享的确定性约束标识。"
+    )
 
 
 class PhysicalSchema(ContractModel):

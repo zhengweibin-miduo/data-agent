@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.engine import make_url
 
 from settings import (
     AppSettings,
@@ -339,3 +340,29 @@ def test_data_sync_rejects_duplicate_sources_and_database_collisions() -> None:
                 actual=payload["data_sync"],
                 expected="配置校验拒绝重复边界",
             )
+
+
+def test_query_read_url_must_share_mysql_instance_identity() -> None:
+    """代次锁与只读查询必须连接同一 MySQL 实例。"""
+    payload = app_config.model_dump(mode="json")
+    payload["query"]["read_url"] = (
+        "mysql+asyncmy://data_agent_query:query-password@replica:3306/dw"
+    )
+
+    with pytest.raises(ValidationError, match="同一 MySQL 实例"):
+        AppSettings.model_validate(payload)
+
+
+def test_query_read_url_allows_different_user_on_same_mysql_instance() -> None:
+    """同实例不同只读账号仍应通过跨配置校验。"""
+    payload = app_config.model_dump(mode="json")
+    mysql_url = make_url(payload["mysql"]["url"])
+    payload["query"]["read_url"] = str(
+        mysql_url.set(
+            username="data_agent_query",
+            password="query-password",
+            database=payload["data_sync"]["dw_database"],
+        )
+    )
+
+    assert AppSettings.model_validate(payload).query.read_url

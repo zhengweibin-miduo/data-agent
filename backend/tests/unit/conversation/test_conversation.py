@@ -118,6 +118,10 @@ def test_conversation_route_contract() -> None:
                 "/api/v1/conversations/{conversation_uid}/turns/{turn_uid}/assistant",
                 ("POST",),
             ),
+            (
+                "/api/v1/conversations/{conversation_uid}/turns/{turn_uid}/renew",
+                ("POST",),
+            ),
             ("/api/v1/users/{user_id}/memories/search", ("GET",)),
             (
                 "/api/v1/users/{user_id}/memories/{memory_uid}",

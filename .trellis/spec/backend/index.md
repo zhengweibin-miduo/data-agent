@@ -20,6 +20,7 @@ local Docker services that exist in this repository.
 | [Quality Guidelines](./quality-guidelines.md) | CI checks, test patterns, and review standards | Defined |
 | [Logging Guidelines](./logging-guidelines.md) | Loguru sinks, formats, context and safety | Defined |
 | [External Service Integrations](./external-service-integrations.md) | Executable contracts for local infrastructure clients | Defined |
+| [Natural-Language Query](./query-guidelines.md) | Meta-grounded, validated, read-only DW query and NDJSON contracts | Defined |
 | [Trellis Task Worktree Ownership](./trellis-task-worktree.md) | Platform-independent Trellis-managed task worktrees and legacy metadata compatibility | Defined |
 
 ## Scope Boundary
@@ -55,6 +56,8 @@ relational schema.
   OpenAI-compatible model changes.
 - Read [Error Handling](./error-handling.md) when changing API status mapping,
   job transitions, retries, or terminal cleanup.
+- Read [Natural-Language Query](./query-guidelines.md) when changing QueryIntent,
+  Meta grounding, SQL validation, read-only execution, or NDJSON query events.
 - Read [Trellis Task Worktree Ownership](./trellis-task-worktree.md) when
   changing Trellis task creation, Agent-platform routing, worktree ownership,
   or task worktree metadata.

@@ -1,0 +1,9 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend package index and pre-development routing."}
+{"file": ".trellis/spec/backend/query-guidelines.md", "reason": "Natural-language Query evidence, validation, generation and NDJSON contracts."}
+{"file": ".trellis/spec/backend/conversation-memory.md", "reason": "Conversation authority, turn ownership, bounded context and summary contracts."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "MySQL lifecycle, UTC temporal semantics, bootstrap and locking contracts."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Stable error mapping and cleanup behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required backend verification commands and testing standards."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer contract propagation checklist."}
+{"file": ".trellis/tasks/08-08-pr85-review-findings/research/evidence-map.md", "reason": "Verified five-thread evidence, preserved contracts and approved decisions."}

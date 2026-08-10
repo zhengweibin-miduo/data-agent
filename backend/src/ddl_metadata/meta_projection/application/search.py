@@ -64,24 +64,54 @@ class MetadataSearchService:
             raise ValueError("检索 limit 必须为正整数")
         return min(limit or self._search_limit, self._search_limit)
 
+    async def schema_is_authoritative(
+        self,
+        source: str,
+        schema_fingerprint: str,
+        *,
+        table_ids: set[str],
+        column_ids: set[str],
+    ) -> bool:
+        """核验完整关系授权版本；对象范围参数保持 Query 端口有界。"""
+        del table_ids, column_ids
+        return await self._reader.schema_is_authoritative(source, schema_fingerprint)
+
     async def search_metadata(
         self,
         query: str,
         kinds: set[MetadataObjectKind] | None = None,
         limit: int | None = None,
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataCandidate]:
         """从语义索引取有界身份，再回读 Meta 权威候选。"""
         if not query.strip():
             raise ValueError("Meta 检索 query 不能为空")
         bounded_limit = self._bounded_limit(limit)
         # 步骤一：派生索引仅提供身份、分数与写入指纹。
-        identities = await self._semantic_index.search(
-            query,
-            kinds,
-            self._search_limit,
-        )
+        if table_ids is None and column_ids is None:
+            identities = await self._semantic_index.search(
+                query, kinds, self._search_limit
+            )
+        else:
+            # 作用域内绑定必须看到完整候选集合，不能用全局展示 Top-K 证明唯一性。
+            # 指标基数与字段数无上界关系；作用域绑定必须请求索引支持的完整
+            # 结果，而不能用字段数猜测候选总量后声称唯一。
+            scope_limit = 100_000
+            identities = await self._semantic_index.search(
+                query,
+                kinds,
+                scope_limit,
+                table_ids=table_ids,
+                column_ids=column_ids,
+            )
         # 步骤二：权威 reader 剔除删除、pending 或指纹过期的对象。
-        candidates = await self._reader.authoritative_candidates(identities)
+        candidates = await self._reader.authoritative_candidates(
+            identities, table_ids=table_ids, column_ids=column_ids
+        )
+        if table_ids is not None or column_ids is not None:
+            return candidates
         return candidates[:bounded_limit]
 
     async def search_values(

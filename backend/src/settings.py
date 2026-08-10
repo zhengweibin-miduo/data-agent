@@ -15,7 +15,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 from errors import DataAgentError
 
@@ -139,6 +139,60 @@ class MySQLSettings(SettingsModel):
     """MySQL 连接配置。"""
 
     url: str = Field(description="SQLAlchemy asyncmy 使用的 MySQL 连接地址。")
+    generation_lock_pool_size: int = Field(
+        default=16, gt=0, le=128, description="generation lock owner 专用池容量。"
+    )
+    generation_lock_pool_timeout_seconds: float = Field(
+        default=1, gt=0, le=30, description="generation lock owner 池取连接超时。"
+    )
+    generation_lock_io_timeout_seconds: float = Field(
+        default=5, gt=0, le=60, description="generation lock owner 网络 I/O 超时。"
+    )
+
+
+class QuerySettings(SettingsModel):
+    """自然语言查询的专用只读 DW 连接与流式预算。"""
+
+    read_url: str = Field(description="仅授予 DW SELECT 权限的 asyncmy 连接地址。")
+    timeout_seconds: float = Field(
+        default=10,
+        gt=0,
+        le=60,
+        description="EXPLAIN 或业务查询允许占用的最长秒数。",
+    )
+    fetch_batch_rows: int = Field(
+        default=500,
+        gt=0,
+        le=500,
+        description="单个 NDJSON 结果批次允许包含的最大行数。",
+    )
+    max_batch_bytes: int = Field(
+        default=1_048_576,
+        ge=4096,
+        le=16_777_216,
+        description="单个 NDJSON 结果批次允许占用的最大字节数。",
+    )
+    clarification_chain_message_limit: int = Field(
+        default=100,
+        gt=0,
+        le=1000,
+        description="Query 权威澄清证据链的独立消息预算。",
+    )
+    clarification_chain_max_chars: int = Field(
+        default=262_144,
+        gt=0,
+        le=1_048_576,
+        description="Query 权威澄清证据链的独立字符预算。",
+    )
+
+    @field_validator("read_url")
+    @classmethod
+    def validate_read_url(cls, value: str) -> str:
+        """校验查询连接使用 asyncmy 且显式选择数据库。"""
+        url = make_url(value)
+        if url.drivername != "mysql+asyncmy" or url.database is None:
+            raise ValueError("query.read_url 必须是包含数据库名的 mysql+asyncmy 地址")
+        return value
 
 
 class DataSyncSourceSettings(SettingsModel):
@@ -191,7 +245,7 @@ class DataSyncSettings(SettingsModel):
     generation_lock_timeout_seconds: int = Field(
         gt=0,
         le=300,
-        description="发布或执行同一 DW generation 前等待共享命名锁的最大秒数。",
+        description="Query 共享读或 generation 写侧独占协调的最大等待秒数。",
     )
     retry_base_seconds: int = Field(
         gt=0,
@@ -505,6 +559,7 @@ class AppSettings(SettingsModel):
     )
     tei: TEISettings = Field(description="Text Embeddings Inference 向量化服务配置。")
     mysql: MySQLSettings = Field(description="MySQL 持久化连接配置。")
+    query: QuerySettings = Field(description="自然语言查询的专用只读 DW 配置。")
     data_sync: DataSyncSettings = Field(description="DW 结构与 Binlog 数据同步配置。")
     api: APISettings = Field(description="本地 HTTP API 配置。")
     redis: RedisSettings = Field(description="Redis、任务队列和恢复配置。")
@@ -542,6 +597,28 @@ class AppSettings(SettingsModel):
                 "mysql 默认库、memory.database、data_sync.database 和 "
                 "data_sync.dw_database 必须彼此不同"
             )
+        query_url = make_url(self.query.read_url)
+        if query_url.database is None or (
+            query_url.database.casefold() != self.data_sync.dw_database.casefold()
+        ):
+            raise ValueError("query.read_url 必须连接 data_sync.dw_database")
+        mysql_url = make_url(self.mysql.url)
+        if query_url.username == mysql_url.username:
+            raise ValueError("query.read_url 必须使用独立于应用写连接的数据库账号")
+
+        def mysql_instance_identity(url: URL | str) -> tuple[str, int, str | None]:
+            parsed = make_url(url)
+            query = parsed.normalized_query
+            socket_values = query.get("unix_socket", ())
+            socket = socket_values[0] if socket_values else None
+            return (
+                (parsed.host or "localhost").casefold(),
+                parsed.port or 3306,
+                socket,
+            )
+
+        if mysql_instance_identity(query_url) != mysql_instance_identity(mysql_url):
+            raise ValueError("query.read_url 必须与 mysql.url 连接同一 MySQL 实例")
         # 步骤三：校验向量生成与向量存储维度一致，避免运行时写入失败。
         if self.qdrant.vector_size != self.tei.vector_size:
             raise ValueError("qdrant.vector_size 必须与 tei.vector_size 一致")

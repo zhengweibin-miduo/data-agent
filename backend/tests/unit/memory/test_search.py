@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from identifiers import CONVERSATION_MEMORY_SOURCE
 from memory.application.contracts import MemorySearchConfig
 from memory.application.search import MemorySearchService
 from memory.domain.payloads import memory_content_hash
@@ -18,9 +19,11 @@ from models.memory import (
     MemoryLifecyclePolicy,
     MemoryStatus,
     MemoryTrust,
+    QueryBindingRuleContent,
     SemanticDecisionContent,
 )
 from models.semantic import SemanticTable, TableRole
+from query.adapters.rules import MemoryQueryBindingRuleAdapter
 
 
 def _detail(uid: str = "memory-1") -> MemoryDetail:
@@ -57,6 +60,33 @@ def _detail(uid: str = "memory-1") -> MemoryDetail:
     )
 
 
+def _rule_detail(*, user_id: str = "user-1") -> MemoryDetail:
+    """构造一条同用户、当前且哈希有效的 Query Binding Rule。"""
+    content = QueryBindingRuleContent(
+        alias="销售额",
+        target="实付金额",
+        supporting_user_quote="销售额指实付金额",
+        evidence_message_uids=["message-1"],
+    )
+    category = BuiltinMemoryCategory.USER_QUERY_BINDING_RULE.value
+    return _detail("memory-rule").model_copy(
+        update={
+            "source": CONVERSATION_MEMORY_SOURCE,
+            "user_id": user_id,
+            "category": category,
+            "memory_key": "销售额",
+            "content_schema": "user.query_binding_rule.v1",
+            "memory_text": "业务概念：销售额；权威目标：实付金额",
+            "content": content,
+            "content_hash": memory_content_hash(content),
+            "trust": MemoryTrust.USER_CONFIRMED,
+            "lifecycle_policy": MemoryLifecyclePolicy.PERMANENT,
+            "record_version": 2,
+            "content_version": category_content_version(category),
+        }
+    )
+
+
 class _SearchStore:
     """搜索 seam 的内存权威 store。"""
 
@@ -65,18 +95,20 @@ class _SearchStore:
         self.memories = memories
         self.pending: dict[str, set[MemoryIndexTarget]] = {}
         self.access_error: BaseException | None = None
+        self.exact_queries: tuple[str, ...] = ()
 
     async def find_exact(
         self,
         source: str,
-        query: str,
+        queries: Sequence[str],
         categories: set[str] | None,
         *,
         user_id: str | None,
         limit: int,
     ) -> list[str]:
         """返回第一条权威记忆作为精确基线。"""
-        del source, query, categories, user_id, limit
+        del source, categories, user_id, limit
+        self.exact_queries = tuple(queries)
         return [self.memories[0].uid] if self.memories else []
 
     async def load_authority(
@@ -247,3 +279,41 @@ async def test_access_record_failure_does_not_hide_results() -> None:
     response = await _service(store).search("订单", "dw")
 
     assert [item.memory.uid for item in response.items] == [detail.uid]
+
+
+@pytest.mark.asyncio
+async def test_query_rule_adapter_projects_only_same_user_authority() -> None:
+    """Query 只看到同用户权威回查后的最小规则快照。"""
+    service = _service(_SearchStore([_rule_detail()]), ["memory-rule"], [])
+    recall = await MemoryQueryBindingRuleAdapter(service, limit=5).recall(
+        "user-1", "成交额", exact_aliases=["成交额"]
+    )
+    other = await MemoryQueryBindingRuleAdapter(service, limit=5).recall(
+        "other-user", "成交额", exact_aliases=["成交额"]
+    )
+
+    assert len(recall.candidates) == 1
+    candidate = recall.candidates[0]
+    assert (candidate.alias, candidate.target) == ("销售额", "实付金额")
+    assert (candidate.memory_uid, candidate.record_version) == ("memory-rule", 2)
+    assert candidate.content_hash == _rule_detail().content_hash
+    assert {"mysql_exact", "elasticsearch"}.issubset(candidate.signals)
+    assert other.candidates == []
+
+
+@pytest.mark.asyncio
+async def test_query_rule_exact_alias_uses_batched_mysql_baseline_when_indexes_fail(
+) -> None:
+    """多槽位 Query 的 exact alias 必须在一次 recall 内批量进入 MySQL 基线。"""
+    store = _SearchStore([_rule_detail()])
+    service = _service(store, TimeoutError(), ConnectionError())
+
+    recall = await MemoryQueryBindingRuleAdapter(service, limit=5).recall(
+        "user-1",
+        "销售额 地区",
+        exact_aliases=["销售额", "地区"],
+    )
+
+    assert [candidate.memory_uid for candidate in recall.candidates] == ["memory-rule"]
+    assert store.exact_queries == ("销售额", "地区")
+    assert set(recall.degraded_targets) == {"ELASTICSEARCH", "QDRANT"}

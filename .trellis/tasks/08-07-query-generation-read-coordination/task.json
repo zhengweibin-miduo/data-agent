@@ -1,0 +1,29 @@
+{
+  "id": "query-generation-read-coordination",
+  "name": "query-generation-read-coordination",
+  "title": "实现查询与同步的安全代次读写协调",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zwb",
+  "assignee": "zwb",
+  "createdAt": "2026-08-07",
+  "completedAt": null,
+  "branch": "fix/query-generation-read-coordination-20260807",
+  "base_branch": "master",
+  "worktree_path": "D:\\projiect\\data-agent\\.trellis\\worktrees\\08-07-query-generation-read-coordination",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_owner": "trellis",
+    "task_creation_policy": "trellis_managed"
+  }
+}

@@ -60,9 +60,11 @@ CREATE TABLE IF NOT EXISTS agent_conversation
     summary                    TEXT NULL COMMENT '异步生成的有界会话摘要',
     summary_through_message_id BIGINT NULL COMMENT '摘要已经覆盖到的消息内部主键',
     active_turn_uid            CHAR(64) NULL COMMENT '当前唯一在途轮次标识',
+    active_turn_claim_token    CHAR(32) NULL COMMENT '当前在途轮次的执行代次坐标',
+    turn_abandoned_at          DATETIME(6) NULL COMMENT '失败轮次的有限接管租约起点',
     created_at                 DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '会话创建时间',
-    updated_at                 DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                             ON UPDATE CURRENT_TIMESTAMP COMMENT '会话最近活动时间',
+    updated_at                 DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                                             ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '会话最近活动时间',
     INDEX idx_agent_conversation_user (user_id, updated_at, id)
 ) ENGINE = InnoDB COMMENT = '永久保存用户拥有的 Agent 文本会话';
 
@@ -75,6 +77,7 @@ CREATE TABLE IF NOT EXISTS agent_message
     turn_uid        CHAR(64) NOT NULL COMMENT '消息所属幂等轮次标识',
     role            VARCHAR(16) NOT NULL COMMENT '纯文本消息角色，仅允许 user 或 assistant',
     content         MEDIUMTEXT NOT NULL COMMENT '永久保存的纯文本消息内容',
+    semantic_fingerprint CHAR(64) NULL COMMENT '决定轮次语义的完整请求指纹',
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '消息创建时间',
     UNIQUE KEY uq_agent_message_turn_role
         (conversation_id, turn_uid, role),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -19,7 +20,13 @@ from conversation.models import (
     MessageRecord,
     MessageRole,
 )
-from models.memory import MemoryCandidate, MemoryDetail, UserMemoryCategory
+from errors import DataAgentError
+from models.memory import (
+    MemoryCandidate,
+    MemoryDetail,
+    QueryBindingRuleContent,
+    UserMemoryCategory,
+)
 
 
 def _message(identifier: int, role: MessageRole, content: str) -> MessageRecord:
@@ -78,7 +85,10 @@ class _ConversationStore:
         conversation_uid: str,
         turn_uid: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> StartedConversationTurn:
+        del semantic_fingerprint
         self.turn_committed = True
         return StartedConversationTurn(
             message=_message(2, MessageRole.USER, content),
@@ -92,8 +102,21 @@ class _ConversationStore:
         user_id: str,
         conversation_uid: str,
         turn_uid: str,
+        claim_token: str,
         content: str,
+        *,
+        semantic_fingerprint: str | None = None,
     ) -> MessageRecord:
+        raise NotImplementedError
+
+    async def abandon_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str, claim_token: str
+    ) -> None:
+        raise NotImplementedError
+
+    async def renew_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str, claim_token: str
+    ) -> bool:
         raise NotImplementedError
 
     async def assistant_message(
@@ -112,6 +135,17 @@ class _ConversationStore:
         assert after_id == 1
         return [_message(2, MessageRole.USER, "请使用公制")]
 
+    async def pending_query_chain(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        *,
+        through_id: int,
+        message_limit: int,
+        max_chars: int,
+    ) -> list[MessageRecord]:
+        return [_message(through_id, MessageRole.USER, "请使用公制")]
+
 
 class _MemoryReader:
     def __init__(self, store: _ConversationStore) -> None:
@@ -125,6 +159,99 @@ class _MemoryReader:
         assert (query, user_id, limit) == ("请使用公制", "user-a", 4)
         self.called = True
         return []
+
+
+class _ContextAndCleanupFailingStore(_ConversationStore):
+    """Fail both context loading and claim cleanup with distinct exceptions."""
+
+    async def start_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        content: str,
+        *,
+        semantic_fingerprint: str | None = None,
+    ) -> StartedConversationTurn:
+        started = await super().start_turn(
+            user_id,
+            conversation_uid,
+            turn_uid,
+            content,
+            semantic_fingerprint=semantic_fingerprint,
+        )
+        return StartedConversationTurn(
+            message=started.message,
+            conversation_id=started.conversation_id,
+            summary=started.summary,
+            summary_through_message_id=started.summary_through_message_id,
+            claim_token="c" * 32,
+        )
+
+    async def context_messages(
+        self,
+        user_id: str,
+        conversation_id: int,
+        *,
+        after_id: int | None,
+        limit: int,
+    ) -> list[MessageRecord]:
+        del user_id, conversation_id, after_id, limit
+        raise LookupError("context failed")
+
+    async def abandon_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str, claim_token: str
+    ) -> None:
+        del user_id, conversation_uid, turn_uid, claim_token
+        raise RuntimeError("cleanup failed")
+
+
+class _PublicContextFailingStore(_ConversationStore):
+    """Record claim cleanup when the public context load fails."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.abandoned: tuple[str, str, str, str] | None = None
+
+    async def start_turn(
+        self,
+        user_id: str,
+        conversation_uid: str,
+        turn_uid: str,
+        content: str,
+        *,
+        semantic_fingerprint: str | None = None,
+    ) -> StartedConversationTurn:
+        started = await super().start_turn(
+            user_id,
+            conversation_uid,
+            turn_uid,
+            content,
+            semantic_fingerprint=semantic_fingerprint,
+        )
+        return StartedConversationTurn(
+            message=started.message,
+            conversation_id=started.conversation_id,
+            summary=started.summary,
+            summary_through_message_id=started.summary_through_message_id,
+            claim_token="c" * 32,
+        )
+
+    async def context_messages(
+        self,
+        user_id: str,
+        conversation_id: int,
+        *,
+        after_id: int | None,
+        limit: int,
+    ) -> list[MessageRecord]:
+        del user_id, conversation_id, after_id, limit
+        raise LookupError("public context failed")
+
+    async def abandon_turn(
+        self, user_id: str, conversation_uid: str, turn_uid: str, claim_token: str
+    ) -> None:
+        self.abandoned = (user_id, conversation_uid, turn_uid, claim_token)
 
 
 class _UserDataEraser:
@@ -157,6 +284,167 @@ async def test_start_turn_recalls_only_after_authoritative_commit() -> None:
     assert reader.called
     assert response.context.summary == "旧摘要"
     assert [item.content for item in response.context.messages] == ["请使用公制"]
+
+
+@pytest.mark.asyncio
+async def test_public_start_renews_claim_while_loading_context() -> None:
+    """公开两步轮次在长期记忆召回期间也保持 claim。"""
+
+    class LeasingStore(_ConversationStore):
+        renewals = 0
+
+        async def start_turn(
+            self,
+            user_id: str,
+            conversation_uid: str,
+            turn_uid: str,
+            content: str,
+            *,
+            semantic_fingerprint: str | None = None,
+        ) -> StartedConversationTurn:
+            started = await super().start_turn(
+                user_id,
+                conversation_uid,
+                turn_uid,
+                content,
+                semantic_fingerprint=semantic_fingerprint,
+            )
+            return StartedConversationTurn(
+                message=started.message,
+                conversation_id=started.conversation_id,
+                summary=started.summary,
+                summary_through_message_id=started.summary_through_message_id,
+                claim_token="c" * 32,
+            )
+
+        async def renew_turn(
+            self,
+            user_id: str,
+            conversation_uid: str,
+            turn_uid: str,
+            claim_token: str,
+        ) -> bool:
+            del user_id, conversation_uid, turn_uid, claim_token
+            self.renewals += 1
+            return True
+
+    class SlowMemory(_MemoryReader):
+        async def recall(
+            self, query: str, user_id: str, *, limit: int
+        ) -> list[MemoryDetail]:
+            await asyncio.sleep(0.3)
+            return await super().recall(query, user_id, limit=limit)
+
+    store = LeasingStore()
+    service = ConversationService(
+        store,
+        SlowMemory(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    response = await service.start_public_turn(
+        "user-a", "conversation-a", "turn-a", "请使用公制"
+    )
+
+    assert response.claim_token == "c" * 32
+    assert store.renewals >= 1
+
+
+@pytest.mark.asyncio
+async def test_context_failure_is_not_replaced_by_claim_cleanup_failure() -> None:
+    """Claim cleanup remains best effort when authoritative context loading fails."""
+    store = _ContextAndCleanupFailingStore()
+    service = ConversationService(
+        store,
+        _MemoryReader(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    with pytest.raises(LookupError, match="context failed"):
+        await service.start_turn("user-a", "conversation-a", "turn-a", "请使用公制")
+
+
+@pytest.mark.asyncio
+async def test_public_context_failure_releases_claim_for_immediate_retry() -> None:
+    """公开上下文读取失败后释放已提交的 claim。"""
+    store = _PublicContextFailingStore()
+    service = ConversationService(
+        store,
+        _MemoryReader(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    with pytest.raises(LookupError, match="public context failed"):
+        await service.start_public_turn(
+            "user-a", "conversation-a", "turn-a", "请使用公制"
+        )
+
+    assert store.abandoned == (
+        "user-a",
+        "conversation-a",
+        "turn-a",
+        "c" * 32,
+    )
+
+
+@pytest.mark.asyncio
+async def test_public_lease_loss_during_context_load_is_retryable_conflict() -> None:
+    """公开上下文续租丢失必须投影为稳定的可重试冲突。"""
+
+    class LostLeaseStore(_PublicContextFailingStore):
+        async def context_messages(
+            self,
+            user_id: str,
+            conversation_id: int,
+            *,
+            after_id: int | None,
+            limit: int,
+        ) -> list[MessageRecord]:
+            del user_id, conversation_id, after_id, limit
+            await asyncio.sleep(1)
+            return []
+
+        async def renew_turn(
+            self,
+            user_id: str,
+            conversation_uid: str,
+            turn_uid: str,
+            claim_token: str,
+        ) -> bool:
+            del user_id, conversation_uid, turn_uid, claim_token
+            return False
+
+    store = LostLeaseStore()
+    service = ConversationService(
+        store,
+        _MemoryReader(store),
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    with pytest.raises(DataAgentError) as caught:
+        await service.start_public_turn(
+            "user-a", "conversation-a", "turn-a", "请使用公制"
+        )
+
+    assert caught.value.code == "conversation_lease_lost"
+    assert caught.value.http_status == 409
+    assert caught.value.retryable is True
 
 
 @pytest.mark.asyncio
@@ -269,6 +557,96 @@ async def test_extraction_public_seam_commits_only_validated_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_extraction_public_seam_commits_only_exact_query_binding_rule() -> None:
+    """规则必须由同一条用户原文逐字包含别名和目标。"""
+    claim = _claim([_message(1, MessageRole.USER, "销售额指实付金额")])
+    result = ExtractionResult(
+        summary="",
+        candidates=[
+            ExtractionCandidate(
+                category=UserMemoryCategory.QUERY_BINDING_RULE,
+                key="销售额",
+                value="实付金额",
+                supporting_user_quote="销售额指实付金额",
+                evidence_message_uids=["message-1"],
+            ),
+            ExtractionCandidate(
+                category=UserMemoryCategory.QUERY_BINDING_RULE,
+                key="成交额",
+                value="实付金额",
+                supporting_user_quote="销售额指实付金额",
+                evidence_message_uids=["message-1"],
+            ),
+        ],
+    )
+    claims = _ExtractionClaims(claim)
+    committer = _ExtractionCommitter()
+    extractor = ConversationMemoryExtractor(
+        _ExtractionModel(result),
+        claims,
+        committer,
+        batch_size=1,
+        max_concurrency=1,
+        lease_seconds=180,
+        message_limit=20,
+        summary_max_chars=4096,
+        content_version="v1",
+        projection_version="v1",
+    )
+
+    assert await extractor.dispatch() == 1
+    assert len(committer.candidates) == 1
+    content = committer.candidates[0].content
+    assert isinstance(content, QueryBindingRuleContent)
+    assert (content.alias, content.target) == ("销售额", "实付金额")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "alias", "target"),
+    [
+        ("销售额不是实付金额", "销售额", "实付金额"),
+        ("退款金额", "金额", "退款金额"),
+    ],
+)
+async def test_extraction_rejects_unproven_query_binding_relationship(
+    message: str,
+    alias: str,
+    target: str,
+) -> None:
+    """否定表达或仅子串共现不得生成权威绑定规则。"""
+    claim = _claim([_message(1, MessageRole.USER, message)])
+    result = ExtractionResult(
+        summary="",
+        candidates=[
+            ExtractionCandidate(
+                category=UserMemoryCategory.QUERY_BINDING_RULE,
+                key=alias,
+                value=target,
+                supporting_user_quote=message,
+                evidence_message_uids=["message-1"],
+            )
+        ],
+    )
+    committer = _ExtractionCommitter()
+    extractor = ConversationMemoryExtractor(
+        _ExtractionModel(result),
+        _ExtractionClaims(claim),
+        committer,
+        batch_size=1,
+        max_concurrency=1,
+        lease_seconds=180,
+        message_limit=20,
+        summary_max_chars=4096,
+        content_version="v1",
+        projection_version="v1",
+    )
+
+    assert await extractor.dispatch() == 1
+    assert committer.candidates == []
+
+
+@pytest.mark.asyncio
 async def test_extraction_commit_failure_releases_claim_for_retry() -> None:
     """验证原子提交失败后保留提炼任务并登记退避。"""
     claim = _claim([_message(1, MessageRole.USER, "我只使用公制单位")])
@@ -290,3 +668,47 @@ async def test_extraction_commit_failure_releases_claim_for_retry() -> None:
 
     assert processed == 0
     assert claims.retries == [(1, "RuntimeError")]
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_replay_skips_remote_memory_context() -> None:
+    """已完成轮次回放不依赖远程长期记忆。"""
+
+    class ReplayStore(_ConversationStore):
+        async def start_turn(
+            self, *args: object, **kwargs: object
+        ) -> StartedConversationTurn:
+            self.turn_committed = True
+            return StartedConversationTurn(
+                message=_message(2, MessageRole.USER, "已完成问题"),
+                conversation_id=1,
+                summary="旧摘要",
+                summary_through_message_id=1,
+                execution_owner=False,
+            )
+
+        async def assistant_message(
+            self, user_id: str, conversation_uid: str, turn_uid: str
+        ) -> MessageRecord | None:
+            del user_id, conversation_uid, turn_uid
+            return _message(3, MessageRole.ASSISTANT, "已完成答案")
+
+    store = ReplayStore()
+    reader = _MemoryReader(store)
+    service = ConversationService(
+        store,
+        reader,
+        _UserDataEraser(),
+        context_message_limit=20,
+        context_max_chars=128,
+        summary_max_chars=64,
+        memory_search_limit=4,
+    )
+
+    response = await service.start_turn(
+        "user-a", "conversation-a", "turn-a", "已完成问题"
+    )
+
+    assert response.execution_owner is False
+    assert response.context.messages == []
+    assert reader.called is False

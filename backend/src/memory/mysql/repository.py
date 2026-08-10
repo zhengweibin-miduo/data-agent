@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import RowMapping, and_, func, or_, select, text, true, update
@@ -883,13 +884,16 @@ class MemoryRepository:
     async def find_exact_query(
         self,
         source: str,
-        query: str,
+        queries: Sequence[str],
         categories: set[str] | None,
         *,
         user_id: str | None = None,
         limit: int,
     ) -> list[str]:
-        """以 scope key 或完整投影文本执行安全的 MySQL 精确基线检索。"""
+        """批量以 scope key 或完整投影文本执行安全的 MySQL 精确基线检索。"""
+        exact_queries = tuple(dict.fromkeys(query for query in queries if query))
+        normalized_keys = tuple(query.strip().casefold() for query in exact_queries)
+        text_hashes = tuple(memory_text_hash(query) for query in exact_queries)
         # 步骤一：构造来源、租户、状态、版本和精确文本的权威过滤条件。
         filters = [
             agent_memory.c.source == source,
@@ -937,8 +941,8 @@ class MemoryRepository:
             # 哈希（memory_text 是 TEXT 列，全等比较无法走索引，会退化为按 source
             # 范围扫描并成为检索延迟主项）。
             or_(
-                agent_memory.c.memory_key == query,
-                agent_memory.c.memory_text_hash == memory_text_hash(query),
+                agent_memory.c.memory_key.in_(normalized_keys),
+                agent_memory.c.memory_text_hash.in_(text_hashes),
             ),
         ]
         if categories:

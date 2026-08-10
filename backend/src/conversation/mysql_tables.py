@@ -13,7 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.dialects.mysql import DATETIME, MEDIUMTEXT
 
 from persistence.schema import metadata
 from settings import app_config
@@ -27,13 +27,15 @@ agent_conversation = Table(
     Column("summary", Text, nullable=True),
     Column("summary_through_message_id", BigInteger, nullable=True),
     Column("active_turn_uid", String(64), nullable=True),
+    Column("active_turn_claim_token", String(32), nullable=True),
+    Column("turn_abandoned_at", DATETIME(fsp=6), nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     Column(
         "updated_at",
-        DateTime,
+        DATETIME(fsp=6),
         nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
+        server_default=func.now(6),
+        onupdate=func.now(6),
     ),
     Index("idx_agent_conversation_user", "user_id", "updated_at", "id"),
     schema=app_config.memory.database,
@@ -57,6 +59,7 @@ agent_message = Table(
     Column("turn_uid", String(64), nullable=False),
     Column("role", String(16), nullable=False),
     Column("content", MEDIUMTEXT, nullable=False),
+    Column("semantic_fingerprint", String(64), nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     UniqueConstraint(
         "conversation_id",

@@ -1,5 +1,6 @@
 """四张 Meta 业务表的原子快照同步。"""
 
+import hashlib
 from collections.abc import Iterable
 
 from sqlalchemy import Table, delete, exists, select
@@ -10,6 +11,7 @@ from ddl_metadata.persistence.tables import (
     column_info,
     column_metric,
     metric_info,
+    physical_schema_authority,
     table_info,
 )
 from models.physical import PhysicalSchema
@@ -19,12 +21,60 @@ from models.semantic import (
 )
 
 
+def authority_scope_key(table_ids: Iterable[str]) -> str:
+    """返回 accepted 局部表集合的稳定权威槽位标识。"""
+    canonical_scope = "\n".join(sorted(table_ids))
+    return hashlib.sha256(canonical_scope.encode()).hexdigest()
+
+
+def authority_scopes_overlap(
+    existing_table_ids: Iterable[str], submitted_table_ids: Iterable[str]
+) -> bool:
+    """判断两个 accepted 局部表范围是否相交。"""
+    return not set(existing_table_ids).isdisjoint(submitted_table_ids)
+
+
 class MetadataRepository:
     """在调用方提供的事务内同步 Meta 快照。"""
 
     def __init__(self, session: AsyncSession) -> None:
         """绑定由调用方管理事务边界的 Session。"""
         self._session = session
+
+    async def authority_target_tables_overlapping(
+        self, schema: PhysicalSchema
+    ) -> set[str]:
+        """返回本次验收会撤销的 authority scope 所有 DW 目标表。"""
+        submitted = {table.id for table in schema.tables}
+        authority_rows = (
+            (
+                await self._session.execute(
+                    select(physical_schema_authority.c.table_ids).where(
+                        physical_schema_authority.c.source == schema.source
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        impacted_ids = {
+            str(table_id)
+            for row in authority_rows
+            if authority_scopes_overlap(row["table_ids"] or (), submitted)
+            for table_id in (row["table_ids"] or ())
+        } | submitted
+        if not impacted_ids:
+            return set()
+        names = (
+            await self._session.execute(
+                select(table_info.c.id, table_info.c.name).where(
+                    table_info.c.id.in_(impacted_ids)
+                )
+            )
+        ).all()
+        targets = {str(name).rsplit(".", 1)[-1] for _, name in names}
+        targets.update(table.name for table in schema.tables)
+        return targets
 
     async def _upsert(
         self,
@@ -58,6 +108,30 @@ class MetadataRepository:
         semantic_tables = {table.table_id: table for table in metadata.tables}
         semantic_columns = {column.column_id: column for column in metadata.columns}
         submitted_table_ids = [table.id for table in schema.tables]
+        authority_rows = (
+            (
+                await self._session.execute(
+                    select(
+                        physical_schema_authority.c.scope_key,
+                        physical_schema_authority.c.table_ids,
+                    ).where(physical_schema_authority.c.source == schema.source)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        stale_scope_keys = [
+            str(row["scope_key"])
+            for row in authority_rows
+            if authority_scopes_overlap(row["table_ids"] or (), submitted_table_ids)
+        ]
+        if stale_scope_keys:
+            await self._session.execute(
+                delete(physical_schema_authority).where(
+                    physical_schema_authority.c.source == schema.source,
+                    physical_schema_authority.c.scope_key.in_(stale_scope_keys),
+                )
+            )
         existing_column_ids = set(
             (
                 await self._session.scalars(
@@ -82,6 +156,19 @@ class MetadataRepository:
                     )
                 ).all()
             )
+
+        await self._upsert(
+            physical_schema_authority,
+            [
+                {
+                    "source": schema.source,
+                    "scope_key": authority_scope_key(submitted_table_ids),
+                    "schema_fingerprint": schema.schema_fingerprint,
+                    "table_ids": sorted(submitted_table_ids),
+                }
+            ],
+            ("schema_fingerprint", "table_ids"),
+        )
 
         # 步骤二：依次 upsert 当前表、列和指标内容，保留静态表定义与绑定参数。
         await self._upsert(

@@ -38,6 +38,16 @@ tei:
 
 mysql:
   url: mysql+asyncmy://data_agent:data_agent@localhost:3306/meta?charset=utf8mb4
+  generation_lock_pool_size: 16
+  generation_lock_pool_timeout_seconds: 1
+
+query:
+  read_url: mysql+asyncmy://data_agent_query:data_agent_query@localhost:3306/dw?charset=utf8mb4
+  timeout_seconds: 10
+  fetch_batch_rows: 500
+  max_batch_bytes: 1048576
+  clarification_chain_message_limit: 100
+  clarification_chain_max_chars: 262144
 
 data_sync:
   database: data_sync

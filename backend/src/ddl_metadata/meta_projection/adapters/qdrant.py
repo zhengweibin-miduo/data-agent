@@ -59,7 +59,17 @@ class QdrantSemanticIndex:
         query: str,
         kinds: set[MetadataObjectKind] | None,
         limit: int,
+        *,
+        table_ids: set[str] | None = None,
+        column_ids: set[str] | None = None,
     ) -> list[MetadataSemanticHit]:
         """向量化查询并返回有界语义候选身份。"""
         vector = await self._embeddings.aembed_query(query)
-        return await self._index.search(query, vector, kinds, limit)
+        return await self._index.search(
+            query,
+            vector,
+            kinds,
+            limit,
+            table_ids=table_ids,
+            column_ids=column_ids,
+        )
