@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from loguru import logger
 
@@ -42,6 +43,32 @@ _AMBIGUOUS_CONFIRMATIONS = {
     "是",
     "对",
 }
+
+_QUERY_BINDING_RELATIONS = (
+    "指",
+    "指的是",
+    "是",
+    "就是",
+    "对应",
+    "表示",
+    "等于",
+    "意为",
+)
+
+
+def _proves_query_binding(quote: str, alias: str, target: str) -> bool:
+    """仅接受原文明确声明的肯定别名映射。"""
+    relation = "|".join(
+        sorted(map(re.escape, _QUERY_BINDING_RELATIONS), key=len, reverse=True)
+    )
+    return (
+        re.search(
+            rf"{re.escape(alias)}\s*(?:{relation})\s*{re.escape(target)}",
+            quote,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def validate_extraction_candidates(
@@ -106,9 +133,8 @@ def validate_extraction_candidates(
 
         if candidate.category == UserMemoryCategory.QUERY_BINDING_RULE:
             alias = candidate.key.strip()
-            if (
-                alias not in candidate.supporting_user_quote
-                or value not in candidate.supporting_user_quote
+            if not _proves_query_binding(
+                candidate.supporting_user_quote, alias, value
             ):
                 continue
             content = QueryBindingRuleContent(

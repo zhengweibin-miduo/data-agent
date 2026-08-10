@@ -127,7 +127,9 @@ an owned evidence message. An assistant conclusion additionally requires the
 assistant quote and a later user message that repeats that conclusion.
 The `user.query_binding_rule` category is permanent and user-scoped. Its model
 proposal uses `key=anchor alias` and `value=exact Meta target`; deterministic
-validation requires both texts in the same owned user quote and stores typed
+validation requires the same owned user quote to state the complete alias,
+an approved affirmative mapping relation, and the complete target in order;
+negation and mere substring co-occurrence fail closed. Accepted rules store typed
 `QueryBindingRuleContent`. Generic `user.business_rule` text is never Query
 execution authority. The existing active-key lifecycle keeps one ACTIVE version
 per normalized user/category/alias scope.

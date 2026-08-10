@@ -171,6 +171,23 @@ class _FixedMatcher:
         return self._decisions
 
 
+class _RecordingMatcher:
+    """记录语义匹配 allowlist，用于验证 exact baseline 隔离。"""
+
+    def __init__(self) -> None:
+        self.rules: list[QueryBindingRuleCandidate] = []
+
+    async def match(
+        self, slot_quotes: list[str], rules: list[QueryBindingRuleCandidate]
+    ) -> list[QueryRuleDecision]:
+        self.rules = rules
+        return [
+            QueryRuleDecision(
+                slot_quote=slot_quotes[0], memory_uid=rules[0].memory_uid
+            )
+        ]
+
+
 def _rule() -> QueryBindingRuleCandidate:
     return QueryBindingRuleCandidate(
         alias="销售额",
@@ -264,6 +281,40 @@ async def test_confusable_phrase_abstention_keeps_clarification() -> None:
     )
     assert isinstance(result, QueryClarification)
     assert result.quote == "销售税额"
+
+
+async def test_semantic_matcher_excludes_mysql_only_exact_baseline_rules() -> None:
+    """其他槽位的 MySQL exact 候选不得进入当前槽位的语义匹配。"""
+    matcher = _RecordingMatcher()
+    semantic = _rule()
+    exact_only = _rule().model_copy(
+        update={
+            "alias": "订单金额",
+            "memory_uid": "memory-order-amount",
+            "signals": ["mysql_exact", "exact"],
+        }
+    )
+    search = _Search(
+        [
+            _candidate(
+                MetadataObjectKind.COLUMN,
+                "column-amount",
+                "amount",
+                aliases=["实付金额"],
+            )
+        ]
+    )
+
+    result = await QueryMetadataAdapter(search, matcher).build_context(
+        "成交额",
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["成交额"]),
+        _schema(),
+        rule_recall=QueryBindingRuleRecall(candidates=[exact_only, semantic]),
+    )
+
+    assert [rule.memory_uid for rule in matcher.rules] == ["memory-sales"]
+    assert not isinstance(result, QueryClarification)
+    assert result.bindings == {"成交额": "column-amount"}
 
 
 @pytest.mark.parametrize(

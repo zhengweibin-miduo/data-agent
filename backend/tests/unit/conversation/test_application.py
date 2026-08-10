@@ -602,6 +602,51 @@ async def test_extraction_public_seam_commits_only_exact_query_binding_rule() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "alias", "target"),
+    [
+        ("销售额不是实付金额", "销售额", "实付金额"),
+        ("退款金额", "金额", "退款金额"),
+    ],
+)
+async def test_extraction_rejects_unproven_query_binding_relationship(
+    message: str,
+    alias: str,
+    target: str,
+) -> None:
+    """否定表达或仅子串共现不得生成权威绑定规则。"""
+    claim = _claim([_message(1, MessageRole.USER, message)])
+    result = ExtractionResult(
+        summary="",
+        candidates=[
+            ExtractionCandidate(
+                category=UserMemoryCategory.QUERY_BINDING_RULE,
+                key=alias,
+                value=target,
+                supporting_user_quote=message,
+                evidence_message_uids=["message-1"],
+            )
+        ],
+    )
+    committer = _ExtractionCommitter()
+    extractor = ConversationMemoryExtractor(
+        _ExtractionModel(result),
+        _ExtractionClaims(claim),
+        committer,
+        batch_size=1,
+        max_concurrency=1,
+        lease_seconds=180,
+        message_limit=20,
+        summary_max_chars=4096,
+        content_version="v1",
+        projection_version="v1",
+    )
+
+    assert await extractor.dispatch() == 1
+    assert committer.candidates == []
+
+
+@pytest.mark.asyncio
 async def test_extraction_commit_failure_releases_claim_for_retry() -> None:
     """验证原子提交失败后保留提炼任务并登记退避。"""
     claim = _claim([_message(1, MessageRole.USER, "我只使用公制单位")])

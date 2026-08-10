@@ -65,6 +65,7 @@ _SLOT_LABELS = {
     "filter": "过滤字段",
     "sort": "排序对象",
 }
+_SEMANTIC_RULE_SIGNALS = {"elasticsearch", "qdrant"}
 
 
 class QueryMetadataAdapter:
@@ -260,7 +261,12 @@ class QueryMetadataAdapter:
 
         selected_rules: dict[str, QueryBindingRuleCandidate] = {}
         semantic_quotes: list[str] = []
-        by_uid = {rule.memory_uid: rule for rule in rules.candidates}
+        semantic_rules = [
+            rule
+            for rule in rules.candidates
+            if _SEMANTIC_RULE_SIGNALS.intersection(rule.signals)
+        ]
+        semantic_by_uid = {rule.memory_uid: rule for rule in semantic_rules}
         for _slot, quote, _kinds in unresolved:
             exact = [
                 rule
@@ -281,13 +287,13 @@ class QueryMetadataAdapter:
                 retryable=True,
                 http_status=503,
             )
-        if semantic_quotes and rules.candidates and self._matcher is not None:
-            decisions = await self._matcher.match(semantic_quotes, rules.candidates)
+        if semantic_quotes and semantic_rules and self._matcher is not None:
+            decisions = await self._matcher.match(semantic_quotes, semantic_rules)
             seen: set[str] = set()
             for decision in decisions:
                 if (
                     decision.slot_quote not in semantic_quotes
-                    or decision.memory_uid not in by_uid
+                    or decision.memory_uid not in semantic_by_uid
                     or decision.slot_quote in seen
                 ):
                     raise DataAgentError(
@@ -297,7 +303,9 @@ class QueryMetadataAdapter:
                         http_status=502,
                     )
                 seen.add(decision.slot_quote)
-                selected_rules[decision.slot_quote] = by_uid[decision.memory_uid]
+                selected_rules[decision.slot_quote] = semantic_by_uid[
+                    decision.memory_uid
+                ]
 
         for slot, quote, kinds in unresolved:
             rule = selected_rules.get(quote)

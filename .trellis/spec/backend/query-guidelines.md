@@ -289,3 +289,6 @@ async for batch in readonly_executor.execute(validated):
   capped independently of the configured NDJSON row batch.
 - Reverse aggregation coverage treats the bounded `<object>有多少` family as
   count evidence, so it cannot be downgraded to a detail result shape.
+- MySQL exact-baseline binding rules are authoritative only for their own
+  normalized exact alias. Semantic Rule Matcher allowlists and returned
+  decisions require a converged `elasticsearch` or `qdrant` signal.
