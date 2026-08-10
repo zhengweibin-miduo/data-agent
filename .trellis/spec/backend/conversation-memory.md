@@ -125,6 +125,13 @@ commits a short lease before calling the LLM, and bounds each claim wave by LLM
 concurrency. A candidate is accepted only when its exact user quote occurs in
 an owned evidence message. An assistant conclusion additionally requires the
 assistant quote and a later user message that repeats that conclusion.
+The `user.query_binding_rule` category is permanent and user-scoped. Its model
+proposal uses `key=anchor alias` and `value=exact Meta target`; deterministic
+validation requires both texts in the same owned user quote and stores typed
+`QueryBindingRuleContent`. Generic `user.business_rule` text is never Query
+execution authority. The existing active-key lifecycle keeps one ACTIVE version
+per normalized user/category/alias scope.
+
 Summary cursors only advance. Because `available_at` is written by a MySQL
 default, claim eligibility and lease expiry also use MySQL `NOW()`; mixing the
 application clock with the database clock can hide newly created work during

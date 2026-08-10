@@ -26,6 +26,8 @@ from memory.domain.policies import category_policy, user_memory_category
 from models.memory import (
     MemoryCandidate,
     MemoryTrust,
+    QueryBindingRuleContent,
+    UserMemoryCategory,
     UserMemoryContent,
 )
 
@@ -102,12 +104,27 @@ def validate_extraction_candidates(
         elif candidate.assistant_quote is not None:
             continue
 
-        content = UserMemoryContent(
-            value=value,
-            supporting_user_quote=candidate.supporting_user_quote,
-            evidence_message_uids=candidate.evidence_message_uids,
-            confirmed_assistant_message_uid=assistant_uid,
-        )
+        if candidate.category == UserMemoryCategory.QUERY_BINDING_RULE:
+            alias = candidate.key.strip()
+            if (
+                alias not in candidate.supporting_user_quote
+                or value not in candidate.supporting_user_quote
+            ):
+                continue
+            content = QueryBindingRuleContent(
+                alias=alias,
+                target=value,
+                supporting_user_quote=candidate.supporting_user_quote,
+                evidence_message_uids=candidate.evidence_message_uids,
+                confirmed_assistant_message_uid=assistant_uid,
+            )
+        else:
+            content = UserMemoryContent(
+                value=value,
+                supporting_user_quote=candidate.supporting_user_quote,
+                evidence_message_uids=candidate.evidence_message_uids,
+                confirmed_assistant_message_uid=assistant_uid,
+            )
         # 步骤五：同批结果按类别和规范化键占用一个逻辑作用域。
         category = user_memory_category(candidate.category)
         logical_key = f"{category}:{memory_key}"

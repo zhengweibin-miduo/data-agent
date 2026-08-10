@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -137,16 +138,16 @@ class MySQLMemorySearchStore:
     async def find_exact(
         self,
         source: str,
-        query: str,
+        queries: Sequence[str],
         categories: set[str] | None,
         *,
         user_id: str | None,
         limit: int,
     ) -> list[str]:
-        """返回 MySQL 精确基线候选。"""
+        """批量返回 MySQL 精确基线候选。"""
         async with MySQLDatabase.session() as session:
             return await MemoryRepository(session).find_exact_query(
-                source, query, categories, user_id=user_id, limit=limit
+                source, queries, categories, user_id=user_id, limit=limit
             )
 
     async def load_authority(

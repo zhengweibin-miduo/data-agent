@@ -49,6 +49,7 @@ from query.adapters.llm import QueryLLMAdapter
 from query.adapters.metadata import QueryMetadataAdapter
 from query.adapters.mysql import MySQLQueryExecutor
 from query.adapters.readiness import QueryReadinessAdapter
+from query.adapters.rules import MemoryQueryBindingRuleAdapter
 from query.application.service import QueryApplication
 from settings import app_config
 
@@ -136,7 +137,10 @@ async def _lifespan_resources(app: FastAPI) -> AsyncIterator[None]:
     app.state.query = QueryApplication(
         conversations=conversations,
         intents=query_model,
-        metadata=QueryMetadataAdapter(meta_projection.search),
+        metadata=QueryMetadataAdapter(meta_projection.search, query_model),
+        binding_rules=MemoryQueryBindingRuleAdapter(
+            memory_runtime.search, limit=app_config.memory.search_limit
+        ),
         planner=query_model,
         readiness=QueryReadinessAdapter(
             create_data_readiness_tool(),

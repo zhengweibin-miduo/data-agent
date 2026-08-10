@@ -17,6 +17,7 @@ from ddl_metadata.parsing import parse_ddl
 from errors import DataAgentError
 from query.application.contracts import (
     ConversationPort,
+    QueryBindingRulePort,
     QueryClarification,
     QueryEvent,
     QueryExecutorPort,
@@ -49,6 +50,7 @@ class QueryApplication:
         planner: QueryPlannerPort,
         readiness: QueryReadinessPort,
         executor: QueryExecutorPort,
+        binding_rules: QueryBindingRulePort | None = None,
         dw_database: str,
         turn_lease_seconds: int = 600,
         now: Callable[[], datetime] | None = None,
@@ -64,6 +66,7 @@ class QueryApplication:
         self._planner = planner
         self._readiness = readiness
         self._executor = executor
+        self._binding_rules = binding_rules
         self._dw_database = dw_database
         self._turn_lease_seconds = turn_lease_seconds
         self._now = now or (lambda: datetime.now(UTC))
@@ -195,7 +198,7 @@ class QueryApplication:
                     "查询意图缺少可验证的用户原文证据",
                     http_status=422,
                 ) from error
-            context_or_clarification = await self._metadata.build_context(
+            slot_text = (
                 " ".join(
                     [*intent.measure_quotes, *intent.dimension_quotes]
                     + [item.column_quote for item in intent.filters]
@@ -212,10 +215,34 @@ class QueryApplication:
                     )
                     + [item.quote for item in intent.sorts]
                 )
-                or request.question,
-                intent,
-                schema,
+                or request.question
             )
+            exact_rule_aliases = list(
+                dict.fromkeys(
+                    [*intent.measure_quotes, *intent.dimension_quotes]
+                    + [item.column_quote for item in intent.filters]
+                    + ([intent.time_column_quote] if intent.time_column_quote else [])
+                    + (
+                        [intent.time_filter.column_quote]
+                        if intent.time_filter is not None
+                        else []
+                    )
+                    + [item.quote for item in intent.sorts]
+                )
+            )
+            if self._binding_rules is None:
+                context_or_clarification = await self._metadata.build_context(
+                    slot_text, intent, schema
+                )
+            else:
+                rule_recall = await self._binding_rules.recall(
+                    request.user_id,
+                    slot_text,
+                    exact_aliases=exact_rule_aliases,
+                )
+                context_or_clarification = await self._metadata.build_context(
+                    slot_text, intent, schema, rule_recall=rule_recall
+                )
             # 步骤四：绑定未唯一时只完成一个最高影响澄清，不进入 SQL 路径。
             if isinstance(context_or_clarification, QueryClarification):
                 completion_started.set()

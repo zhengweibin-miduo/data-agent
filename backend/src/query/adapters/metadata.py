@@ -9,8 +9,14 @@ from ddl_metadata.meta_projection.models import (
 )
 from errors import DataAgentError
 from models.physical import PhysicalSchema
-from query.application.contracts import QueryClarification
+from query.application.contracts import (
+    QueryBindingRuleCandidate,
+    QueryBindingRuleRecall,
+    QueryClarification,
+    QueryRuleMatcherPort,
+)
 from query.domain import (
+    QueryBindingRuleProof,
     QueryContext,
     QueryIntent,
     QueryMetadataCandidate,
@@ -64,9 +70,12 @@ _SLOT_LABELS = {
 class QueryMetadataAdapter:
     """以一次 Meta 召回完成权威绑定，再执行一次字段值召回。"""
 
-    def __init__(self, search: MetadataSearchPort) -> None:
+    def __init__(
+        self, search: MetadataSearchPort, matcher: QueryRuleMatcherPort | None = None
+    ) -> None:
         """绑定现有 Meta Projection 搜索用例。"""
         self._search = search
+        self._matcher = matcher
 
     async def relationships_are_authoritative(self, schema: PhysicalSchema) -> bool:
         """重新核验请求物理模式仍是当前 accepted snapshot。"""
@@ -84,8 +93,13 @@ class QueryMetadataAdapter:
         schema = context.physical_schema
         table_ids = {table.id for table in schema.tables}
         column_ids = {column.id for table in schema.tables for column in table.columns}
+        binding_texts = {
+            quote: proof.target for quote, proof in context.rule_proofs.items()
+        }
         candidates = await self._search.search_metadata(
-            " ".join(context.bindings), table_ids=table_ids, column_ids=column_ids
+            " ".join(binding_texts.get(quote, quote) for quote in context.bindings),
+            table_ids=table_ids,
+            column_ids=column_ids,
         )
         return all(
             [
@@ -93,7 +107,10 @@ class QueryMetadataAdapter:
                 for candidate in candidates
                 if self._in_scope(candidate, table_ids, column_ids)
                 and candidate.kind.value == context.binding_kinds.get(quote)
-                and self._matches(quote, candidate)
+                and self._matches(
+                    binding_texts.get(quote, quote),
+                    candidate,
+                )
             ]
             == [object_id]
             for quote, object_id in context.bindings.items()
@@ -104,13 +121,19 @@ class QueryMetadataAdapter:
         question: str,
         intent: QueryIntent,
         schema: PhysicalSchema,
+        *,
+        rule_recall: QueryBindingRuleRecall | None = None,
     ) -> QueryContext | QueryClarification:
         """按当前 DDL allowlist 绑定槽位并构建有界查询上下文。"""
         # 步骤一：完整问题只触发一次既有 table/column/metric 混合召回。
         table_ids = {table.id for table in schema.tables}
         column_ids = {column.id for table in schema.tables for column in table.columns}
+        rules = rule_recall or QueryBindingRuleRecall(candidates=[])
+        recall_query = " ".join(
+            [question, *(rule.target for rule in rules.candidates)]
+        ).strip()
         recalled = await self._search.search_metadata(
-            question, table_ids=table_ids, column_ids=column_ids
+            recall_query, table_ids=table_ids, column_ids=column_ids
         )
         relationships_authoritative = await self._search.schema_is_authoritative(
             schema.source,
@@ -194,7 +217,10 @@ class QueryMetadataAdapter:
                 question="请明确要查询的指标或字段？",
             )
         bindings: dict[str, str] = {}
+        rule_proofs: dict[str, QueryBindingRuleProof] = {}
         retained: dict[str, MetadataCandidate] = {}
+        unresolved: list[tuple[str, str, set[MetadataObjectKind]]] = []
+        normal_by_quote: dict[str, list[MetadataCandidate]] = {}
         for slot, quote, kinds in slots:
             matches = [
                 candidate
@@ -224,7 +250,70 @@ class QueryMetadataAdapter:
                         for candidate in candidates
                         if candidate.object_id in exact_column_ids
                     ]
-            if len(matches) != 1:
+            normal_by_quote[quote] = matches
+            if len(matches) == 1:
+                candidate = matches[0]
+                bindings[quote] = candidate.object_id
+                retained[candidate.object_id] = candidate
+            else:
+                unresolved.append((slot, quote, kinds))
+
+        selected_rules: dict[str, QueryBindingRuleCandidate] = {}
+        semantic_quotes: list[str] = []
+        by_uid = {rule.memory_uid: rule for rule in rules.candidates}
+        for _slot, quote, _kinds in unresolved:
+            exact = [
+                rule
+                for rule in rules.candidates
+                if rule.alias.casefold().strip() == quote.casefold().strip()
+            ]
+            if len(exact) == 1:
+                selected_rules[quote] = exact[0]
+            elif exact:
+                continue
+            else:
+                semantic_quotes.append(quote)
+        if semantic_quotes and rules.degraded_targets:
+            raise DataAgentError(
+                "query_rule_unavailable",
+                "query_rule_recall",
+                "查询规则召回暂不可用，请重试",
+                retryable=True,
+                http_status=503,
+            )
+        if semantic_quotes and rules.candidates and self._matcher is not None:
+            decisions = await self._matcher.match(semantic_quotes, rules.candidates)
+            seen: set[str] = set()
+            for decision in decisions:
+                if (
+                    decision.slot_quote not in semantic_quotes
+                    or decision.memory_uid not in by_uid
+                    or decision.slot_quote in seen
+                ):
+                    raise DataAgentError(
+                        "query_rule_match_invalid",
+                        "query_rule_match",
+                        "查询规则匹配结果无效",
+                        http_status=502,
+                    )
+                seen.add(decision.slot_quote)
+                selected_rules[decision.slot_quote] = by_uid[decision.memory_uid]
+
+        for slot, quote, kinds in unresolved:
+            rule = selected_rules.get(quote)
+            target_matches = (
+                []
+                if rule is None
+                else [
+                    candidate
+                    for candidate in candidates
+                    if candidate.kind in kinds
+                    and candidate.kind != MetadataObjectKind.METRIC
+                    and self._matches(rule.target, candidate)
+                ]
+            )
+            if len(target_matches) != 1:
+                matches = normal_by_quote[quote]
                 names = "、".join(candidate.name for candidate in matches[:3])
                 suffix = f"，候选为：{names}" if names else ""
                 return QueryClarification(
@@ -232,9 +321,16 @@ class QueryMetadataAdapter:
                     quote=quote,
                     question=f"请明确“{quote}”对应的{_SLOT_LABELS[slot]}{suffix}？",
                 )
-            candidate = matches[0]
+            candidate = target_matches[0]
+            assert rule is not None
             bindings[quote] = candidate.object_id
             retained[candidate.object_id] = candidate
+            rule_proofs[quote] = QueryBindingRuleProof(
+                target=rule.target,
+                memory_uid=rule.memory_uid,
+                record_version=rule.record_version,
+                content_hash=rule.content_hash,
+            )
         # 步骤四：指标关联字段和已绑定字段共同限定唯一一次值召回。
         value_column_ids = {
             object_id for object_id in bindings.values() if object_id in column_ids
@@ -268,6 +364,7 @@ class QueryMetadataAdapter:
                 quote: retained[object_id].kind.value
                 for quote, object_id in bindings.items()
             },
+            rule_proofs=rule_proofs,
         )
 
     @staticmethod

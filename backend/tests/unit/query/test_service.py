@@ -26,6 +26,8 @@ from query.adapters.llm import QueryLLMAdapter
 from query.application.contracts import (
     ConversationPort,
     QueryBatch,
+    QueryBindingRulePort,
+    QueryBindingRuleRecall,
     QueryClarification,
     QueryExecutorPort,
     QueryExplainRejected,
@@ -457,6 +459,48 @@ class _Metadata:
         )
 
 
+class _BindingRules:
+    """记录 Query Application 发起的用户规则召回。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, list[str]]] = []
+        self.snapshot = QueryBindingRuleRecall(candidates=[])
+
+    async def recall(
+        self,
+        user_id: str,
+        query_text: str,
+        *,
+        exact_aliases: list[str],
+    ) -> QueryBindingRuleRecall:
+        """返回同一次调用需要传给 Meta 的权威规则快照。"""
+        self.calls.append((user_id, query_text, exact_aliases))
+        return self.snapshot
+
+
+class _RuleAwareMetadata:
+    """记录 Query Application 传入的规则快照。"""
+
+    def __init__(self) -> None:
+        self.rule_recall: QueryBindingRuleRecall | None = None
+
+    async def build_context(
+        self,
+        _question: str,
+        _intent: QueryIntent,
+        _schema: PhysicalSchema,
+        *,
+        rule_recall: QueryBindingRuleRecall | None = None,
+    ) -> QueryClarification:
+        """记录快照并返回澄清，阻止测试进入 SQL 路径。"""
+        self.rule_recall = rule_recall
+        return QueryClarification(
+            slot="measure",
+            quote="销售额",
+            question="请明确销售额口径",
+        )
+
+
 class _MustNotRun:
     """若澄清分支越过门禁则立即使测试失败。"""
 
@@ -557,6 +601,41 @@ async def test_stream_completes_only_one_authoritative_clarification() -> None:
     assert [event.kind for event in events] == ["clarification"]
     assert events[0].message == "“销售额”是下单金额还是支付金额？"
     assert conversations.completed == ["“销售额”是下单金额还是支付金额？"]
+
+
+async def test_stream_recalls_rules_and_passes_snapshot_to_metadata() -> None:
+    """Query public seam 必须按当前用户与槽位文本传递同一权威规则快照。"""
+    binding_rules = _BindingRules()
+    metadata = _RuleAwareMetadata()
+    application = QueryApplication(
+        conversations=cast(ConversationPort, _MultiClarificationConversations()),
+        intents=cast(QueryIntentPort, _MultiClarificationIntentParser()),
+        metadata=cast(QueryMetadataPort, metadata),
+        binding_rules=cast(QueryBindingRulePort, binding_rules),
+        planner=cast(QueryPlannerPort, _MustNotRun()),
+        readiness=cast(QueryReadinessPort, _MustNotRun()),
+        executor=cast(QueryExecutorPort, _MustNotRun()),
+        dw_database="dw",
+    )
+    request = QueryRequest(
+        user_id="user-1",
+        conversation_uid="conversation-1",
+        turn_uid="turn-1",
+        question="华东",
+        supplemental_context=_SUPPLEMENTAL_CONTEXT,
+        ddl_context=DDLJobRequest(
+            source="erp",
+            ddl="CREATE TABLE orders (id BIGINT PRIMARY KEY, amount DECIMAL(10,2))",
+        ),
+    )
+
+    events = [event async for event in application.stream(request)]
+
+    assert [event.kind for event in events] == ["clarification"]
+    assert binding_rules.calls == [
+        ("user-1", "销售额 地区", ["销售额", "地区"])
+    ]
+    assert metadata.rule_recall is binding_rules.snapshot
 
 
 async def test_oversized_ddl_is_rejected_before_parsing_or_starting_turn(

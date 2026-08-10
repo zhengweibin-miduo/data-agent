@@ -998,6 +998,15 @@ class QueryDraft(ContractModel):
     )
 
 
+class QueryBindingRuleProof(ContractModel):
+    """建立规则绑定时捕获的不可变权威快照。"""
+
+    target: str
+    memory_uid: str
+    record_version: int = Field(ge=1)
+    content_hash: str
+
+
 class QueryContext(ContractModel):
     """当前 DDL 作用域内的权威、可裁剪查询上下文。"""
 
@@ -1017,6 +1026,7 @@ class QueryContext(ContractModel):
     binding_kinds: dict[str, str] = Field(
         default_factory=dict, description="用户原文绑定对象的权威 Meta 类型。"
     )
+    rule_proofs: dict[str, QueryBindingRuleProof] = Field(default_factory=dict)
     relationships_authoritative: bool = Field(
         default=True, description="关系是否已由权威 Meta 快照核验。"
     )

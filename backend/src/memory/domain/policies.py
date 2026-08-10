@@ -9,6 +9,7 @@ from models.memory import (
     MemoryContent,
     MemoryLifecyclePolicy,
     MetricDefinitionContent,
+    QueryBindingRuleContent,
     SemanticDecisionContent,
     UserMemoryCategory,
     UserMemoryContent,
@@ -76,6 +77,14 @@ _POLICIES = {
         (UserMemoryContent,),
         user_scoped=True,
     ),
+    BuiltinMemoryCategory.USER_QUERY_BINDING_RULE.value: MemoryCategoryPolicy(
+        "user.query_binding_rule.v1",
+        MemoryLifecyclePolicy.PERMANENT,
+        0.9,
+        1.2,
+        (QueryBindingRuleContent,),
+        user_scoped=True,
+    ),
 }
 
 _USER_CATEGORY = {
@@ -83,6 +92,9 @@ _USER_CATEGORY = {
     UserMemoryCategory.PREFERENCE: BuiltinMemoryCategory.USER_PREFERENCE.value,
     UserMemoryCategory.CONSTRAINT: BuiltinMemoryCategory.USER_CONSTRAINT.value,
     UserMemoryCategory.BUSINESS_RULE: BuiltinMemoryCategory.USER_BUSINESS_RULE.value,
+    UserMemoryCategory.QUERY_BINDING_RULE: (
+        BuiltinMemoryCategory.USER_QUERY_BINDING_RULE.value
+    ),
 }
 
 

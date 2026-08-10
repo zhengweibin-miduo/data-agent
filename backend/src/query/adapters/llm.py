@@ -16,6 +16,11 @@ from openai import (
 
 from errors import DataAgentError
 from models.base import ContractModel
+from query.application.contracts import (
+    QueryBindingRuleCandidate,
+    QueryRuleDecision,
+    QueryRuleMatchResult,
+)
 from query.domain import (
     QueryContext,
     QueryDraft,
@@ -46,6 +51,10 @@ dangerous functions, file output, unsupported joins, or a LIMIT the QueryIntent 
 explicitly request. When trusted_time_range is present, emit exactly
 column >= :trusted_time_start AND column < :trusted_time_end with the supplied values.
 Return only the typed structured result and no hidden reasoning."""
+_RULE_PROMPT = """Select only semantically equivalent business concepts.
+For each supplied slot quote, either abstain or return that exact quote and one
+memory_uid from the supplied allowlist. Never invent targets, IDs, SQL, slots,
+confidence, or extra fields. Similar spelling alone is not equivalence."""
 
 
 class QueryLLMAdapter:
@@ -134,6 +143,57 @@ class QueryLLMAdapter:
                 "查询模型返回的 SQL 草稿不符合结构化契约",
                 http_status=502,
             ) from error
+
+    async def match(
+        self,
+        slot_quotes: list[str],
+        rules: list[QueryBindingRuleCandidate],
+    ) -> list[QueryRuleDecision]:
+        """在调用方给出的 quote/UID allowlist 内匹配或放弃。"""
+        try:
+            result = await self._invoke(
+                QueryRuleMatchResult,
+                _RULE_PROMPT,
+                {
+                    "slot_quotes": slot_quotes,
+                    "rules": [
+                        {"alias": rule.alias, "memory_uid": rule.memory_uid}
+                        for rule in rules
+                    ],
+                },
+            )
+        except DataAgentError as error:
+            raise DataAgentError(
+                "query_rule_match_failed",
+                "query_rule_match",
+                "查询规则匹配服务不可用",
+                retryable=error.retryable,
+                http_status=502,
+            ) from error
+        except (TypeError, ValueError) as error:
+            raise DataAgentError(
+                "query_rule_match_invalid",
+                "query_rule_match",
+                "查询规则匹配结果无效",
+                http_status=502,
+            ) from error
+        quotes = set(slot_quotes)
+        uids = {rule.memory_uid for rule in rules}
+        seen: set[str] = set()
+        for decision in result.decisions:
+            if (
+                decision.slot_quote not in quotes
+                or decision.memory_uid not in uids
+                or decision.slot_quote in seen
+            ):
+                raise DataAgentError(
+                    "query_rule_match_invalid",
+                    "query_rule_match",
+                    "查询规则匹配结果无效",
+                    http_status=502,
+                )
+            seen.add(decision.slot_quote)
+        return result.decisions
 
     async def repair(
         self,

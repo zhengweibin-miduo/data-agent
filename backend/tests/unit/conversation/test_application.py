@@ -21,7 +21,12 @@ from conversation.models import (
     MessageRole,
 )
 from errors import DataAgentError
-from models.memory import MemoryCandidate, MemoryDetail, UserMemoryCategory
+from models.memory import (
+    MemoryCandidate,
+    MemoryDetail,
+    QueryBindingRuleContent,
+    UserMemoryCategory,
+)
 
 
 def _message(identifier: int, role: MessageRole, content: str) -> MessageRecord:
@@ -364,9 +369,7 @@ async def test_context_failure_is_not_replaced_by_claim_cleanup_failure() -> Non
     )
 
     with pytest.raises(LookupError, match="context failed"):
-        await service.start_turn(
-            "user-a", "conversation-a", "turn-a", "请使用公制"
-        )
+        await service.start_turn("user-a", "conversation-a", "turn-a", "请使用公制")
 
 
 @pytest.mark.asyncio
@@ -551,6 +554,51 @@ async def test_extraction_public_seam_commits_only_validated_evidence() -> None:
         "unit_system"
     ]
     assert claims.retries == []
+
+
+@pytest.mark.asyncio
+async def test_extraction_public_seam_commits_only_exact_query_binding_rule() -> None:
+    """规则必须由同一条用户原文逐字包含别名和目标。"""
+    claim = _claim([_message(1, MessageRole.USER, "销售额指实付金额")])
+    result = ExtractionResult(
+        summary="",
+        candidates=[
+            ExtractionCandidate(
+                category=UserMemoryCategory.QUERY_BINDING_RULE,
+                key="销售额",
+                value="实付金额",
+                supporting_user_quote="销售额指实付金额",
+                evidence_message_uids=["message-1"],
+            ),
+            ExtractionCandidate(
+                category=UserMemoryCategory.QUERY_BINDING_RULE,
+                key="成交额",
+                value="实付金额",
+                supporting_user_quote="销售额指实付金额",
+                evidence_message_uids=["message-1"],
+            ),
+        ],
+    )
+    claims = _ExtractionClaims(claim)
+    committer = _ExtractionCommitter()
+    extractor = ConversationMemoryExtractor(
+        _ExtractionModel(result),
+        claims,
+        committer,
+        batch_size=1,
+        max_concurrency=1,
+        lease_seconds=180,
+        message_limit=20,
+        summary_max_chars=4096,
+        content_version="v1",
+        projection_version="v1",
+    )
+
+    assert await extractor.dispatch() == 1
+    assert len(committer.candidates) == 1
+    content = committer.candidates[0].content
+    assert isinstance(content, QueryBindingRuleContent)
+    assert (content.alias, content.target) == ("销售额", "实付金额")
 
 
 @pytest.mark.asyncio

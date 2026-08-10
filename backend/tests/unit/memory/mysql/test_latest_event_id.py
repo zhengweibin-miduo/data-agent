@@ -176,15 +176,17 @@ async def test_find_exact_query_uses_indexed_hash_equality() -> None:
     session = _RecordingSession(0)
     repository = MemoryRepository(cast(AsyncSession, session))
 
-    await repository.find_exact_query("dw", "订单事实表", None, user_id=None, limit=20)
+    await repository.find_exact_query(
+        "dw", ["订单事实表", "销售额"], None, user_id=None, limit=20
+    )
 
     rendered = _rendered(session.statements[0])
     compact = rendered.replace(" ", "")
     check_condition(
         "改为比较文本哈希",
-        "memory_text_hash=" in compact,
+        "memory_text_hashIN" in compact,
         actual=rendered,
-        expected="WHERE 使用 memory_text_hash 等值比较",
+        expected="WHERE 使用 memory_text_hash 批量等值比较",
     )
     check_condition(
         "不再对 TEXT 列做全等比较",
@@ -199,8 +201,14 @@ async def test_find_exact_query_uses_indexed_hash_equality() -> None:
         expected="memory_text_hash 参数为查询文本的 SHA-256",
     )
     check_condition(
+        "批量文本分支包含全部查询文本哈希",
+        memory_text_hash("销售额") in rendered,
+        actual=rendered,
+        expected="memory_text_hash 参数包含每个槽位文本的 SHA-256",
+    )
+    check_condition(
         "保留可走索引的 memory_key 等值分支",
-        "memory_key=" in compact,
+        "memory_keyIN" in compact,
         actual=rendered,
         expected="WHERE 仍包含 memory_key 等值比较",
     )

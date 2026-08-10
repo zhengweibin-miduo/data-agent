@@ -19,6 +19,11 @@ An authoritative reusable fact derived from accepted DDL results or explicit
 user evidence, with history and lifecycle state.
 _Avoid_: Cache, embedding, checkpoint
 
+**Query Binding Rule**:
+A user-scoped Long-term Memory that maps a user-confirmed business concept to
+one exact Meta name or alias for bounded semantic Query disambiguation.
+_Avoid_: Prompt hint, historical message, model preference
+
 **Meta Snapshot**:
 The accepted semantic tables, columns, and metrics for one physical schema
 version.

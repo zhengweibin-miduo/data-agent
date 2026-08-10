@@ -74,6 +74,19 @@
   sufficient. Scoped Meta retrieval must not apply the global display Top-K
   when its result is used to prove that a binding is unique.
 - Query execution emits a structured `started` audit event before invoking the
+- A `user.query_binding_rule` may disambiguate an existing QueryIntent slot only
+  after direct current-Meta binding is non-unique. Exact rule aliases win before
+  a bounded semantic matcher; the target must still resolve to exactly one
+  allowed current-DDL table or column. Generic user memory and natural-language
+  metrics remain non-executable.
+- Rule recall is same-user Long-term Memory hybrid recall with MySQL ACTIVE,
+  current-version and content-hash authority readback. Semantic matching fails
+  closed when derived retrieval is degraded, may select only an original slot
+  quote plus a recalled memory UID, and never adds intent evidence or SQL input.
+- Rule-assisted bindings retain the original user quote and an immutable target,
+  memory UID, record version and content hash proof. Meta revalidation uses the
+  proof target; the captured Memory version is the Query authority snapshot.
+- Query execution emits a structured `started` audit event before invoking the
   read-only executor and a structured terminal event independently of
   Conversation completion. Audit identity includes user, conversation, turn,
   SQL hash, table IDs, duration, row count, and outcome, but no parameters or

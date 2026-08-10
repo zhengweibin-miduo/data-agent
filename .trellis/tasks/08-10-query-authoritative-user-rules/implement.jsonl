@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/query-guidelines.md","reason":"QueryIntent evidence, Meta uniqueness, clarification, authority revalidation and SQL safety contracts."}
+{"file":".trellis/spec/backend/conversation-memory.md","reason":"Long-term Memory tenant authority, exact evidence, lifecycle, recall and deletion contracts."}
+{"file":".trellis/tasks/08-10-query-authoritative-user-rules/research/evidence-map.md","reason":"Current PR #85 code flow, authority evidence, selected minimal design and rejected alternatives."}

@@ -210,6 +210,64 @@ class QueryIntentPort(Protocol):
         ...
 
 
+class QueryBindingRuleCandidate(ContractModel):
+    """Query 可消费的最小权威规则快照。"""
+
+    alias: str
+    target: str
+    memory_uid: str
+    record_version: int = Field(ge=1)
+    content_hash: str
+    score: float = Field(ge=0)
+    signals: list[str]
+
+
+class QueryBindingRuleRecall(ContractModel):
+    """有界规则候选及派生检索降级状态。"""
+
+    candidates: list[QueryBindingRuleCandidate]
+    degraded_targets: list[str] = Field(default_factory=list)
+
+
+class QueryBindingRulePort(Protocol):
+    """按当前用户召回权威 Query Binding Rule。"""
+
+    async def recall(
+        self,
+        user_id: str,
+        query_text: str,
+        *,
+        exact_aliases: list[str],
+    ) -> QueryBindingRuleRecall:
+        """召回一次有界的同用户权威规则集合。"""
+        ...
+
+
+class QueryRuleDecision(ContractModel):
+    """Matcher 仅可选择原始槽位和已召回规则 UID。"""
+
+    slot_quote: str
+    memory_uid: str
+
+
+class QueryRuleMatchResult(ContractModel):
+    """structured output 的有界列表包装。"""
+
+    decisions: list[QueryRuleDecision] = Field(default_factory=list, max_length=50)
+
+
+class QueryRuleMatcherPort(Protocol):
+    """只判断槽位与权威规则是否表达同一概念。"""
+
+    async def match(
+        self,
+        slot_quotes: list[str],
+        rules: list[QueryBindingRuleCandidate],
+    ) -> list[QueryRuleDecision]:
+        """选择 allowlist 规则或返回空决策。"""
+        ...
+
+
 class QueryMetadataPort(Protocol):
     """构建当前 DDL 范围内的权威查询上下文。"""
 
@@ -218,6 +276,8 @@ class QueryMetadataPort(Protocol):
         question: str,
         intent: QueryIntent,
         schema: PhysicalSchema,
+        *,
+        rule_recall: QueryBindingRuleRecall | None = None,
     ) -> QueryContext | QueryClarification:
         """返回查询上下文或一个澄清问题。"""
         ...

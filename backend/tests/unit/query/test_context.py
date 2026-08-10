@@ -11,7 +11,12 @@ from ddl_metadata.meta_projection.models import (
 from errors import DataAgentError
 from models.physical import PhysicalColumn, PhysicalSchema, PhysicalTable
 from query.adapters.metadata import QueryMetadataAdapter
-from query.application.contracts import QueryClarification
+from query.application.contracts import (
+    QueryBindingRuleCandidate,
+    QueryBindingRuleRecall,
+    QueryClarification,
+    QueryRuleDecision,
+)
 from query.domain import FilterIntent, QueryIntent, QueryType, SortIntent
 
 
@@ -21,6 +26,7 @@ class _Search:
     def __init__(self, candidates: list[MetadataCandidate]) -> None:
         self.candidates = candidates
         self.calls: list[str] = []
+        self.metadata_queries: list[str] = []
         self.column_ids: set[str] = set()
 
     async def search_metadata(
@@ -31,10 +37,10 @@ class _Search:
         column_ids: set[str],
     ) -> list[MetadataCandidate]:
         """返回预置的权威候选。"""
-        del query
         assert table_ids == {"table-orders"}
         assert column_ids == {"column-amount", "column-region", "column-paid-at"}
         self.calls.append("metadata")
+        self.metadata_queries.append(query)
         return self.candidates
 
     async def search_values(
@@ -129,6 +135,194 @@ def _candidate(
     )
 
 
+class _Matcher:
+    async def match(
+        self, slot_quotes: list[str], rules: list[QueryBindingRuleCandidate]
+    ) -> list[QueryRuleDecision]:
+        return [
+            QueryRuleDecision(slot_quote=slot_quotes[0], memory_uid=rules[0].memory_uid)
+        ]
+
+
+class _MustNotMatch:
+    async def match(
+        self, slot_quotes: list[str], rules: list[QueryBindingRuleCandidate]
+    ) -> list[QueryRuleDecision]:
+        raise AssertionError("exact alias conflict must not invoke matcher")
+
+
+class _AbstainMatcher:
+    async def match(
+        self, slot_quotes: list[str], rules: list[QueryBindingRuleCandidate]
+    ) -> list[QueryRuleDecision]:
+        return []
+
+
+class _FixedMatcher:
+    """返回指定 matcher 决策，用于验证 Query 自身的 allowlist 门禁。"""
+
+    def __init__(self, decisions: list[QueryRuleDecision]) -> None:
+        self._decisions = decisions
+
+    async def match(
+        self, slot_quotes: list[str], rules: list[QueryBindingRuleCandidate]
+    ) -> list[QueryRuleDecision]:
+        del slot_quotes, rules
+        return self._decisions
+
+
+def _rule() -> QueryBindingRuleCandidate:
+    return QueryBindingRuleCandidate(
+        alias="销售额",
+        target="实付金额",
+        memory_uid="memory-sales",
+        record_version=2,
+        content_hash="hash",
+        score=1,
+        signals=["elasticsearch"],
+    )
+
+
+@pytest.mark.parametrize("quote", ["销售额", "成交额"])
+async def test_rule_binding_resolves_only_current_meta_target_and_keeps_quote(
+    quote: str,
+) -> None:
+    """精确及近义表达都只绑定当前 DDL 中唯一规则目标。"""
+    search = _Search(
+        [
+            _candidate(
+                MetadataObjectKind.COLUMN,
+                "column-amount",
+                "amount",
+                aliases=["实付金额"],
+            )
+        ]
+    )
+    adapter = QueryMetadataAdapter(search, _Matcher())
+
+    result = await adapter.build_context(
+        quote,
+        QueryIntent(
+            query_type=QueryType.AGGREGATE,
+            aggregation="sum",
+            aggregation_quote="合计",
+            measure_quotes=[quote],
+        ),
+        _schema(),
+        rule_recall=QueryBindingRuleRecall(candidates=[_rule()]),
+    )
+
+    assert not isinstance(result, QueryClarification)
+    assert result.bindings == {quote: "column-amount"}
+    assert result.rule_proofs[quote].target == "实付金额"
+    assert result.rule_proofs[quote].record_version == 2
+    assert await adapter.bindings_are_authoritative(result) is True
+    assert search.metadata_queries[-1] == "实付金额"
+
+
+async def test_semantic_rule_recall_degradation_fails_closed() -> None:
+    """近义规则候选集降级时不得继续自动绑定。"""
+    adapter = QueryMetadataAdapter(_Search([]), _Matcher())
+    with pytest.raises(DataAgentError) as caught:
+        await adapter.build_context(
+            "成交额",
+            QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["成交额"]),
+            _schema(),
+            rule_recall=QueryBindingRuleRecall(
+                candidates=[_rule()], degraded_targets=["QDRANT"]
+            ),
+        )
+    assert caught.value.code == "query_rule_unavailable"
+    assert caught.value.retryable is True
+
+
+async def test_conflicting_exact_alias_rules_clarify_without_matcher() -> None:
+    """同一 exact alias 的冲突权威含义不得交给模型任选。"""
+    second = _rule().model_copy(
+        update={
+            "memory_uid": "memory-sales-2",
+            "target": "含税金额",
+        }
+    )
+    result = await QueryMetadataAdapter(_Search([]), _MustNotMatch()).build_context(
+        "销售额",
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["销售额"]),
+        _schema(),
+        rule_recall=QueryBindingRuleRecall(candidates=[_rule(), second]),
+    )
+    assert isinstance(result, QueryClarification)
+    assert result.quote == "销售额"
+
+
+async def test_confusable_phrase_abstention_keeps_clarification() -> None:
+    """销售税额不得因相似文本自动复用销售额规则。"""
+    result = await QueryMetadataAdapter(_Search([]), _AbstainMatcher()).build_context(
+        "销售税额",
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["销售税额"]),
+        _schema(),
+        rule_recall=QueryBindingRuleRecall(candidates=[_rule()]),
+    )
+    assert isinstance(result, QueryClarification)
+    assert result.quote == "销售税额"
+
+
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        [QueryRuleDecision(slot_quote="未知槽位", memory_uid="memory-sales")],
+        [QueryRuleDecision(slot_quote="成交额", memory_uid="unknown-memory")],
+        [
+            QueryRuleDecision(slot_quote="成交额", memory_uid="memory-sales"),
+            QueryRuleDecision(slot_quote="成交额", memory_uid="memory-sales"),
+        ],
+    ],
+)
+async def test_invalid_matcher_output_fails_closed(
+    decisions: list[QueryRuleDecision],
+) -> None:
+    """未知 quote、未知 UID 与同槽位多选都不得降级为澄清或绑定。"""
+    adapter = QueryMetadataAdapter(_Search([]), _FixedMatcher(decisions))
+
+    with pytest.raises(DataAgentError) as caught:
+        await adapter.build_context(
+            "成交额",
+            QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["成交额"]),
+            _schema(),
+            rule_recall=QueryBindingRuleRecall(candidates=[_rule()]),
+        )
+
+    assert caught.value.code == "query_rule_match_invalid"
+
+
+async def test_unique_direct_meta_binding_wins_over_historical_rule() -> None:
+    """当前 Meta 唯一原文绑定优先，历史规则不得覆盖。"""
+    search = _Search(
+        [
+            _candidate(
+                MetadataObjectKind.COLUMN,
+                "column-region",
+                "region",
+                aliases=["销售额"],
+            ),
+            _candidate(
+                MetadataObjectKind.COLUMN,
+                "column-amount",
+                "amount",
+                aliases=["实付金额"],
+            ),
+        ]
+    )
+    result = await QueryMetadataAdapter(search, _MustNotMatch()).build_context(
+        "销售额",
+        QueryIntent(query_type=QueryType.DETAIL, measure_quotes=["销售额"]),
+        _schema(),
+        rule_recall=QueryBindingRuleRecall(candidates=[_rule()]),
+    )
+    assert not isinstance(result, QueryClarification)
+    assert result.bindings == {"销售额": "column-region"}
+    assert result.rule_proofs == {}
+
+
 def test_candidate_name_does_not_match_a_longer_unknown_field_name() -> None:
     """短字段名不得通过反向子串吞并当前 DDL 中不存在的字段。"""
     candidate = _candidate(MetadataObjectKind.COLUMN, "column-id", "id")
@@ -185,9 +379,7 @@ async def test_context_does_not_execute_natural_language_metric_definition() -> 
 
 async def test_count_subject_can_bind_to_authoritative_table() -> None:
     """计数主体可唯一绑定表对象并支持后续 COUNT(*) 规划。"""
-    search = _Search(
-        [_candidate(MetadataObjectKind.TABLE, "table-orders", "订单")]
-    )
+    search = _Search([_candidate(MetadataObjectKind.TABLE, "table-orders", "订单")])
 
     result = await QueryMetadataAdapter(search).build_context(
         "查询订单数量",
